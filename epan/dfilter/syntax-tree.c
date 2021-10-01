@@ -76,15 +76,17 @@ sttype_lookup(sttype_id_t type_id)
 	return result;
 }
 
-
-stnode_t*
-stnode_new(sttype_id_t type_id, gpointer data)
+void
+stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data,  const char *token_value)
 {
 	sttype_t	*type;
-	stnode_t	*node;
 
-	node = g_new0(stnode_t, 1);
-	node->magic = STNODE_MAGIC;
+	ws_assert_magic(node, STNODE_MAGIC);
+	ws_assert(!node->type);
+	ws_assert(!node->data);
+	ws_assert(!node->token_value);
+	node->flags = 0;
+	node->value = 0;
 
 	if (type_id == STTYPE_UNINITIALIZED) {
 		node->type = NULL;
@@ -102,6 +104,25 @@ stnode_new(sttype_id_t type_id, gpointer data)
 		}
 
 	}
+	node->token_value = g_strdup(token_value);
+}
+
+void
+stnode_init_int(stnode_t *node, sttype_id_t type_id, gint32 value, const char *token_value)
+{
+	stnode_init(node, type_id, NULL, token_value);
+	node->value = value;
+}
+
+stnode_t*
+stnode_new(sttype_id_t type_id, gpointer data, const char *token_value)
+{
+	stnode_t	*node;
+
+	node = g_new0(stnode_t, 1);
+	node->magic = STNODE_MAGIC;
+
+	stnode_init(node, type_id, data, token_value);
 
 	return node;
 }
@@ -119,6 +140,7 @@ stnode_dup(const stnode_t *org)
 
 	node = g_new(stnode_t, 1);
 	node->magic = STNODE_MAGIC;
+
 	node->type = type;
 	node->flags = org->flags;
 
@@ -128,36 +150,9 @@ stnode_dup(const stnode_t *org)
 		node->data = org->data;
 	node->value = org->value;
 
+	node->token_value = g_strdup(org->token_value);
+
 	return node;
-}
-
-void
-stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data)
-{
-	sttype_t	*type;
-
-	ws_assert_magic(node, STNODE_MAGIC);
-	ws_assert(!node->type);
-	ws_assert(!node->data);
-
-	type = sttype_lookup(type_id);
-	ws_assert(type);
-	node->type = type;
-	node->flags = 0;
-
-	if (type->func_new) {
-		node->data = type->func_new(data);
-	}
-	else {
-		node->data = data;
-	}
-}
-
-void
-stnode_init_int(stnode_t *node, sttype_id_t type_id, gint32 value)
-{
-	stnode_init(node, type_id, NULL);
-	node->value = value;
 }
 
 void
@@ -172,6 +167,7 @@ stnode_free(stnode_t *node)
 	else {
 		ws_assert(!node->data);
 	}
+	g_free(node->token_value);
 	g_free(node);
 }
 
@@ -269,16 +265,16 @@ sprint_node(stnode_t *node)
 	wmem_strbuf_append_printf(buf,
 			"\tflags = %"PRIx16" (inside_parens = %s)\n",
 			node->flags, true_or_false(stnode_inside_parens(node)));
-	s = node->type->func_tostr(node->data);
+	s = stnode_tostr(node);
 	wmem_strbuf_append_printf(buf, "\tdata = %s\n", s);
 	g_free(s);
-	wmem_strbuf_append_printf(buf, "\tvalue = %"PRId32"\n", node->value);
+	wmem_strbuf_append_printf(buf, "\tvalue = %"PRId32"\n", stnode_value(node));
 	wmem_strbuf_append_printf(buf, "}\n");
 	return wmem_strbuf_finalize(buf);
 }
 
 void
-stnode_log_full(enum ws_log_level level,
+log_stnode_full(enum ws_log_level level,
 			const char *file, int line, const char *func,
 			stnode_t *node, const char *msg)
 {
@@ -291,7 +287,8 @@ stnode_log_full(enum ws_log_level level,
 	g_free(str);
 }
 
-static void indent(wmem_strbuf_t *buf, int level)
+static void
+indent(wmem_strbuf_t *buf, int level)
 {
 	for (int i = 0; i < level * 2; i++) {
 		wmem_strbuf_append_c(buf, ' ');
@@ -336,6 +333,15 @@ visit_tree(wmem_strbuf_t *buf, stnode_t *node, int level)
 	}
 }
 
+const char *
+stnode_token_value(stnode_t *node)
+{
+	if (node->token_value) {
+		return node->token_value;
+	}
+	return "<unknown token>";
+}
+
 void
 log_syntax_tree(enum ws_log_level level, stnode_t *root, const char *msg)
 {
@@ -345,7 +351,8 @@ log_syntax_tree(enum ws_log_level level, stnode_t *root, const char *msg)
 	wmem_strbuf_t *buf = wmem_strbuf_new(NULL, NULL);
 
 	visit_tree(buf, root, 0);
-	ws_log(LOG_DOMAIN_DFILTER, level, "%s:\n%s", msg, wmem_strbuf_get_str(buf));
+	ws_log_write_always_full(LOG_DOMAIN_DFILTER, level, NULL, -1, NULL,
+				"%s:\n%s", msg, wmem_strbuf_get_str(buf));
 	wmem_strbuf_destroy(buf);
 }
 

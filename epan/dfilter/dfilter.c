@@ -208,7 +208,7 @@ const char *tokenstr(int token)
 		case TOKEN_TEST_LT:	return "TEST_LT";
 		case TOKEN_TEST_LE:	return "TEST_LE";
 		case TOKEN_TEST_GT:	return "TEST_GT";
-		case TOKEN_TEST_GE:	return  "TEST_GE";
+		case TOKEN_TEST_GE:	return "TEST_GE";
 		case TOKEN_TEST_CONTAINS: return "TEST_CONTAINS";
 		case TOKEN_TEST_MATCHES: return "TEST_MATCHES";
 		case TOKEN_TEST_BITWISE_AND: return "TEST_BITWISE_AND";
@@ -311,7 +311,7 @@ dfilter_compile(const gchar *text, dfilter_t **dfp, gchar **err_msg)
 	df_set_extra(&state, scanner);
 
 	while (1) {
-		df_lval = stnode_new(STTYPE_UNINITIALIZED, NULL);
+		df_lval = stnode_new(STTYPE_UNINITIALIZED, NULL, NULL);
 		token = df_lex(scanner);
 
 		/* Check for scanner failure */
