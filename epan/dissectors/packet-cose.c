@@ -25,6 +25,9 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+void proto_register_cose(void);
+void proto_reg_handoff_cose(void);
+
 /// Glib logging "domain" name
 static const char *LOG_DOMAIN = "COSE";
 /// Protocol column name
@@ -406,7 +409,7 @@ static void dissect_header_pair(dissector_table_t dis_table, cose_header_context
     g_free(key);
     if (sublen == 0) {
         TRY {
-            sublen = call_dissector(handle_cbor, tvb_value, pinfo, tree_label);
+            call_dissector(handle_cbor, tvb_value, pinfo, tree_label);
         }
         CATCH_ALL {}
         ENDTRY;
@@ -419,7 +422,6 @@ static void dissect_header_pair(dissector_table_t dis_table, cose_header_context
  * @param tvb The source data.
  * @param tree The parent of the header map.
  * @param[in,out] offset The data offset.
- * @return The total length dissected, or -1 if failed.
  */
 static void dissect_header_map(dissector_table_t dis_table, tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gint *offset) {
     wscbor_chunk_t *chunk_hdr_map = wscbor_chunk_read(wmem_packet_scope(), tvb, offset);
