@@ -76,15 +76,41 @@ sttype_lookup(sttype_id_t type_id)
 	return result;
 }
 
+static void
+_node_clear(stnode_t *node)
+{
+	ws_assert_magic(node, STNODE_MAGIC);
+	if (node->type) {
+		if (node->type->func_free && node->data) {
+			node->type->func_free(node->data);
+		}
+	}
+	else {
+		ws_assert(!node->data);
+	}
+
+	node->type = NULL;
+	node->flags = 0;
+	node->data = NULL;
+	node->value = 0;
+}
+
 void
-stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data,  const char *token_value)
+stnode_clear(stnode_t *node)
+{
+	_node_clear(node);
+	g_free(node->token_value);
+	node->token_value = NULL;
+}
+
+static void
+_node_init(stnode_t *node, sttype_id_t type_id, gpointer data)
 {
 	sttype_t	*type;
 
 	ws_assert_magic(node, STNODE_MAGIC);
 	ws_assert(!node->type);
 	ws_assert(!node->data);
-	ws_assert(!node->token_value);
 	node->flags = 0;
 	node->value = 0;
 
@@ -102,8 +128,14 @@ stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data,  const char *tok
 		else {
 			node->data = data;
 		}
-
 	}
+}
+
+void
+stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data,  const char *token_value)
+{
+	_node_init(node, type_id, data);
+	ws_assert(node->token_value == NULL);
 	node->token_value = g_strdup(token_value);
 }
 
@@ -112,6 +144,15 @@ stnode_init_int(stnode_t *node, sttype_id_t type_id, gint32 value, const char *t
 {
 	stnode_init(node, type_id, NULL, token_value);
 	node->value = value;
+}
+
+void
+stnode_replace(stnode_t *node, sttype_id_t type_id, gpointer data)
+{
+	uint16_t flags = node->flags; /* Save flags. */
+	_node_clear(node);
+	_node_init(node, type_id, data);
+	node->flags = flags;
 }
 
 stnode_t*
@@ -159,15 +200,7 @@ void
 stnode_free(stnode_t *node)
 {
 	ws_assert_magic(node, STNODE_MAGIC);
-	if (node->type) {
-		if (node->type->func_free) {
-			node->type->func_free(node->data);
-		}
-	}
-	else {
-		ws_assert(!node->data);
-	}
-	g_free(node->token_value);
+	stnode_clear(node);
 	g_free(node);
 }
 
@@ -213,6 +246,15 @@ stnode_value(stnode_t *node)
 {
 	ws_assert_magic(node, STNODE_MAGIC);
 	return node->value;
+}
+
+const char *
+stnode_token_value(stnode_t *node)
+{
+	if (node->token_value) {
+		return node->token_value;
+	}
+	return "<unknown token>";
 }
 
 gboolean
@@ -324,15 +366,6 @@ visit_tree(wmem_strbuf_t *buf, stnode_t *node, int level)
 	}
 }
 
-const char *
-stnode_token_value(stnode_t *node)
-{
-	if (node->token_value) {
-		return node->token_value;
-	}
-	return "<unknown token>";
-}
-
 void
 log_syntax_tree(enum ws_log_level level, stnode_t *root, const char *msg)
 {
@@ -345,6 +378,20 @@ log_syntax_tree(enum ws_log_level level, stnode_t *root, const char *msg)
 	ws_log_write_always_full(LOG_DOMAIN_DFILTER, level, NULL, -1, NULL,
 				"%s:\n%s", msg, wmem_strbuf_get_str(buf));
 	wmem_strbuf_destroy(buf);
+}
+
+void
+ws_assert_magic_full(const char *domain, enum ws_log_level level,
+				const char *file, int line, const char *func,
+				const void *ptr, uint32_t magic)
+{
+	const stnode_t *node = (const stnode_t *)ptr;
+	ws_assert(node);
+	if (node->magic != magic) {
+		ws_log_full(domain, level, file, line, func,
+			"Magic num is 0x%08"PRIx32", but should be 0x%08"PRIx32,
+			node->magic, magic);
+	}
 }
 
 /*
