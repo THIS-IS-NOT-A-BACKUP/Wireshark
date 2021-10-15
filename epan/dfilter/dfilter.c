@@ -374,6 +374,7 @@ dfilter_compile(const gchar *text, dfilter_t **dfp, gchar **err_msg)
 	yyscan_t	scanner;
 	YY_BUFFER_STATE in_buffer;
 	gboolean failure = FALSE;
+	unsigned token_count = 0;
 
 	ws_assert(dfp);
 
@@ -424,7 +425,9 @@ dfilter_compile(const gchar *text, dfilter_t **dfp, gchar **err_msg)
 			break;
 		}
 
-		ws_debug("Token: %d %s", token, tokenstr(token));
+		ws_debug("(%u) Token %d %s %s",
+				++token_count, token, tokenstr(token),
+				stnode_token_value(df_lval));
 
 		/* Give the token to the parser */
 		Dfilter(ParserObj, token, df_lval, dfw);
