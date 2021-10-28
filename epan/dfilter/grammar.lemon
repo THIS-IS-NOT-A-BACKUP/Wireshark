@@ -239,6 +239,13 @@ relation_test(T) ::= entity(E) TEST_IN set(S).
 	T = stnode_new_test(TEST_OP_IN, E, S);
 }
 
+relation_test(T) ::= entity(E) TEST_NOT TEST_IN set(S).
+{
+	stnode_t *R = stnode_new_test(TEST_OP_IN, E, S);
+
+	T = stnode_new_test(TEST_OP_NOT, R, NULL);
+}
+
 set(S) ::= LBRACE set_list(L) RBRACE.
 {
 	S = stnode_new(STTYPE_SET, L);
@@ -250,6 +257,16 @@ set_list(L) ::= set_element(N).
 }
 
 set_list(L) ::= set_list(P) WHITESPACE set_element(N).
+{
+	L = g_slist_concat(P, N);
+
+	add_deprecated_token(dfw,
+			"Use ',' to separate set elements. "
+			"The use of whitespace as separator in sets is "
+			"deprecated and will be removed in a future version.");
+}
+
+set_list(L) ::= set_list(P) COMMA set_element(N).
 {
 	L = g_slist_concat(P, N);
 }
