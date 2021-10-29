@@ -78,7 +78,7 @@ DIAG_OFF_FLEX
 df_lval_t *df_lval;
 
 static int set_lval_str(int token, const char *token_value);
-#define SIMPLE(token) set_lval_str(token, yytext)
+#define simple(token) set_lval_str(token, yytext)
 
 /*
  * Sleazy hack to suppress compiler warnings in yy_fatal_error().
@@ -109,8 +109,8 @@ static int set_lval_str(int token, const char *token_value);
 	}
 }
 
-"("		return SIMPLE(TOKEN_LPAREN);
-")"		return SIMPLE(TOKEN_RPAREN);
+"("		return simple(TOKEN_LPAREN);
+")"		return simple(TOKEN_RPAREN);
 
 [[:blank:]\n]*","[[:blank:]\n]*	{
 	return set_lval_str(TOKEN_COMMA, ",");
@@ -130,36 +130,36 @@ static int set_lval_str(int token, const char *token_value);
 	return set_lval_str(TOKEN_RBRACE, "}");
 }
 
-"=="		return SIMPLE(TOKEN_TEST_ANY_EQ);
-"eq"		return SIMPLE(TOKEN_TEST_ANY_EQ);
-"!="		return SIMPLE(TOKEN_TEST_ALL_NE);
-"ne"		return SIMPLE(TOKEN_TEST_ALL_NE);
-"~="		return SIMPLE(TOKEN_TEST_ANY_NE);
-"any_ne"	return SIMPLE(TOKEN_TEST_ANY_NE);
-">"		return SIMPLE(TOKEN_TEST_GT);
-"gt"		return SIMPLE(TOKEN_TEST_GT);
-">="		return SIMPLE(TOKEN_TEST_GE);
-"ge"		return SIMPLE(TOKEN_TEST_GE);
-"<"		return SIMPLE(TOKEN_TEST_LT);
-"lt"		return SIMPLE(TOKEN_TEST_LT);
-"<="		return SIMPLE(TOKEN_TEST_LE);
-"le"		return SIMPLE(TOKEN_TEST_LE);
-"bitwise_and"	return SIMPLE(TOKEN_TEST_BITWISE_AND);
-"&"		return SIMPLE(TOKEN_TEST_BITWISE_AND);
-"contains"	return SIMPLE(TOKEN_TEST_CONTAINS);
-"~"		return SIMPLE(TOKEN_TEST_MATCHES);
-"matches"	return SIMPLE(TOKEN_TEST_MATCHES);
-"!"		return SIMPLE(TOKEN_TEST_NOT);
-"not"		return SIMPLE(TOKEN_TEST_NOT);
-"&&"		return SIMPLE(TOKEN_TEST_AND);
-"and"		return SIMPLE(TOKEN_TEST_AND);
-"||"		return SIMPLE(TOKEN_TEST_OR);
-"or"		return SIMPLE(TOKEN_TEST_OR);
-"in"		return SIMPLE(TOKEN_TEST_IN);
+"=="		return simple(TOKEN_TEST_ANY_EQ);
+"eq"		return simple(TOKEN_TEST_ANY_EQ);
+"!="		return simple(TOKEN_TEST_ALL_NE);
+"ne"		return simple(TOKEN_TEST_ALL_NE);
+"~="		return simple(TOKEN_TEST_ANY_NE);
+"any_ne"	return simple(TOKEN_TEST_ANY_NE);
+">"		return simple(TOKEN_TEST_GT);
+"gt"		return simple(TOKEN_TEST_GT);
+">="		return simple(TOKEN_TEST_GE);
+"ge"		return simple(TOKEN_TEST_GE);
+"<"		return simple(TOKEN_TEST_LT);
+"lt"		return simple(TOKEN_TEST_LT);
+"<="		return simple(TOKEN_TEST_LE);
+"le"		return simple(TOKEN_TEST_LE);
+"bitwise_and"	return simple(TOKEN_TEST_BITWISE_AND);
+"&"		return simple(TOKEN_TEST_BITWISE_AND);
+"contains"	return simple(TOKEN_TEST_CONTAINS);
+"~"		return simple(TOKEN_TEST_MATCHES);
+"matches"	return simple(TOKEN_TEST_MATCHES);
+"!"		return simple(TOKEN_TEST_NOT);
+"not"		return simple(TOKEN_TEST_NOT);
+"&&"		return simple(TOKEN_TEST_AND);
+"and"		return simple(TOKEN_TEST_AND);
+"||"		return simple(TOKEN_TEST_OR);
+"or"		return simple(TOKEN_TEST_OR);
+"in"		return simple(TOKEN_TEST_IN);
 
 "["				{
 	BEGIN(RANGE);
-	return SIMPLE(TOKEN_LBRACKET);
+	return simple(TOKEN_LBRACKET);
 }
 
 <RANGE>[^],]+			{
@@ -167,12 +167,12 @@ static int set_lval_str(int token, const char *token_value);
 }
 
 <RANGE>","			{
-	return SIMPLE(TOKEN_COMMA);
+	return simple(TOKEN_COMMA);
 }
 
 <RANGE>"]"				{
 	BEGIN(INITIAL);
-	return SIMPLE(TOKEN_RBRACKET);
+	return simple(TOKEN_RBRACKET);
 }
 
 <RANGE><<EOF>>				{
@@ -229,12 +229,10 @@ static int set_lval_str(int token, const char *token_value);
 
 <DQUOTE>\042			{
 	/* end quote */
-	int token;
 	BEGIN(INITIAL);
-	token = set_lval_str(TOKEN_STRING, yyextra->quoted_string->str);
-	g_string_free(yyextra->quoted_string, TRUE);
+	df_lval->value = g_string_free(yyextra->quoted_string, FALSE);
 	yyextra->quoted_string = NULL;
-	return token;
+	return TOKEN_STRING;
 }
 
 <DQUOTE>\\[0-7]{1,3} {
@@ -330,13 +328,11 @@ static int set_lval_str(int token, const char *token_value);
 
 <SQUOTE>\047			{
 	/* end quote */
-	int token;
 	BEGIN(INITIAL);
 	g_string_append_c(yyextra->quoted_string, '\'');
-	token = set_lval_str(TOKEN_CHARCONST, yyextra->quoted_string->str);
-	g_string_free(yyextra->quoted_string, TRUE);
+	df_lval->value = g_string_free(yyextra->quoted_string, FALSE);
 	yyextra->quoted_string = NULL;
-	return token;
+	return TOKEN_CHARCONST;
 }
 
 <SQUOTE>\\.				{
@@ -352,26 +348,28 @@ static int set_lval_str(int token, const char *token_value);
 
 	/* None of the patterns below can match ".." anywhere in the token string. */
  
-[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}(\/[[:digit:]]+)*  {
-	/* IPv4 CIDR */
-	return set_lval_str(TOKEN_UNPARSED, yytext);
-}
- 
-[[:xdigit:]:]+(\/[[:digit:]]+)*  {
-	/* IPv6 CIDR or bytes-: or integer... */
-	return set_lval_str(TOKEN_UNPARSED, yytext);
-}
+[-+[:alnum:]_:./]+ {
+	char *s, *value;
 
-		([.][-+[:alnum:]_:]+)+[.]{0,2} |
-[-+[:alnum:]_:]+([.][-+[:alnum:]_:]+)*[.]{0,2} {
+	/* Hack (but lesser) to make sure that ".." is interpreted as a token on its own. */
+	if ((s = strstr(yytext, "..")) != NULL) {
+		/* If it starts with ".." it is its own token. */
+		if (yytext[0] == '.' && yytext[1] == '.') {
+			yyless(2);
+			df_lval->value = g_strdup("..");
+			return TOKEN_DOTDOT;
+		}
 
-	/* Trailing dot is allowed for floats, but make sure that trailing ".."
-	 * is interpreted as a token on its own. */
-	if (strstr(yytext, "..")) {
-		yyless(yyleng-2);
+		/* Match only the prefix before "..". */
+		*s = '\0';
+		value = g_strdup(yytext);
+		*s = '.'; /* Restore */
+		yyless(strlen(value));
+		df_lval->value = value;
+		return TOKEN_UNPARSED;
 	}
 
-	/* It is a field name or some other value (float, bytes, ...). */
+	/* It is a variable or a literal value (CIDR, bytes, number, ...). */
 	return set_lval_str(TOKEN_UNPARSED, yytext);
 }
 
