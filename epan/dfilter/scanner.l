@@ -79,6 +79,7 @@ df_lval_t *df_lval;
 
 static int set_lval_str(int token, const char *token_value);
 #define simple(token) set_lval_str(token, yytext)
+static GString *append_escaped_char(GString *str, char c);
 
 /*
  * Sleazy hack to suppress compiler warnings in yy_fatal_error().
@@ -161,23 +162,14 @@ static int set_lval_str(int token, const char *token_value);
 
 [rR]{0,1}\042			{
 	/* start quote of a quoted string */
-	/* The example of how to scan for strings was taken from
-	the flex 2.5.4 manual, from the section "Start Conditions".
-	See:
-	http://www.gnu.org/software/flex/manual/html_node/flex_11.html */
-
+	/*
+	 * The example of how to scan for strings was taken from
+	 * the flex manual, from the section "Start Conditions".
+	 * See: https://westes.github.io/flex/manual/Start-Conditions.html
+	 */
 	BEGIN(DQUOTE);
-	/* A previous filter that failed to compile due to
-	a missing end quote will have left quoted_string set
-	to something. Clear it now that we are starting
-	a new quoted string. */
-	if (yyextra->quoted_string) {
-		g_string_free(yyextra->quoted_string, TRUE);
-		/* Don't set quoted_string to NULL, as we
-		do in other quoted_string-cleanup code, as we're
-		about to set it in the next line. */
-	}
 	yyextra->quoted_string = g_string_new("");
+
 	if (yytext[0] == 'r' || yytext[0] == 'R') {
 		/*
 		 * This is a raw string (like in Python). Rules: 1) The two
@@ -197,11 +189,8 @@ static int set_lval_str(int token, const char *token_value);
 
 <DQUOTE><<EOF>>				{
 	/* unterminated string */
-	/* The example of how to handle unclosed strings was taken from
-	the flex 2.5.4 manual, from the section "End-of-file rules".
-	See:
-	http://www.gnu.org/software/flex/manual/html_node/flex_13.html */
-
+	g_string_free(yyextra->quoted_string, TRUE);
+	yyextra->quoted_string = NULL;
 	dfilter_fail(yyextra->dfw, "The final quote was missing from a quoted string.");
 	return SCAN_FAILED;
 }
@@ -240,6 +229,10 @@ static int set_lval_str(int token, const char *token_value);
 
 <DQUOTE>\\x[[:xdigit:]]{1,2} {
 	/* hex sequence */
+	/*
+	 * C standard does not place a limit on the number of hex
+	 * digits after \x... but we do. \xNN can have 1 or two Ns, not more.
+	 */
 	if (yyextra->raw_string) {
 		g_string_append(yyextra->quoted_string, yytext);
 	}
@@ -263,7 +256,7 @@ static int set_lval_str(int token, const char *token_value);
 		g_string_append(yyextra->quoted_string, yytext);
 	}
 	else {
-		g_string_append_c(yyextra->quoted_string, yytext[1]);
+		append_escaped_char(yyextra->quoted_string, yytext[1]);
 	}
 }
 
@@ -275,32 +268,14 @@ static int set_lval_str(int token, const char *token_value);
 
 \047				{
 	/* start quote of a quoted character value */
-	/* The example of how to scan for strings was taken from
-	the Flex manual, from the section "Start Conditions".
-	See:
-	http://flex.sourceforge.net/manual/Start-Conditions.html#Start-Conditions */
-
 	BEGIN(SQUOTE);
-	/* A previous filter that failed to compile due to
-	a missing end quote will have left quoted_string set
-	to something. Clear it now that we are starting
-	a new quoted string. */
-	if (yyextra->quoted_string) {
-		g_string_free(yyextra->quoted_string, TRUE);
-		/* Don't set quoted_string to NULL, as we
-		do in other quoted_string-cleanup code, as we're
-		about to set it in the next line. */
-	}
 	yyextra->quoted_string = g_string_new("'");
 }
 
 <SQUOTE><<EOF>>				{
 	/* unterminated character value */
-	/* The example of how to handle unclosed strings was taken from
-	the Flex manual, from the section "End-of-file rules".
-	See:
-	http://flex.sourceforge.net/manual/EOF.html#EOF.html */
-
+	g_string_free(yyextra->quoted_string, TRUE);
+	yyextra->quoted_string = NULL;
 	dfilter_fail(yyextra->dfw, "The final quote was missing from a character constant.");
 	return SCAN_FAILED;
 }
@@ -371,4 +346,41 @@ set_lval_str(int token, const char *token_value)
 {
 	df_lval->value = g_strdup(token_value);
 	return token;
+}
+
+static GString *
+append_escaped_char(GString *str, char c)
+{
+	switch (c) {
+		case 'a':
+			c = '\a';
+			break;
+		case 'b':
+			c = '\b';
+			break;
+		case 'f':
+			c = '\f';
+			break;
+		case 'n':
+			c = '\n';
+			break;
+		case 'r':
+			c = '\r';
+			break;
+		case 't':
+			c = '\t';
+			break;
+		case 'v':
+			c = '\v';
+			break;
+		default:
+			/* Unrecognized escapes are treated as a literal character.
+			 * If this is turned into an error instead (which is a backward
+			 * incompatibility but arguably the right thing to do)
+			 * we need to take care to accept all valid sequences
+			 * (like \" and \\). */
+			break;
+	}
+
+	return g_string_append_c(str, c);
 }
