@@ -322,32 +322,15 @@ fvalue_length(fvalue_t *fv)
 		return fv->ftype->wire_size;
 }
 
-int
-fvalue_string_repr_len(const fvalue_t *fv, ftrepr_t rtype, int field_display)
-{
-	ws_assert(fv->ftype->len_string_repr);
-	return fv->ftype->len_string_repr(fv, rtype, field_display);
-}
-
 char *
 fvalue_to_string_repr(wmem_allocator_t *scope, const fvalue_t *fv, ftrepr_t rtype, int field_display)
 {
-	char *buf;
-	int len;
 	if (fv->ftype->val_to_string_repr == NULL) {
 		/* no value-to-string-representation function, so the value cannot be represented */
 		return NULL;
 	}
 
-	if ((len = fvalue_string_repr_len(fv, rtype, field_display)) >= 0) {
-		buf = (char *)wmem_alloc0(scope, len + 1);
-	} else {
-		/* the value cannot be represented in the given representation type (rtype) */
-		return NULL;
-	}
-
-	fv->ftype->val_to_string_repr(fv, rtype, field_display, buf, (unsigned int)len+1);
-	return buf;
+	return fv->ftype->val_to_string_repr(scope, fv, rtype, field_display);
 }
 
 typedef struct {
