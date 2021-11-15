@@ -2977,6 +2977,8 @@ install_all() {
 
     install_cmake
 
+    install_pcre2
+
     #
     # Install Python 3 now; not only is it needed for the Wireshark
     # build process, it's also needed for the Meson build system,
