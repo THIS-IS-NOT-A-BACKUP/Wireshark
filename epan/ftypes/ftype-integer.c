@@ -48,7 +48,7 @@ get_sinteger(fvalue_t *fv)
 	return fv->value.sinteger;
 }
 
-gboolean
+static gboolean
 parse_charconst(const char *s, unsigned long *valuep, gchar **err_msg)
 {
 	const char *cp;
@@ -59,8 +59,8 @@ parse_charconst(const char *s, unsigned long *valuep, gchar **err_msg)
 		/*
 		 * C escape sequence.
 		 * An escape sequence is an octal number \NNN,
-		 * an hex number \xNN, or one of \' \" \? \\ \a \b \f \n \r
-		 * \t \v that stands for the byte value of the equivalent
+		 * an hex number \xNN, or one of \' \" \\ \a \b \f \n \r \t \v
+		 * that stands for the byte value of the equivalent
 		 * C-escape in ASCII encoding.
 		 */
 		cp++;
