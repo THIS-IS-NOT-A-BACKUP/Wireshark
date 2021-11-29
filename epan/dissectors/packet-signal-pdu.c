@@ -33,11 +33,6 @@
 #include <packet-autosar-ipdu-multiplexer.h>
 
 
-void proto_reg_handoff_signal_pdu_can(void);
-void proto_reg_handoff_signal_pdu_lin(void);
-void proto_reg_handoff_signal_pdu_someip(void);
-void proto_reg_handoff_signal_pdu_pdu_transport(void);
-
 /*
  * Dissector for CAN, FlexRay, and other message payloads.
  * This includes such PDUs being transported on top of TECMP,
@@ -289,7 +284,7 @@ void proto_register_signal_pdu(void);
 void proto_reg_handoff_signal_pdu(void);
 
 void
-proto_reg_handoff_signal_pdu_can(void) {
+register_signal_pdu_can(void) {
     if (signal_pdu_handle_can == NULL) {
         return;
     }
@@ -311,11 +306,13 @@ proto_reg_handoff_signal_pdu_can(void) {
                 dissector_add_uint("can.id", *id, signal_pdu_handle_can);
             }
         }
+
+        g_list_free(keys);
     }
 }
 
 void
-proto_reg_handoff_signal_pdu_lin(void) {
+register_signal_pdu_lin(void) {
     if (signal_pdu_handle_lin == NULL) {
         return;
     }
@@ -332,11 +329,13 @@ proto_reg_handoff_signal_pdu_lin(void) {
             /* we register the combination of bus and frame id */
             dissector_add_uint("lin.frame_id", *id, signal_pdu_handle_lin);
         }
+
+        g_list_free(keys);
     }
 }
 
 void
-proto_reg_handoff_signal_pdu_someip(void) {
+register_signal_pdu_someip(void) {
     if (signal_pdu_handle_someip == NULL) {
         return;
     }
@@ -353,11 +352,13 @@ proto_reg_handoff_signal_pdu_someip(void) {
             guint32 message_id = (guint32)((guint64)(*id)) & 0xffffffff;
             dissector_add_uint("someip.messageid", message_id, signal_pdu_handle_someip);
         }
+
+        g_list_free(keys);
     }
 }
 
 void
-proto_reg_handoff_signal_pdu_pdu_transport(void) {
+register_signal_pdu_pdu_transport(void) {
     if (signal_pdu_handle_pdu_transport == NULL) {
         return;
     }
@@ -373,6 +374,8 @@ proto_reg_handoff_signal_pdu_pdu_transport(void) {
             gint64 *id = (gint64*)tmp->data;
             dissector_add_uint("pdu_transport.id", ((guint32)((guint64)(*id)) & 0xffffffff), signal_pdu_handle_pdu_transport);
         }
+
+        g_list_free(keys);
     }
 }
 
@@ -393,6 +396,8 @@ register_signal_pdu_ipdum_ids(void) {
             gint64 *id = (gint64*)tmp->data;
             dissector_add_uint("ipdum.pdu.id", ((guint32)((guint64)(*id)) & 0xffffffff), signal_pdu_handle_ipdum);
         }
+
+        g_list_free(keys);
     }
 }
 
@@ -1063,7 +1068,7 @@ post_update_spdu_someip_mapping_cb(void) {
     }
 
     /* we need to make sure we register again */
-    proto_reg_handoff_signal_pdu_someip();
+    register_signal_pdu_someip();
 }
 
 static spdu_someip_mapping_t*
@@ -1120,7 +1125,7 @@ post_update_spdu_can_mapping_cb(void) {
     }
 
     /* we need to make sure we register again */
-    proto_reg_handoff_signal_pdu_can();
+    register_signal_pdu_can();
 }
 
 static spdu_can_mapping_t*
@@ -1277,7 +1282,7 @@ post_update_spdu_lin_mapping_cb(void) {
     }
 
     /* we need to make sure we register again */
-    proto_reg_handoff_signal_pdu_lin();
+    register_signal_pdu_lin();
 }
 
 static spdu_lin_mapping_t*
@@ -1352,7 +1357,7 @@ post_update_spdu_pdu_transport_mapping_cb(void) {
     }
 
     /* we need to make sure we register again */
-    proto_reg_handoff_signal_pdu_pdu_transport();
+    register_signal_pdu_pdu_transport();
 }
 
 static spdu_pdu_transport_mapping_t*
