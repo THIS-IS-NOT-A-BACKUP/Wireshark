@@ -30,6 +30,8 @@
 /* System headers.*/
 #include <inttypes.h>
 #include <stdbool.h>
+#include <string.h>
+
 #include <glib.h>
 
 /*
@@ -46,6 +48,7 @@
 #include <wsutil/ws_assert.h>
 #include <wsutil/wslog.h>
 #include <wsutil/glib-compat.h>
+#include <wsutil/wmem/wmem.h>
 
 #endif /* __WIRESHARK_H__ */
 
