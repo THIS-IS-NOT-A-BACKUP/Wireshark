@@ -876,7 +876,7 @@ write_file_header (void)
         char *comment;
         GPtrArray *comments;
 
-        comment = g_strdup_printf("Generated from input file %s.", input_filename);
+        comment = ws_strdup_printf("Generated from input file %s.", input_filename);
         comments = g_ptr_array_new_with_free_func(g_free);
         g_ptr_array_add(comments, comment);
         success = pcapng_write_section_header_block(output_file,
@@ -1938,7 +1938,7 @@ main(int argc, char *argv[])
     if (debug)
         fprintf(stderr, "\n-------------------------\n");
     if (!quiet) {
-        fprintf(stderr, "Read %u potential packet%s, wrote %u packet%s (%" G_GINT64_MODIFIER "u byte%s).\n",
+        fprintf(stderr, "Read %u potential packet%s, wrote %u packet%s (%" PRIu64 " byte%s).\n",
                 num_packets_read, (num_packets_read == 1) ? "" : "s",
                 num_packets_written, (num_packets_written == 1) ? "" : "s",
                 bytes_written, (bytes_written == 1) ? "" : "s");
