@@ -153,7 +153,15 @@ static guint32 hdr_ethernet_proto = 0;
 
 /* Dummy IP header */
 static gboolean hdr_ip = FALSE;
+static gboolean hdr_ipv6 = FALSE;
 static guint hdr_ip_proto = 0;
+
+/* Destination and source addresses for IP header */
+static ws_in4_addr hdr_ip_dest_addr = 0;
+static ws_in4_addr hdr_ip_src_addr = 0;
+static ws_in6_addr hdr_ipv6_dest_addr = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
+static ws_in6_addr hdr_ipv6_src_addr  = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
+static ws_in6_addr NO_IPv6_ADDRESS    = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
 
 /* Dummy UDP header */
 static gboolean hdr_udp = FALSE;
@@ -294,6 +302,35 @@ static struct {         /* pseudo header for checksum calculation */
     guint16 length;
 } pseudoh;
 
+
+/* headers taken from glibc */
+
+typedef struct {
+    union  {
+        struct ip6_hdrctl {
+            guint32 ip6_un1_flow;   /* 24 bits of flow-ID */
+            guint16 ip6_un1_plen;   /* payload length */
+            guint8  ip6_un1_nxt;    /* next header */
+            guint8  ip6_un1_hlim;   /* hop limit */
+        } ip6_un1;
+        guint8 ip6_un2_vfc;       /* 4 bits version, 4 bits priority */
+    } ip6_ctlun;
+    ws_in6_addr ip6_src;      /* source address */
+    ws_in6_addr ip6_dst;      /* destination address */
+} hdr_ipv6_t;
+
+static hdr_ipv6_t HDR_IPv6;
+
+/* https://tools.ietf.org/html/rfc2460#section-8.1 */
+static struct {                 /* pseudo header ipv6 for checksum calculation */
+    struct  e_in6_addr src_addr6;
+    struct  e_in6_addr dst_addr6;
+    guint32 length;
+    guint8 zero[3];
+    guint8 next_header;
+} pseudoh6;
+
+
 typedef struct {
     guint16 source_port;
     guint16 dest_port;
@@ -347,8 +384,8 @@ static hdr_export_pdu_t HDR_EXPORT_PDU = {0, 0};
 
 #define EXPORT_PDU_END_OF_OPTIONS_SIZE 4
 
-/* Link-layer type; see net/bpf.h for details */
-static guint pcap_link_type = 1;   /* Default is DLT_EN10MB */
+/* Wiretap encapsulation type; see wiretap/wtap.h for details */
+static guint wtap_encap_type = 1;   /* Default is WTAP_ENCAP_ETHERNET */
 
 /*----------------------------------------------------------------------
  * Parse a single hex number
@@ -450,6 +487,9 @@ write_current_packet(gboolean cont)
         if (hdr_ip) {
             prefix_length += (int)sizeof(HDR_IP);
             ip_length = prefix_length + curr_offset + ((hdr_data_chunk) ? number_of_padding_bytes(curr_offset) : 0);
+        } else if (hdr_ipv6) {
+            prefix_length += (int)sizeof(HDR_IPv6);
+            ip_length = prefix_length + curr_offset + ((hdr_data_chunk) ? number_of_padding_bytes(curr_offset) : 0);
         }
         if (hdr_ethernet) { prefix_length += (int)sizeof(HDR_ETHERNET); }
 
@@ -483,11 +523,12 @@ write_current_packet(gboolean cont)
             vec_t cksum_vector[1];
 
             if (isOutbound) {
-                HDR_IP.src_addr = IP_DST;
-                HDR_IP.dest_addr = IP_SRC;
-            } else {
-                HDR_IP.src_addr = IP_SRC;
-                HDR_IP.dest_addr = IP_DST;
+                HDR_IP.src_addr = hdr_ip_dest_addr ? hdr_ip_dest_addr : IP_DST;
+                HDR_IP.dest_addr = hdr_ip_src_addr ? hdr_ip_src_addr : IP_SRC;
+            }
+            else {
+                HDR_IP.src_addr = hdr_ip_src_addr ? hdr_ip_src_addr : IP_SRC;
+                HDR_IP.dest_addr = hdr_ip_dest_addr ? hdr_ip_dest_addr : IP_DST;
             }
             HDR_IP.packet_length = g_htons(ip_length);
             HDR_IP.protocol = (guint8) hdr_ip_proto;
@@ -497,14 +538,35 @@ write_current_packet(gboolean cont)
 
             memcpy(&packet_buf[prefix_index], &HDR_IP, sizeof(HDR_IP));
             prefix_index += (int)sizeof(HDR_IP);
-        }
 
-        /* initialize pseudo header for checksum calculation */
-        pseudoh.src_addr    = HDR_IP.src_addr;
-        pseudoh.dest_addr   = HDR_IP.dest_addr;
-        pseudoh.zero        = 0;
-        pseudoh.protocol    = (guint8) hdr_ip_proto;
-        pseudoh.length      = g_htons(proto_length);
+            /* initialize pseudo header for checksum calculation */
+            pseudoh.src_addr    = HDR_IP.src_addr;
+            pseudoh.dest_addr   = HDR_IP.dest_addr;
+            pseudoh.zero        = 0;
+            pseudoh.protocol    = (guint8) hdr_ip_proto;
+            pseudoh.length      = g_htons(proto_length);
+        } else if (hdr_ipv6) {
+            if (memcmp(isOutbound ? &hdr_ipv6_dest_addr : &hdr_ipv6_src_addr, &NO_IPv6_ADDRESS, sizeof(ws_in6_addr)))
+                memcpy(&HDR_IPv6.ip6_src, isOutbound ? &hdr_ipv6_dest_addr : &hdr_ipv6_src_addr, sizeof(ws_in6_addr));
+            if (memcmp(isOutbound ? &hdr_ipv6_src_addr : &hdr_ipv6_dest_addr, &NO_IPv6_ADDRESS, sizeof(ws_in6_addr)))
+                memcpy(&HDR_IPv6.ip6_dst, isOutbound ? &hdr_ipv6_src_addr : &hdr_ipv6_dest_addr, sizeof(ws_in6_addr));
+
+            HDR_IPv6.ip6_ctlun.ip6_un2_vfc &= 0x0F;
+            HDR_IPv6.ip6_ctlun.ip6_un2_vfc |= (6<< 4);
+            HDR_IPv6.ip6_ctlun.ip6_un1.ip6_un1_plen = g_htons(ip_length);
+            HDR_IPv6.ip6_ctlun.ip6_un1.ip6_un1_nxt  = (guint8) hdr_ip_proto;
+            HDR_IPv6.ip6_ctlun.ip6_un1.ip6_un1_hlim = 32;
+
+            memcpy(&packet_buf[prefix_index], &HDR_IPv6, sizeof(HDR_IPv6));
+            prefix_index += (int)sizeof(HDR_IPv6);
+
+            /* initialize pseudo ipv6 header for checksum calculation */
+            pseudoh6.src_addr6  = HDR_IPv6.ip6_src;
+            pseudoh6.dst_addr6  = HDR_IPv6.ip6_dst;
+            memset(pseudoh6.zero, 0, sizeof(pseudoh6.zero));
+            pseudoh6.next_header   = (guint8) hdr_ip_proto;
+            pseudoh6.length      = g_htons(proto_length);
+        }
 
         /* Write UDP header */
         if (hdr_udp) {
@@ -515,7 +577,11 @@ write_current_packet(gboolean cont)
             HDR_UDP.length = g_htons(proto_length);
 
             HDR_UDP.checksum = 0;
-            cksum_vector[0].ptr = (guint8 *)&pseudoh; cksum_vector[0].len = sizeof(pseudoh);
+            if (hdr_ipv6) {
+                cksum_vector[0].ptr = (guint8 *)&pseudoh6; cksum_vector[0].len = sizeof(pseudoh6);
+            } else {
+                cksum_vector[0].ptr = (guint8 *)&pseudoh; cksum_vector[0].len = sizeof(pseudoh);
+            }
             cksum_vector[1].ptr = (guint8 *)&HDR_UDP; cksum_vector[1].len = sizeof(HDR_UDP);
             cksum_vector[2].ptr = &packet_buf[prefix_length]; cksum_vector[2].len = curr_offset;
             HDR_UDP.checksum = in_cksum(cksum_vector, 3);
@@ -544,7 +610,11 @@ write_current_packet(gboolean cont)
             HDR_TCP.window = g_htons(0x2000);
 
             HDR_TCP.checksum = 0;
-            cksum_vector[0].ptr = (guint8 *)&pseudoh; cksum_vector[0].len = sizeof(pseudoh);
+            if (hdr_ipv6) {
+                cksum_vector[0].ptr = (guint8 *)&pseudoh6; cksum_vector[0].len = sizeof(pseudoh6);
+            } else {
+                cksum_vector[0].ptr = (guint8 *)&pseudoh; cksum_vector[0].len = sizeof(pseudoh);
+            }
             cksum_vector[1].ptr = (guint8 *)&HDR_TCP; cksum_vector[1].len = sizeof(HDR_TCP);
             cksum_vector[2].ptr = &packet_buf[prefix_length]; cksum_vector[2].len = curr_offset;
             HDR_TCP.checksum = in_cksum(cksum_vector, 3);
@@ -643,7 +713,7 @@ write_current_packet(gboolean cont)
             rec.ts.secs = ts_sec;
             rec.ts.nsecs = ts_nsec;
             rec.rec_header.packet_header.caplen = rec.rec_header.packet_header.len = prefix_length + curr_offset + eth_trailer_length;
-            rec.rec_header.packet_header.pkt_encap = pcap_link_type;
+            rec.rec_header.packet_header.pkt_encap = wtap_encap_type;
             rec.presence_flags = WTAP_HAS_CAP_LEN|WTAP_HAS_INTERFACE_ID|WTAP_HAS_TS;
             if (has_direction) {
                 wtap_block_add_uint32_option(rec.block, OPT_PKT_FLAGS, direction);
@@ -1412,7 +1482,7 @@ text_import(const text_import_info_t *info)
         ts_fmt = info->timestamp_format;
     }
 
-    pcap_link_type = info->encapsulation;
+    wtap_encap_type = info->encapsulation;
 
     wdh = info->wdh;
 
@@ -1488,6 +1558,19 @@ text_import(const text_import_info_t *info)
 
         default:
             break;
+    }
+
+    if (hdr_ip) {
+        if (info->ipv6) {
+            hdr_ipv6 = TRUE;
+            hdr_ip = FALSE;
+            hdr_ethernet_proto = 0x86DD;
+            hdr_ipv6_src_addr = info->ip_src_addr.ipv6;
+            hdr_ipv6_dest_addr = info->ip_dest_addr.ipv6;
+        } else {
+            hdr_ip_src_addr = info->ip_src_addr.ipv4;
+            hdr_ip_dest_addr = info->ip_dest_addr.ipv4;
+        }
     }
 
     max_offset = info->max_frame_length;
