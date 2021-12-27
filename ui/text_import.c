@@ -75,37 +75,7 @@
  */
 
 #include "config.h"
-
-/*
- * Just make sure we include the prototype for strptime as well
- * (needed for glibc 2.2) but make sure we do this only if not
- * yet defined.
- */
-#ifndef __USE_XOPEN
-#  define __USE_XOPEN
-#endif
-#ifndef _XOPEN_SOURCE
-#  ifndef __sun
-#    define _XOPEN_SOURCE 600
-#  endif
-#endif
 #include "text_import.h"
-
-/*
- * Defining _XOPEN_SOURCE is needed on some platforms, e.g. platforms
- * using glibc, to expand the set of things system header files define.
- *
- * Unfortunately, on other platforms, such as some versions of Solaris
- * (including Solaris 10), it *reduces* that set as well, causing
- * strptime() not to be declared, presumably because the version of the
- * X/Open spec that _XOPEN_SOURCE implies doesn't include strptime() and
- * blah blah blah namespace pollution blah blah blah.
- *
- * So we define __EXTENSIONS__ so that "strptime()" is declared.
- */
-#ifndef __EXTENSIONS__
-#  define __EXTENSIONS__
-#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,9 +97,7 @@
 #include <wsutil/exported_pdu_tlvs.h>
 
 #include <wsutil/nstime.h>
-#ifndef HAVE_STRPTIME
-# include "wsutil/strptime.h"
-#endif
+#include <wsutil/time_util.h>
 
 #include "text_import_scanner.h"
 #include "text_import_scanner_lex.h"
@@ -159,7 +127,11 @@ static gboolean hdr_ipv6 = FALSE;
 static guint hdr_ip_proto = 0;
 
 /* Destination and source addresses for IP header */
+/* XXX: Add default destination and source addresses for IPv6 when :: is
+ * passed in? */
+#if 0
 static ws_in6_addr NO_IPv6_ADDRESS    = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
+#endif
 
 /* Dummy UDP header */
 static gboolean hdr_udp = FALSE;
@@ -557,10 +529,13 @@ write_current_packet(gboolean cont)
             pseudoh.protocol    = (guint8) hdr_ip_proto;
             pseudoh.length      = g_htons(proto_length);
         } else if (hdr_ipv6) {
-            if (memcmp(isOutbound ? &info_p->ip_dest_addr.ipv6 : &info_p->ip_src_addr.ipv6, &NO_IPv6_ADDRESS, sizeof(ws_in6_addr)))
-                memcpy(&HDR_IPv6.ip6_src, isOutbound ? &info_p->ip_dest_addr.ipv6 : &info_p->ip_src_addr.ipv6, sizeof(ws_in6_addr));
-            if (memcmp(isOutbound ? &info_p->ip_src_addr.ipv6 : &info_p->ip_dest_addr.ipv6, &NO_IPv6_ADDRESS, sizeof(ws_in6_addr)))
-                memcpy(&HDR_IPv6.ip6_dst, isOutbound ? &info_p->ip_src_addr.ipv6 : &info_p->ip_dest_addr.ipv6, sizeof(ws_in6_addr));
+            if (isOutbound) {
+                memcpy(&HDR_IPv6.ip6_src, &info_p->ip_dest_addr.ipv6, sizeof(ws_in6_addr));
+                memcpy(&HDR_IPv6.ip6_dst, &info_p->ip_src_addr.ipv6, sizeof(ws_in6_addr));
+            } else {
+                memcpy(&HDR_IPv6.ip6_src, &info_p->ip_src_addr.ipv6, sizeof(ws_in6_addr));
+                memcpy(&HDR_IPv6.ip6_dst, &info_p->ip_dest_addr.ipv6, sizeof(ws_in6_addr));
+            }
 
             HDR_IPv6.ip6_ctlun.ip6_un2_vfc &= 0x0F;
             HDR_IPv6.ip6_ctlun.ip6_un2_vfc |= (6<< 4);
@@ -1082,7 +1057,7 @@ _parse_time(const guchar* start_field, const guchar* end_field, const gchar* _fo
             *subsecs_fmt = 0;
         }
 
-        cursor = strptime(cursor, format, &timecode);
+        cursor = ws_strptime(cursor, format, &timecode);
 
         if (cursor == NULL) {
             return FALSE;
@@ -1099,7 +1074,7 @@ _parse_time(const guchar* start_field, const guchar* end_field, const gchar* _fo
 
             subseclen = (int) (p - cursor);
             cursor = p;
-            cursor = strptime(cursor, subsecs_fmt + 2, &timecode);
+            cursor = ws_strptime(cursor, subsecs_fmt + 2, &timecode);
             if (cursor == NULL) {
                 return FALSE;
             }
@@ -1451,7 +1426,7 @@ parse_token(token_t token, char *str)
                 by_eol = 1;
                 state = START_OF_LINE;
             }
-            if (info_p->identify_ascii) {
+            if (info_p->hexdump.identify_ascii) {
                 /* Here a line of pkt bytes reading is finished
                    compare the ascii and hex to avoid such situation:
                    "61 62 20 ab ", when ab is ascii dump then it should

@@ -147,8 +147,8 @@ static guint16 hdr_data_chunk_sid  = 0;
 static guint16 hdr_data_chunk_ssn  = 0;
 static guint32 hdr_data_chunk_ppid = 0;
 
-/* ASCII text dump identification */
-static gboolean identify_ascii = FALSE;
+/* Export PDU */
+static gboolean hdr_export_pdu = FALSE;
 
 static gboolean has_direction = FALSE;
 
@@ -319,6 +319,11 @@ print_usage (FILE *output)
             "                         chunk header with payload protocol identifier ppi.\n"
             "                         Example: -S 30,40,34\n"
             "\n"
+            "  -P <dissector>         prepend EXPORTED_PDU header with specifieddissector\n"
+            "                         as the payload PROTO_NAME tag.\n"
+            "                         Automatically sets link type to Upper PDU Export.\n"
+            "                         EXPORTED_PDU payload defaults to \"data\" otherwise.\n"
+            "\n"
             "Miscellaneous:\n"
             "  -h                     display this help and exit.\n"
             "  -v                     print version information and exit.\n"
@@ -369,11 +374,13 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
     char* err_info;
 
     info->hexdump.offset_type = OFFSET_HEX;
+    info->payload = "data";
+
     /* Initialize the version information. */
     ws_init_version_info("Text2pcap (Wireshark)", NULL, NULL, NULL);
 
     /* Scan CLI parameters */
-    while ((c = ws_getopt_long(argc, argv, "aDdhqe:i:l:m:nN:o:u:s:S:t:T:v4:6:", long_options, NULL)) != -1) {
+    while ((c = ws_getopt_long(argc, argv, "aDdhqe:i:l:m:nN:o:u:P:s:S:t:T:v4:6:", long_options, NULL)) != -1) {
         switch (c) {
         case 'h':
             show_help_header("Generate a capture file from an ASCII hexdump of packets.");
@@ -420,6 +427,12 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
             set_hdr_ip_proto(ip_proto);
             break;
         }
+
+        case 'P':
+            hdr_export_pdu = TRUE;
+            pcap_link_type = 252;
+            info->payload = ws_optarg;
+            break;
 
         case 's':
             hdr_sctp = TRUE;
@@ -563,7 +576,7 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
             break;
 
         case 'a':
-            identify_ascii = TRUE;
+            info->hexdump.identify_ascii = TRUE;
             break;
 
         case 'v':
@@ -656,6 +669,11 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
         return INVALID_OPTION;
     }
 
+    if (pcap_link_type != 252 && hdr_export_pdu) {
+        cmdarg_err("Export PDU (-P) requires WIRESHARK_UPPER_PDU link type (252)");
+        return INVALID_OPTION;
+    }
+
     if (have_hdr_ip_proto && !(hdr_ip || hdr_ipv6)) {
         /*
          * If we have an IP protocol to add to the header, but neither an
@@ -744,7 +762,9 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
     info->encapsulation = wtap_encap_type;
     info->wdh = wdh;
 
-    if (hdr_data_chunk) {
+    if (hdr_export_pdu) {
+        info->dummy_header_type = HEADER_EXPORT_PDU;
+    } else if (hdr_data_chunk) {
         info->dummy_header_type = HEADER_SCTP_DATA;
     } else if (hdr_sctp) {
         info->dummy_header_type = HEADER_SCTP;
@@ -781,12 +801,7 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
     info->tag = hdr_sctp_tag;
     info->ppi = hdr_data_chunk_ppid;
 
-#if 0
-    info->payload = /* XXX Export PDU not supported by text2pcap yet */
-#endif
-
     info->max_frame_length = max_offset;
-    info->identify_ascii = identify_ascii;
 
     /* Display summary of our state */
     if (!quiet) {
