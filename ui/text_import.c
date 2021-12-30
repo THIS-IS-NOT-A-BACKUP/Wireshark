@@ -99,6 +99,10 @@
 #include <wsutil/nstime.h>
 #include <wsutil/time_util.h>
 
+#include <ui/version_info.h>
+#include <wsutil/cpu_info.h>
+#include <wsutil/os_version_info.h>
+
 #include "text_import_scanner.h"
 #include "text_import_scanner_lex.h"
 #include "text_import_regex.h"
@@ -107,11 +111,6 @@
 
 /* maximum time precision we can handle = 10^(-SUBSEC_PREC) */
 #define SUBSEC_PREC 9
-
-#define debug_printf(level,  ...) \
-    if (info_p->debug >= (level)) { \
-        printf(__VA_ARGS__); \
-    }
 
 static text_import_info_t *info_p;
 
@@ -220,7 +219,8 @@ static const char *token_str[] = {"",
                            "Offset",
                            "Directive",
                            "Text",
-                           "End-of-line"
+                           "End-of-line",
+                           "End-of-file"
 };
 
 /* ----- Skeleton Packet Headers --------------------------------------------------*/
@@ -754,12 +754,12 @@ append_to_preamble(char *str)
             /* XXX: Just keep going? This is probably not a problem, as above.*/
         (void) g_strlcpy(&packet_preamble[packet_preamble_len], str, PACKET_PREAMBLE_MAX_LEN);
         packet_preamble_len += (int) toklen;
-        if (info_p->debug >= 2) {
+        if (ws_log_get_level() >= LOG_LEVEL_NOISY) {
             char *c;
             char xs[PACKET_PREAMBLE_MAX_LEN];
             (void) g_strlcpy(xs, packet_preamble, PACKET_PREAMBLE_MAX_LEN);
             while ((c = strchr(xs, '\r')) != NULL) *c=' ';
-            fprintf (stderr, "[[append_to_preamble: \"%s\"]]", xs);
+            ws_noisy("[[append_to_preamble: \"%s\"]]", xs);
         }
     }
 
@@ -907,16 +907,19 @@ static int parse_plain_data(guchar** src, const guchar* src_end,
      */
     guint64 val;
     int j;
-    debug_printf(3, "parsing data: ");
+    if (ws_log_get_level() >= LOG_LEVEL_NOISY) {
+        char* debug_str = wmem_strndup(NULL, *src, (src_end-*src));
+        ws_noisy("parsing data: %s", debug_str);
+        wmem_free(NULL, debug_str);
+    }
     while (*src < src_end && *dest + encoding->bytes_per_unit <= dest_end) {
-        debug_printf(3, "%c", **src);
         val = encoding->table[**src];
         switch (val) {
           case INVALID_VALUE:
             status = -1;
             goto remainder;
           case WHITESPACE_VALUE:
-            fprintf(stderr, "Unexpected char %d in data\n", **src);
+            ws_warning("Unexpected char %d in data", **src);
             break;
           default:
             c_val = c_val << encoding->bits_per_char | val;
@@ -940,7 +943,6 @@ remainder:
         **dest = (gchar) (c_val >> (j - 8));
         *dest += 1;
     }
-    debug_printf(3, "\n");
     return status * units;
 }
 
@@ -983,7 +985,7 @@ void parse_data(guchar* start_field, guchar* end_field, enum data_encoding encod
         }
         break;
       default:
-          fprintf(stderr, "not implemented/invalid encoding type\n");
+          ws_critical("not implemented/invalid encoding type");
           return;
     }
 }
@@ -1113,7 +1115,7 @@ _parse_time(const guchar* start_field, const guchar* end_field, const gchar* _fo
         *nsec = nsec_buf;
     }
 
-    debug_printf(3, "parsed time %s Format(%s), time(%u), subsecs(%u)\n", field, _format, (guint32)*sec, (guint32)*nsec);
+    ws_noisy("parsed time %s Format(%s), time(%u), subsecs(%u)\n", field, _format, (guint32)*sec, (guint32)*nsec);
 
     return TRUE;
 }
@@ -1182,11 +1184,11 @@ parse_preamble (void)
             ws_warning("Time conversion (%s) failed for %s on input packet %d.", info_p->timestamp_format, packet_preamble, info_p->num_packets_read);
         }
     }
-    if (info_p->debug >= 2) {
+    if (ws_log_get_level() >= LOG_LEVEL_NOISY) {
         char *c;
         while ((c = strchr(packet_preamble, '\r')) != NULL) *c=' ';
-        fprintf(stderr, "[[parse_preamble: \"%s\"]]\n", packet_preamble);
-        fprintf(stderr, "Format(%s), time(%u), subsecs(%u)\n", info_p->timestamp_format, (guint32)ts_sec, ts_nsec);
+        ws_noisy("[[parse_preamble: \"%s\"]]", packet_preamble);
+        ws_noisy("Format(%s), time(%u), subsecs(%u)", info_p->timestamp_format, (guint32)ts_sec, ts_nsec);
     }
 
     if (!got_time) {
@@ -1209,8 +1211,7 @@ parse_preamble (void)
 static import_status_t
 start_new_packet(gboolean cont)
 {
-    if (info_p->debug>=1)
-        fprintf(stderr, "Start new packet (cont = %s).\n", cont ? "TRUE" : "FALSE");
+    ws_debug("Start new packet (cont = %s).", cont ? "TRUE" : "FALSE");
 
     /* Write out the current packet, if required */
     if (write_current_packet(cont) != IMPORT_SUCCESS)
@@ -1228,10 +1229,12 @@ start_new_packet(gboolean cont)
  * Process a directive
  */
 static void
-process_directive (char *str)
+process_directive (char *str _U_)
 {
-    fprintf(stderr, "\n--- Directive [%s] currently unsupported ---\n", str+10);
-
+    char **tokens;
+    tokens = g_strsplit_set(str+10, "\r\n", 2);
+    ws_message("--- Directive [%s] currently unsupported ---", tokens[0]);
+    g_strfreev(tokens);
 }
 
 /*----------------------------------------------------------------------
@@ -1256,12 +1259,12 @@ parse_token(token_t token, char *str)
      * scanner. The code should be self_documenting.
      */
 
-    if (info_p->debug>=2) {
+    if (ws_log_get_level() >= LOG_LEVEL_NOISY) {
         /* Sanitize - remove all '\r' */
         char *c;
         if (str!=NULL) { while ((c = strchr(str, '\r')) != NULL) *c=' '; }
 
-        fprintf(stderr, "(%s, %s \"%s\") -> (",
+        ws_noisy("(%s, %s \"%s\") -> (",
                 state_str[state], token_str[token], str ? str : "");
     }
 
@@ -1368,8 +1371,7 @@ parse_token(token_t token, char *str)
                     state = READ_OFFSET;
                 } else {
                     /* Bad offset; switch to INIT state */
-                    if (info_p->debug>=1)
-                        fprintf(stderr, "Inconsistent offset. Expecting %0X, got %0X. Ignoring rest of packet\n",
+                    ws_message("Inconsistent offset. Expecting %0X, got %0X. Ignoring rest of packet",
                                 curr_offset, num);
                     if (write_current_packet(FALSE) != IMPORT_SUCCESS)
                         return IMPORT_FAILURE;
@@ -1518,8 +1520,7 @@ parse_token(token_t token, char *str)
         return IMPORT_FAILURE;
     }
 
-    if (info_p->debug>=2)
-        fprintf(stderr, ", %s)\n", state_str[state]);
+    ws_noisy(", %s)", state_str[state]);
 
     return IMPORT_SUCCESS;
 }
@@ -1711,4 +1712,113 @@ text_import(text_import_info_t * const info)
     }
     g_free(packet_buf);
     return ret;
+}
+
+/* Write the SHB and IDB to the wtap_dump_params before opening the wtap dump
+ * file. While dummy headers can be written automatically, this writes out
+ * some extra information including an optional interface name.
+ */
+int
+text_import_pre_open(wtap_dump_params * const params, int file_type_subtype, const char* const input_filename, const char* const interface_name)
+{
+    wtap_block_t shb_hdr;
+    wtap_block_t int_data;
+    wtapng_if_descr_mandatory_t *int_data_mand;
+    char    *comment;
+    GString *info_str;
+
+    if (wtap_file_type_subtype_supports_block(file_type_subtype, WTAP_BLOCK_SECTION) != BLOCK_NOT_SUPPORTED &&
+        wtap_file_type_subtype_supports_option(file_type_subtype, WTAP_BLOCK_SECTION, OPT_COMMENT) != OPTION_NOT_SUPPORTED) {
+
+        shb_hdr = wtap_block_create(WTAP_BLOCK_SECTION);
+
+        comment = ws_strdup_printf("Generated from input file %s.", input_filename);
+        wtap_block_add_string_option(shb_hdr, OPT_COMMENT, comment, strlen(comment));
+        g_free(comment);
+
+        info_str = g_string_new("");
+        get_cpu_info(info_str);
+        if (info_str->str) {
+            wtap_block_add_string_option(shb_hdr, OPT_SHB_HARDWARE, info_str->str, info_str->len);
+        }
+        g_string_free(info_str, TRUE);
+
+        info_str = g_string_new("");
+        get_os_version_info(info_str);
+        if (info_str->str) {
+            wtap_block_add_string_option(shb_hdr, OPT_SHB_OS, info_str->str, info_str->len);
+        }
+        g_string_free(info_str, TRUE);
+
+        wtap_block_add_string_option_format(shb_hdr, OPT_SHB_USERAPPL, "%s", get_appname_and_version());
+
+        params->shb_hdrs = g_array_new(FALSE, FALSE, sizeof(wtap_block_t));
+        g_array_append_val(params->shb_hdrs, shb_hdr);
+    }
+
+    /* wtap_dumper will create a dummy interface block if needed, but since
+     * we have the option of including the interface name, create it ourself.
+     */
+    if (wtap_file_type_subtype_supports_block(file_type_subtype, WTAP_BLOCK_IF_ID_AND_INFO) != BLOCK_NOT_SUPPORTED) {
+        int_data = wtap_block_create(WTAP_BLOCK_IF_ID_AND_INFO);
+        int_data_mand = (wtapng_if_descr_mandatory_t*)wtap_block_get_mandatory_data(int_data);
+
+        int_data_mand->wtap_encap = params->encap;
+        int_data_mand->time_units_per_second = 1000000000;
+        int_data_mand->snap_len = params->snaplen;
+
+        if (interface_name != NULL) {
+            wtap_block_add_string_option(int_data, OPT_IDB_NAME, interface_name, strlen(interface_name));
+        } else {
+            wtap_block_add_string_option(int_data, OPT_IDB_NAME, "Fake IF, text2pcap", strlen("Fake IF, text2pcap"));
+        }
+        switch (params->tsprec) {
+
+        case WTAP_TSPREC_SEC:
+                int_data_mand->time_units_per_second = 1;
+                wtap_block_add_uint8_option(int_data, OPT_IDB_TSRESOL, 0);
+                break;
+
+        case WTAP_TSPREC_DSEC:
+                int_data_mand->time_units_per_second = 10;
+                wtap_block_add_uint8_option(int_data, OPT_IDB_TSRESOL, 1);
+                break;
+
+        case WTAP_TSPREC_CSEC:
+                int_data_mand->time_units_per_second = 100;
+                wtap_block_add_uint8_option(int_data, OPT_IDB_TSRESOL, 2);
+                break;
+
+        case WTAP_TSPREC_MSEC:
+                int_data_mand->time_units_per_second = 1000;
+                wtap_block_add_uint8_option(int_data, OPT_IDB_TSRESOL, 3);
+                break;
+
+        case WTAP_TSPREC_USEC:
+                int_data_mand->time_units_per_second = 1000000;
+                /* This is the default, so no need to add an option */
+                break;
+
+        case WTAP_TSPREC_NSEC:
+                int_data_mand->time_units_per_second = 1000000000;
+                wtap_block_add_uint8_option(int_data, OPT_IDB_TSRESOL, 9);
+                break;
+
+        case WTAP_TSPREC_PER_PACKET:
+        case WTAP_TSPREC_UNKNOWN:
+        default:
+                /*
+                 * Don't do this.
+                 */
+                ws_assert_not_reached();
+                break;
+        }
+
+        params->idb_inf = g_new(wtapng_iface_descriptions_t,1);
+        params->idb_inf->interface_data = g_array_new(FALSE, FALSE, sizeof(wtap_block_t));
+        g_array_append_val(params->idb_inf->interface_data, int_data);
+
+    }
+
+    return EXIT_SUCCESS;
 }
