@@ -288,6 +288,7 @@ void ImportTextDialog::applyDialogSettings()
         ti_ui_->dissectorComboBox->setCurrentText("data");
     }
 
+    ti_ui_->interfaceLineEdit->setText(settings["interfaceName"].toString());
     ti_ui_->maxLengthLineEdit->setText(settings["maxFrameLength"].toString());
 
     // Select mode tab last to enableFieldWidgets()
@@ -383,6 +384,7 @@ void ImportTextDialog::storeDialogSettings()
     settings["sctpPPI"] = ti_ui_->ppiLineEdit->text();
     settings["pduPayload"] = ti_ui_->dissectorComboBox->currentData().toString();
 
+    settings["interfaceName"] = ti_ui_->interfaceLineEdit->text();
     settings["maxFrameLength"] = ti_ui_->maxLengthLineEdit->text();
 
     saveSettingsFile();
@@ -400,6 +402,7 @@ int ImportTextDialog::exec() {
     gchar *err_info;
     wtap_dump_params params;
     int file_type_subtype;
+    QString interface_name;
 
     QDialog::exec();
 
@@ -493,6 +496,12 @@ int ImportTextDialog::exec() {
     params.tsprec = WTAP_TSPREC_USEC; /* XXX - support other precisions? */
     /* Write a pcapng temporary file */
     file_type_subtype = wtap_pcapng_file_type_subtype();
+    if (ti_ui_->interfaceLineEdit->text().length()) {
+        interface_name = ti_ui_->interfaceLineEdit->text();
+    } else {
+        interface_name = ti_ui_->interfaceLineEdit->placeholderText();
+    }
+    text_import_pre_open(&params, file_type_subtype, import_info_.import_text_filename, interface_name.toUtf8().constData());
     /* Use a random name for the temporary import buffer */
     import_info_.wdh = wtap_dump_open_tempfile(&tmp, "import", file_type_subtype, WTAP_UNCOMPRESSED, &params, &err, &err_info);
     capfile_name_.append(tmp ? tmp : "temporary file");
@@ -519,6 +528,7 @@ int ImportTextDialog::exec() {
     }
   cleanup_wtap:
     /* g_free checks for null */
+    g_free(params.idb_inf);
     g_free(tmp);
     g_free((gpointer) import_info_.payload);
     switch (import_info_.mode) {
