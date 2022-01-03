@@ -58,7 +58,11 @@ They previously shipped with Npcap 1.55.
 ** Date and time can be given in UTC using ISO 8601 (with 'Z' timezone) or by appending the suffix "UTC" to the legacy formats.
    Otherwise local time is used.
 
-* text2pcap has been updated to use the new logging output options and the
+* text2pcap:
+** text2pcap supports writing the output file in all the capture file formats
+   that wiretap library supports, using the same "-F" option as editcap,
+   mergecap, and tshark.
+** text2pcap has been updated to use the new logging output options and the
   "-d" flag has been removed. The "debug" log level corresponds to the old
   "-d" flag, and the "noisy" log level corresponds to using "-d" multiple times.
 
@@ -74,7 +78,10 @@ They previously shipped with Npcap 1.55.
 
 * It is possible to set extcap passwords on cli for tshark and other cli tools.
 
-// === Removed Features and Support
+ === Removed Features and Support
+
+* CMake: The options starting with DISABLE_something were renamed ENABLE_something for consistency.
+  For example DISABLE_WERROR=On became ENABLE_WERROR=Off. The defaults are unchanged.
 
 // === Removed Dissectors
 
