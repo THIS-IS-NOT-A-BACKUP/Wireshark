@@ -225,7 +225,8 @@ Include dummy IP headers before each packet. Specify the IP protocol
 for the packet in decimal. Use this option if your dump is the payload
 of an IP packet (i.e. has complete L4 information) but does not have
 an IP header with each packet. Note that an appropriate Ethernet header
-is automatically included with each packet as well.
+is automatically included with each packet as well if the link-layer
+type is Ethernet.
 Example: __-i 46__ to specify an RSVP packet (IP protocol 46).  See
 https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml for
 the complete list of assigned internet protocol numbers.
@@ -389,8 +390,8 @@ Example: __-4 10.0.0.1,10.0.0.2__ to use 10.0.0.1 and 10.0.0.2 for all IP packet
 Prepend dummy IP header with specified IPv6 dest and source address.
 This option should be accompanied by one of the following options: -i, -s, -S, -T, -u
 Use this option to apply "custom" IP addresses.
-Example: __-6 fe80::202:b3ff:fe1e:8329,2001:0db8:85a3::8a2e:0370:7334__ to
-use fe80::202:b3ff:fe1e:8329 and 2001:0db8:85a3::8a2e:0370:7334 for all IP packets.
+Example: __-6 2001:db8::b3ff:fe1e:8329,2001:0db8:85a3::8a2e:0370:7334__ to
+use 2001:db8::b3ff:fe1e:8329 and 2001:0db8:85a3::8a2e:0370:7334 for all IP packets.
 --
 
 include::diagnostic-options.adoc[]
