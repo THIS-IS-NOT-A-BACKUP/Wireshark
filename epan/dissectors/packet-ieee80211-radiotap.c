@@ -4509,8 +4509,8 @@ void proto_register_radiotap(void)
 		  "Number of Space Time Block Code streams", HFILL}},
 
 		{&hf_radiotap_mcs_ness_bit0,
-		 {"Number of extension spatial streams bit 0", "radiotap.mcs.ness_bit1",
-		  FT_UINT8, BASE_DEC, NULL, IEEE80211_RADIOTAP_MCS_NESS_BIT1,
+		 {"Number of extension spatial streams bit 0", "radiotap.mcs.ness_bit0",
+		  FT_UINT8, BASE_DEC, NULL, IEEE80211_RADIOTAP_MCS_NESS_BIT0,
 		  "Bit 0 of number of extension spatial streams information", HFILL}},
 
 		{&hf_radiotap_mcs_index,
@@ -4922,7 +4922,7 @@ void proto_register_radiotap(void)
 		  IEEE80211_RADIOTAP_HE_SPATIAL_REUSE_4_KNOWN, NULL, HFILL}},
 
 		{&hf_radiotap_he_data_bw_ru_allocation_known,
-		 {"dat BW/RU allocation known", "radiotap.he.data_1.data_bw_ru_allocation_known",
+		 {"data BW/RU allocation known", "radiotap.he.data_1.data_bw_ru_allocation_known",
 		  FT_BOOLEAN, 16, TFS(&tfs_known_unknown),
 		  IEEE80211_RADIOTAP_HE_DATA_BW_RU_ALLOCATION_KNOWN, NULL, HFILL}},
 
