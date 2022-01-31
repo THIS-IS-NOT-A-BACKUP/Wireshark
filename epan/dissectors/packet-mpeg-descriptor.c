@@ -1448,6 +1448,38 @@ proto_mpeg_descriptor_dissect_linkage(tvbuff_t *tvb, guint offset, guint len, pr
         proto_tree_add_item(tree, hf_mpeg_descr_linkage_private_data_byte, tvb, offset, end - offset, ENC_NA);
 }
 
+/* 0x4B NVOD Reference Descriptor */
+static int hf_mpeg_descr_nvod_reference_tsid = -1;
+static int hf_mpeg_descr_nvod_reference_onid = -1;
+static int hf_mpeg_descr_nvod_reference_sid  = -1;
+
+static gint ett_mpeg_descriptor_nvod_reference_triplet = -1;
+
+static void
+proto_mpeg_descriptor_dissect_nvod_reference(tvbuff_t *tvb, guint offset, guint len, proto_tree *tree)
+{
+    guint end = offset + len;
+
+    proto_tree * triplet_tree;
+
+    while (offset < end) {
+        guint tsid = tvb_get_guint16(tvb, offset + 0, ENC_BIG_ENDIAN);
+        guint onid = tvb_get_guint16(tvb, offset + 2, ENC_BIG_ENDIAN);
+        guint sid  = tvb_get_guint16(tvb, offset + 4, ENC_BIG_ENDIAN);
+
+        triplet_tree = proto_tree_add_subtree_format(tree, tvb, offset, 6, ett_mpeg_descriptor_nvod_reference_triplet, NULL, "NVOD Service Triplet (0x%04X:0x%04X:0x%04X)", tsid, onid, sid);
+
+        proto_tree_add_item(triplet_tree, hf_mpeg_descr_nvod_reference_tsid, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
+
+        proto_tree_add_item(triplet_tree, hf_mpeg_descr_nvod_reference_onid, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
+
+        proto_tree_add_item(triplet_tree, hf_mpeg_descr_nvod_reference_sid,  tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
+    }
+}
+
 /* 0x4C Time Shifted Service Descriptor */
 static int hf_mpeg_descr_time_shifted_service_id = -1;
 
@@ -2284,6 +2316,108 @@ proto_mpeg_descriptor_dissect_teletext(tvbuff_t *tvb, guint offset, guint len, p
         proto_tree_add_item(tree, hf_mpeg_descr_teletext_page_number, tvb, offset, 1, ENC_BIG_ENDIAN);
         offset += 1;
     }
+}
+
+/* 0x57 Telephone Descriptor */
+static int hf_mpeg_descr_telephone_reserved_future_use1 = -1;
+static int hf_mpeg_descr_telephone_foreign_availability = -1;
+static int hf_mpeg_descr_telephone_connection_type = -1;
+static int hf_mpeg_descr_telephone_reserved_future_use2 = -1;
+static int hf_mpeg_descr_telephone_country_prefix_length = -1;
+static int hf_mpeg_descr_telephone_international_area_code_length = -1;
+static int hf_mpeg_descr_telephone_operator_code_length = -1;
+static int hf_mpeg_descr_telephone_reserved_future_use3 = -1;
+static int hf_mpeg_descr_telephone_national_area_code_length = -1;
+static int hf_mpeg_descr_telephone_core_number_length = -1;
+static int hf_mpeg_descr_telephone_number = -1;
+static int hf_mpeg_descr_telephone_country_prefix = -1;
+static int hf_mpeg_descr_telephone_international_area_code = -1;
+static int hf_mpeg_descr_telephone_operator_code = -1;
+static int hf_mpeg_descr_telephone_national_area_code = -1;
+static int hf_mpeg_descr_telephone_core_number = -1;
+
+#define MPEG_DESCR_TELEPHONE_RESERVED1_MASK                 0xC0
+#define MPEG_DESCR_TELEPHONE_FOREIGN_AVAILABILITY_MASK      0x20
+#define MPEG_DESCR_TELEPHONE_CONNECTION_TYPE_MASK           0x1F
+#define MPEG_DESCR_TELEPHONE_RESERVED2_MASK                 0x80
+#define MPEG_DESCR_TELEPHONE_COUNTRY_PREFIX_LEN_MASK        0x60
+#define MPEG_DESCR_TELEPHONE_INTERNATIONAL_CODE_LEN_MASK    0x1C
+#define MPEG_DESCR_TELEPHONE_OPERATOR_CODE_LEN_MASK         0x03
+#define MPEG_DESCR_TELEPHONE_RESERVED3_MASK                 0x80
+#define MPEG_DESCR_TELEPHONE_NATIONAL_CODE_LEN_MASK         0x70
+#define MPEG_DESCR_TELEPHONE_CORE_NUMBER_LEN_MASK           0x0F
+
+static const value_string mpeg_descr_telephone_foreign_availability_vals[] = {
+    { 0x0, "Inside country only" },
+    { 0x1, "Foreign call available" },
+
+    { 0x0, NULL }
+};
+
+static const range_string mpeg_descr_telephone_connection_type_vals[] = {
+    { 0x00, 0x1F, "Unknown" },
+
+    { 0, 0, NULL }
+};
+
+static gint ett_mpeg_descriptor_telephone_number = -1;
+
+static void
+proto_mpeg_descriptor_dissect_telephone(tvbuff_t *tvb, guint offset, proto_tree *tree)
+{
+    guint32 country_prefix_length;
+    guint32 international_area_code_length;
+    guint32 operator_code_length;
+    guint32 national_area_code_length;
+    guint32 core_number_length;
+
+    proto_item * ni;
+    proto_tree * number_tree;
+
+    proto_tree_add_item(tree, hf_mpeg_descr_telephone_reserved_future_use1, tvb, offset, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item(tree, hf_mpeg_descr_telephone_foreign_availability, tvb, offset, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item(tree, hf_mpeg_descr_telephone_connection_type, tvb, offset, 1, ENC_BIG_ENDIAN);
+    offset += 1;
+
+    proto_tree_add_item(tree, hf_mpeg_descr_telephone_reserved_future_use2, tvb, offset, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item_ret_uint(tree, hf_mpeg_descr_telephone_country_prefix_length, tvb, offset, 1, ENC_BIG_ENDIAN, &country_prefix_length);
+    proto_tree_add_item_ret_uint(tree, hf_mpeg_descr_telephone_international_area_code_length, tvb, offset, 1, ENC_BIG_ENDIAN, &international_area_code_length);
+    proto_tree_add_item_ret_uint(tree, hf_mpeg_descr_telephone_operator_code_length, tvb, offset, 1, ENC_BIG_ENDIAN, &operator_code_length);
+    offset += 1;
+
+    proto_tree_add_item(tree, hf_mpeg_descr_telephone_reserved_future_use3, tvb, offset, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item_ret_uint(tree, hf_mpeg_descr_telephone_national_area_code_length, tvb, offset, 1, ENC_BIG_ENDIAN, &national_area_code_length);
+    proto_tree_add_item_ret_uint(tree, hf_mpeg_descr_telephone_core_number_length, tvb, offset, 1, ENC_BIG_ENDIAN, &core_number_length);
+    offset += 1;
+
+    guint32 number_l = country_prefix_length + international_area_code_length + operator_code_length + national_area_code_length + core_number_length;
+
+    if (number_l == 0) return;
+    ni = proto_tree_add_item(tree, hf_mpeg_descr_telephone_number, tvb, offset, number_l, ENC_ISO_8859_1);
+    number_tree = proto_item_add_subtree(ni, ett_mpeg_descriptor_telephone_number);
+
+    if (country_prefix_length != 0) {
+        proto_tree_add_item(number_tree, hf_mpeg_descr_telephone_country_prefix, tvb, offset, country_prefix_length, ENC_ISO_8859_1);
+        offset += country_prefix_length;
+    }
+
+    if (international_area_code_length != 0) {
+        proto_tree_add_item(number_tree, hf_mpeg_descr_telephone_international_area_code, tvb, offset, international_area_code_length, ENC_ISO_8859_1);
+        offset += international_area_code_length;
+    }
+
+    if (operator_code_length != 0) {
+        proto_tree_add_item(number_tree, hf_mpeg_descr_telephone_operator_code, tvb, offset, operator_code_length, ENC_ISO_8859_1);
+        offset += operator_code_length;
+    }
+
+    if (national_area_code_length != 0) {
+        proto_tree_add_item(number_tree, hf_mpeg_descr_telephone_national_area_code, tvb, offset, national_area_code_length, ENC_ISO_8859_1);
+        offset += national_area_code_length;
+    }
+
+    if (core_number_length == 0) return;
+    proto_tree_add_item(number_tree, hf_mpeg_descr_telephone_core_number, tvb, offset, core_number_length, ENC_ISO_8859_1);
 }
 
 /* 0x58 Local Time Offset Descriptor */
@@ -4088,6 +4222,9 @@ proto_mpeg_descriptor_dissect(tvbuff_t *tvb, guint offset, proto_tree *tree)
         case 0x4A: /* Linkage Descriptor */
             proto_mpeg_descriptor_dissect_linkage(tvb, offset, len, descriptor_tree);
             break;
+        case 0x4B: /* NVOD Reference Descriptor */
+            proto_mpeg_descriptor_dissect_nvod_reference(tvb, offset, len, descriptor_tree);
+            break;
         case 0x4C: /* Time Shifted Service Descriptor */
             proto_mpeg_descriptor_dissect_time_shifted_service(tvb, offset, descriptor_tree);
             break;
@@ -4117,6 +4254,9 @@ proto_mpeg_descriptor_dissect(tvbuff_t *tvb, guint offset, proto_tree *tree)
             break;
         case 0x56: /* Teletext Descriptor */
             proto_mpeg_descriptor_dissect_teletext(tvb, offset, len, descriptor_tree);
+            break;
+        case 0x57: /* Telephone Descriptor */
+            proto_mpeg_descriptor_dissect_telephone(tvb, offset, descriptor_tree);
             break;
         case 0x58: /* Local Time Offset Descriptor */
             proto_mpeg_descriptor_dissect_local_time_offset(tvb, offset, len, descriptor_tree);
@@ -4908,6 +5048,22 @@ proto_register_mpeg_descriptor(void)
             FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL
         } },
 
+        /* 0x4B NVOD Reference Descriptor */
+        { &hf_mpeg_descr_nvod_reference_tsid, {
+            "Transport Stream ID", "mpeg_descr.nvod_ref.tsid",
+            FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_nvod_reference_onid, {
+            "Original Network ID", "mpeg_descr.nvod_ref.onid",
+            FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_nvod_reference_sid, {
+            "Stream ID", "mpeg_descr.nvod_ref.sid",
+            FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL
+        } },
+
         /* 0x4C Time Shifted Service Descriptor */
         { &hf_mpeg_descr_time_shifted_service_id, {
             "Reference Service ID", "mpeg_descr.time_shifted_service.id",
@@ -5268,6 +5424,89 @@ proto_register_mpeg_descriptor(void)
         { &hf_mpeg_descr_parental_rating_rating, {
             "Rating", "mpeg_descr.parental_rating.rating",
             FT_UINT8, BASE_HEX | BASE_EXT_STRING, &mpeg_descr_parental_rating_vals_ext, 0, NULL, HFILL
+        } },
+
+        /* 0x57 Telephone Descriptor */
+        { &hf_mpeg_descr_telephone_reserved_future_use1, {
+            "Reserved Future Use", "mpeg_descr.phone.reserved1",
+            FT_UINT8, BASE_HEX, NULL, MPEG_DESCR_TELEPHONE_RESERVED1_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_foreign_availability, {
+            "Foreign Availability", "mpeg_descr.phone.foreign",
+            FT_UINT8, BASE_HEX, VALS(mpeg_descr_telephone_foreign_availability_vals),
+            MPEG_DESCR_TELEPHONE_FOREIGN_AVAILABILITY_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_connection_type, {
+            "Connection Type", "mpeg_descr.phone.conn_t",
+            FT_UINT8, BASE_HEX|BASE_RANGE_STRING, RVALS(mpeg_descr_telephone_connection_type_vals),
+            MPEG_DESCR_TELEPHONE_CONNECTION_TYPE_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_reserved_future_use2, {
+            "Reserved Future Use", "mpeg_descr.phone.reserved2",
+            FT_UINT8, BASE_HEX, NULL, MPEG_DESCR_TELEPHONE_RESERVED2_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_country_prefix_length, {
+            "Country Prefix Length", "mpeg_descr.phone.nat_code_len",
+            FT_UINT8, BASE_DEC, NULL, MPEG_DESCR_TELEPHONE_COUNTRY_PREFIX_LEN_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_international_area_code_length, {
+            "International Area Code Length", "mpeg_descr.phone.int_code_len",
+            FT_UINT8, BASE_DEC, NULL, MPEG_DESCR_TELEPHONE_INTERNATIONAL_CODE_LEN_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_operator_code_length, {
+            "Operator Code Length", "mpeg_descr.phone.op_code_len",
+            FT_UINT8, BASE_DEC, NULL, MPEG_DESCR_TELEPHONE_OPERATOR_CODE_LEN_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_reserved_future_use3, {
+            "Reserved Future Use", "mpeg_descr.phone.reserved3",
+            FT_UINT8, BASE_HEX, NULL, MPEG_DESCR_TELEPHONE_RESERVED3_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_national_area_code_length, {
+            "National Area Code Length", "mpeg_descr.phone.nat_code_len",
+            FT_UINT8, BASE_DEC, NULL, MPEG_DESCR_TELEPHONE_NATIONAL_CODE_LEN_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_core_number_length, {
+            "Core Number Length", "mpeg_descr.phone.core_n_len",
+            FT_UINT8, BASE_DEC, NULL, MPEG_DESCR_TELEPHONE_CORE_NUMBER_LEN_MASK, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_number, {
+            "Telephone Number", "mpeg_descr.phone.number",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_country_prefix, {
+            "Country Prefix", "mpeg_descr.phone.country",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_international_area_code, {
+            "International Area Code", "mpeg_descr.phone.int_area",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_operator_code, {
+            "Operator Code", "mpeg_descr.phone.operator",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_national_area_code, {
+            "National Area Code", "mpeg_descr.phone.nat_code",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
+        } },
+
+        { &hf_mpeg_descr_telephone_core_number, {
+            "Core Number", "mpeg_descr.phone.core",
+            FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL
         } },
 
         /* 0x58 Local Time Offset Descriptor */
@@ -6178,11 +6417,13 @@ proto_register_mpeg_descriptor(void)
         &ett_mpeg_descriptor_multilng_srv_name_desc_lng,
         &ett_mpeg_descriptor_multilng_component_desc_lng,
         &ett_mpeg_descriptor_country_availability_countries,
+        &ett_mpeg_descriptor_nvod_reference_triplet,
         &ett_mpeg_descriptor_vbi_data_service,
         &ett_mpeg_descriptor_content_identifier_crid,
         &ett_mpeg_descriptor_mosaic_logical_cell,
         &ett_mpeg_descriptor_mosaic_elementary_cells,
         &ett_mpeg_descriptor_service_list,
+        &ett_mpeg_descriptor_telephone_number,
         &ett_mpeg_descriptor_nordig_lcd_v1_service_list,
         &ett_mpeg_descriptor_nordig_lcd_v2_channel_list_list,
         &ett_mpeg_descriptor_nordig_lcd_v2_service_list,
