@@ -22,7 +22,7 @@ struct epan_dfilter {
 	guint		num_registers;
 	GSList		**registers;
 	gboolean	*attempted_load;
-	gboolean	*owns_memory;
+	GDestroyNotify	*free_registers;
 	int		*interesting_fields;
 	int		num_interesting_fields;
 	GPtrArray	*deprecated;
@@ -102,6 +102,7 @@ dfilter_vfail(dfwork_t *dfw, const char *format, va_list args);
 void
 dfilter_fail(dfwork_t *dfw, const char *format, ...) G_GNUC_PRINTF(2, 3);
 
+WS_NORETURN
 void
 dfilter_fail_throw(dfwork_t *dfw, long code, const char *format, ...) G_GNUC_PRINTF(3, 4);
 
