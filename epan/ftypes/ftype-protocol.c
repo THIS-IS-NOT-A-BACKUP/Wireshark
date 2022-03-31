@@ -343,6 +343,11 @@ ftype_register_tvbuff(void)
 		slice,
 		NULL,
 		NULL,				/* unary_minus */
+		NULL,				/* add */
+		NULL,				/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 
 

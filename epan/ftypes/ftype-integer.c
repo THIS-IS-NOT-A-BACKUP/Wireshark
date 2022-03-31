@@ -16,6 +16,7 @@
 #include <epan/to_str.h>
 
 #include <wsutil/pint.h>
+#include <wsutil/safe-math.h>
 
 static void
 int_fvalue_new(fvalue_t *fv)
@@ -681,12 +682,12 @@ uint_is_zero(const fvalue_t *fv)
 enum ft_result
 uint_unary_minus(fvalue_t *dst, const fvalue_t *src, char **err_ptr)
 {
-	/* Unsigned integers are promoted to 32 bits. */
+	/* Unsigned integers are promoted to signed 32 bits. */
 	if (src->value.uinteger > G_MAXINT32) {
 		if (err_ptr)
 			*err_ptr = ws_strdup_printf("%"G_GUINT32_FORMAT" overflows gint32",
 							src->value.uinteger);
-		return FT_ERR_OVERFLOW;
+		return FT_ERROR;
 	}
 	FTYPE_LOOKUP(FT_INT32, dst->ftype);
 	dst->value.sinteger = -(gint32)src->value.uinteger;
@@ -709,12 +710,12 @@ uint64_is_zero(const fvalue_t *fv)
 enum ft_result
 uint64_unary_minus(fvalue_t *dst, const fvalue_t *src, char **err_ptr)
 {
-	/* Unsigned64 integers are promoted to 64 bits. */
+	/* Unsigned64 integers are promoted to signed 64 bits. */
 	if (src->value.uinteger64 > G_MAXINT64) {
 		if (err_ptr)
 			*err_ptr = ws_strdup_printf("%"G_GUINT64_FORMAT" overflows gint64",
 							src->value.uinteger64);
-		return FT_ERR_OVERFLOW;
+		return FT_ERROR;
 	}
 	FTYPE_LOOKUP(FT_INT64, dst->ftype);
 	dst->value.sinteger64 = -(gint64)src->value.uinteger64;
@@ -758,6 +759,280 @@ enum ft_result
 sint64_unary_minus(fvalue_t * dst, const fvalue_t *src, char **err_ptr _U_)
 {
 	dst->value.sinteger64 = -src->value.sinteger64;
+	return FT_OK;
+}
+
+static enum ft_result
+sint_add(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_add(&dst->value.sinteger, a->value.sinteger, b->value.sinteger)) {
+		*err_ptr = ws_strdup_printf("sint_add: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+_sint_subtract(gint32 *sint_dst, gint32 sint_a, gint32 sint_b, char **err_ptr)
+{
+	if (!psnip_safe_sub(sint_dst, sint_a, sint_b)) {
+		*err_ptr = ws_strdup_printf("sint_subtract: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint_subtract(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	return _sint_subtract(&dst->value.sinteger, a->value.sinteger, b->value.sinteger, err_ptr);
+}
+
+static enum ft_result
+sint_multiply(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_mul(&dst->value.sinteger, a->value.sinteger, b->value.sinteger)) {
+		*err_ptr = ws_strdup_printf("sint_multiply: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint_divide(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.sinteger == 0) {
+		*err_ptr = ws_strdup_printf("sint_divide: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_div(&dst->value.sinteger, a->value.sinteger, b->value.sinteger)) {
+		*err_ptr = ws_strdup_printf("sint_divide: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint_modulo(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.sinteger == 0) {
+		*err_ptr = ws_strdup_printf("sint_modulo: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_mod(&dst->value.sinteger, a->value.sinteger, b->value.sinteger)) {
+		*err_ptr = ws_strdup_printf("sint_modulo: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint_add(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_add(&dst->value.uinteger, a->value.uinteger, b->value.uinteger)) {
+		*err_ptr = ws_strdup_printf("uint_add: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint_subtract(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger > a->value.uinteger) {
+		/* Uses signed arithmetic. */
+		if (a->value.uinteger > G_MAXINT32 ||
+				b->value.uinteger > G_MAXINT32) {
+			*err_ptr = ws_strdup_printf("uint_subtract: signed overflow");
+			return FT_ERROR;
+		}
+		FTYPE_LOOKUP(FT_INT32, dst->ftype);
+		return _sint_subtract(&dst->value.sinteger, (gint32)a->value.uinteger, (gint32)b->value.uinteger, err_ptr);
+	}
+
+	if (!psnip_safe_sub(&dst->value.uinteger, a->value.uinteger, b->value.uinteger)) {
+		*err_ptr = ws_strdup_printf("uint_subtract: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint_multiply(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_mul(&dst->value.uinteger, a->value.uinteger, b->value.uinteger)) {
+		*err_ptr = ws_strdup_printf("uint_multiply: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint_divide(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger == 0) {
+		*err_ptr = ws_strdup_printf("uint_divide: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_div(&dst->value.uinteger, a->value.uinteger, b->value.uinteger)) {
+		*err_ptr = ws_strdup_printf("uint_divide: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint_modulo(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger == 0) {
+		*err_ptr = ws_strdup_printf("uint_modulo: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_mod(&dst->value.uinteger, a->value.uinteger, b->value.uinteger)) {
+		*err_ptr = ws_strdup_printf("uint_modulo: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint64_add(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_add(&dst->value.sinteger64, a->value.sinteger64, b->value.sinteger64)) {
+		*err_ptr = ws_strdup_printf("sint64_add: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+_sint64_subtract(gint64 *sint_dst, gint64 sint_a, gint64 sint_b, char **err_ptr)
+{
+	if (!psnip_safe_sub(sint_dst, sint_a, sint_b)) {
+		*err_ptr = ws_strdup_printf("sint64_subtract: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint64_subtract(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	return _sint64_subtract(&dst->value.sinteger64, a->value.sinteger64, b->value.sinteger64, err_ptr);
+}
+
+static enum ft_result
+sint64_multiply(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_mul(&dst->value.sinteger64, a->value.sinteger64, b->value.sinteger64)) {
+		*err_ptr = ws_strdup_printf("sint64_multiply: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint64_divide(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.sinteger64 == 0) {
+		*err_ptr = ws_strdup_printf("sint64_divide: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_div(&dst->value.sinteger64, a->value.sinteger64, b->value.sinteger64)) {
+		*err_ptr = ws_strdup_printf("sint64_divide: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+sint64_modulo(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.sinteger64 == 0) {
+		*err_ptr = ws_strdup_printf("sint64_modulo: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_mod(&dst->value.sinteger64, a->value.sinteger64, b->value.sinteger64)) {
+		*err_ptr = ws_strdup_printf("sint64_modulo: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint64_add(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_add(&dst->value.uinteger64, a->value.uinteger64, b->value.uinteger64)) {
+		*err_ptr = ws_strdup_printf("uint64_add: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint64_subtract(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger64 > a->value.uinteger64) {
+		/* Uses signed arithmetic. */
+		if (a->value.uinteger64 > G_MAXINT64 ||
+				b->value.uinteger64 > G_MAXINT64) {
+			*err_ptr = ws_strdup_printf("uint64_subtract: signed overflow");
+			return FT_ERROR;
+		}
+		FTYPE_LOOKUP(FT_INT64, dst->ftype);
+		return _sint64_subtract(&dst->value.sinteger64, (gint64)a->value.uinteger64, (gint64)b->value.uinteger64, err_ptr);
+	}
+
+	if (!psnip_safe_sub(&dst->value.uinteger64, a->value.uinteger64, b->value.uinteger64)) {
+		*err_ptr = ws_strdup_printf("uint64_subtract: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint64_multiply(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (!psnip_safe_mul(&dst->value.uinteger64, a->value.uinteger64, b->value.uinteger64)) {
+		*err_ptr = ws_strdup_printf("uint64_multiply: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint64_divide(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger64 == 0) {
+		*err_ptr = ws_strdup_printf("uint64_divide: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_div(&dst->value.uinteger64, a->value.uinteger64, b->value.uinteger64)) {
+		*err_ptr = ws_strdup_printf("uint64_divide: overflow");
+		return FT_ERROR;
+	}
+	return FT_OK;
+}
+
+static enum ft_result
+uint64_modulo(fvalue_t *dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr)
+{
+	if (b->value.uinteger64 == 0) {
+		*err_ptr = ws_strdup_printf("uint64_modulo: division by zero");
+		return FT_ERROR;
+	}
+
+	if (!psnip_safe_mod(&dst->value.uinteger64, a->value.uinteger64, b->value.uinteger64)) {
+		*err_ptr = ws_strdup_printf("uint64_modulo: overflow");
+		return FT_ERROR;
+	}
 	return FT_OK;
 }
 
@@ -887,6 +1162,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 	static ftype_t uint8_type = {
 		FT_UINT8,			/* ftype */
@@ -913,6 +1193,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 	static ftype_t uint16_type = {
 		FT_UINT16,			/* ftype */
@@ -939,6 +1224,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 	static ftype_t uint24_type = {
 		FT_UINT24,			/* ftype */
@@ -965,6 +1255,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 	static ftype_t uint32_type = {
 		FT_UINT32,			/* ftype */
@@ -991,6 +1286,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 	static ftype_t uint40_type = {
 		FT_UINT40,			/* ftype */
@@ -1017,6 +1317,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint64_bitwise_and,		/* bitwise_and */
 		uint64_unary_minus,		/* unary_minus */
+		uint64_add,			/* add */
+		uint64_subtract,		/* subtract */
+		uint64_multiply,		/* multiply */
+		uint64_divide,			/* divide */
+		uint64_modulo,			/* modulo */
 	};
 	static ftype_t uint48_type = {
 		FT_UINT48,			/* ftype */
@@ -1043,6 +1348,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint64_bitwise_and,		/* bitwise_and */
 		uint64_unary_minus,		/* unary_minus */
+		uint64_add,			/* add */
+		uint64_subtract,		/* subtract */
+		uint64_multiply,		/* multiply */
+		uint64_divide,			/* divide */
+		uint64_modulo,			/* modulo */
 	};
 	static ftype_t uint56_type = {
 		FT_UINT56,			/* ftype */
@@ -1069,6 +1379,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint64_bitwise_and,		/* bitwise_and */
 		uint64_unary_minus,		/* unary_minus */
+		uint64_add,			/* add */
+		uint64_subtract,		/* subtract */
+		uint64_multiply,		/* multiply */
+		uint64_divide,			/* divide */
+		uint64_modulo,			/* modulo */
 	};
 	static ftype_t uint64_type = {
 		FT_UINT64,			/* ftype */
@@ -1095,6 +1410,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint64_bitwise_and,		/* bitwise_and */
 		uint64_unary_minus,		/* unary_minus */
+		uint64_add,			/* add */
+		uint64_subtract,		/* subtract */
+		uint64_multiply,		/* multiply */
+		uint64_divide,			/* divide */
+		uint64_modulo,			/* modulo */
 	};
 	static ftype_t int8_type = {
 		FT_INT8,			/* ftype */
@@ -1121,6 +1441,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint_bitwise_and,		/* bitwise_and */
 		sint_unary_minus,		/* unary_minus */
+		sint_add,			/* add */
+		sint_subtract,			/* subtract */
+		sint_multiply,			/* multiply */
+		sint_divide,			/* divide */
+		sint_modulo,			/* modulo */
 	};
 	static ftype_t int16_type = {
 		FT_INT16,			/* ftype */
@@ -1147,6 +1472,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint_bitwise_and,		/* bitwise_and */
 		sint_unary_minus,		/* unary_minus */
+		sint_add,			/* add */
+		sint_subtract,			/* subtract */
+		sint_multiply,			/* multiply */
+		sint_divide,			/* divide */
+		sint_modulo,			/* modulo */
 	};
 	static ftype_t int24_type = {
 		FT_INT24,			/* ftype */
@@ -1173,6 +1503,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint_bitwise_and,		/* bitwise_and */
 		sint_unary_minus,		/* unary_minus */
+		sint_add,			/* add */
+		sint_subtract,			/* subtract */
+		sint_multiply,			/* multiply */
+		sint_divide,			/* divide */
+		sint_modulo,			/* modulo */
 	};
 	static ftype_t int32_type = {
 		FT_INT32,			/* ftype */
@@ -1199,6 +1534,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint_bitwise_and,		/* bitwise_and */
 		sint_unary_minus,		/* unary_minus */
+		sint_add,			/* add */
+		sint_subtract,			/* subtract */
+		sint_multiply,			/* multiply */
+		sint_divide,			/* divide */
+		sint_modulo,			/* modulo */
 	};
 	static ftype_t int40_type = {
 		FT_INT40,			/* ftype */
@@ -1225,6 +1565,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint64_bitwise_and,		/* bitwise_and */
 		sint64_unary_minus,		/* unary_minus */
+		sint64_add,			/* add */
+		sint64_subtract,		/* subtract */
+		sint64_multiply,		/* multiply */
+		sint64_divide,			/* divide */
+		sint64_modulo,			/* modulo */
 	};
 	static ftype_t int48_type = {
 		FT_INT48,			/* ftype */
@@ -1251,6 +1596,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint64_bitwise_and,		/* bitwise_and */
 		sint64_unary_minus,		/* unary_minus */
+		sint64_add,			/* add */
+		sint64_subtract,		/* subtract */
+		sint64_multiply,		/* multiply */
+		sint64_divide,			/* divide */
+		sint64_modulo,			/* modulo */
 	};
 	static ftype_t int56_type = {
 		FT_INT56,			/* ftype */
@@ -1277,6 +1627,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint64_bitwise_and,		/* bitwise_and */
 		sint64_unary_minus,		/* unary_minus */
+		sint64_add,			/* add */
+		sint64_subtract,		/* subtract */
+		sint64_multiply,		/* multiply */
+		sint64_divide,			/* divide */
+		sint64_modulo,			/* modulo */
 	};
 	static ftype_t int64_type = {
 		FT_INT64,			/* ftype */
@@ -1303,6 +1658,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		sint64_bitwise_and,		/* bitwise_and */
 		sint64_unary_minus,		/* unary_minus */
+		sint64_add,			/* add */
+		sint64_subtract,		/* subtract */
+		sint64_multiply,		/* multiply */
+		sint64_divide,			/* divide */
+		sint64_modulo,			/* modulo */
 	};
 	static ftype_t boolean_type = {
 		FT_BOOLEAN,			/* ftype */
@@ -1329,6 +1689,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		NULL,				/* bitwise_and */
 		NULL,				/* unary_minus */
+		NULL,				/* add */
+		NULL,				/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 
 	static ftype_t ipxnet_type = {
@@ -1356,6 +1721,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		NULL,				/* add */
+		NULL,				/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 
 	static ftype_t framenum_type = {
@@ -1383,6 +1753,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint_bitwise_and,		/* bitwise_and */
 		uint_unary_minus,		/* unary_minus */
+		uint_add,			/* add */
+		uint_subtract,			/* subtract */
+		uint_multiply,			/* multiply */
+		uint_divide,			/* divide */
+		uint_modulo,			/* modulo */
 	};
 
 	static ftype_t eui64_type = {
@@ -1410,6 +1785,11 @@ ftype_register_integers(void)
 		NULL,				/* slice */
 		uint64_bitwise_and,		/* bitwise_and */
 		uint64_unary_minus,		/* unary_minus */
+		uint64_add,			/* add */
+		uint64_subtract,		/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 
 	ftype_register(FT_CHAR, &char_type);

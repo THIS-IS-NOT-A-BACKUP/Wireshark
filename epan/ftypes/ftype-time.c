@@ -425,6 +425,20 @@ time_unary_minus(fvalue_t * dst, const fvalue_t *src, char **err_ptr _U_)
 	return FT_OK;
 }
 
+static enum ft_result
+time_add(fvalue_t * dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr _U_)
+{
+	nstime_sum(&dst->value.time, &a->value.time, &b->value.time);
+	return FT_OK;
+}
+
+static enum ft_result
+time_subtract(fvalue_t * dst, const fvalue_t *a, const fvalue_t *b, char **err_ptr _U_)
+{
+	nstime_delta(&dst->value.time, &a->value.time, &b->value.time);
+	return FT_OK;
+}
+
 void
 ftype_register_time(void)
 {
@@ -454,6 +468,11 @@ ftype_register_time(void)
 		NULL,
 		NULL,				/* bitwise_and */
 		NULL,				/* unary_minus */
+		NULL,				/* add */
+		NULL,				/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 	static ftype_t reltime_type = {
 		FT_RELATIVE_TIME,		/* ftype */
@@ -480,6 +499,11 @@ ftype_register_time(void)
 		NULL,
 		NULL,				/* bitwise_and */
 		time_unary_minus,		/* unary_minus */
+		time_add,			/* add */
+		time_subtract,			/* subtract */
+		NULL,				/* multiply */
+		NULL,				/* divide */
+		NULL,				/* modulo */
 	};
 
 	ftype_register(FT_ABSOLUTE_TIME, &abstime_type);
