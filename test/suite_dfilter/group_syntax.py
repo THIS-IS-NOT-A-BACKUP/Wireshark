@@ -15,6 +15,11 @@ class case_syntax(unittest.TestCase):
         dfilter = "frame"
         checkDFilterCount(dfilter, 1)
 
+    def test_exists_2(self, checkDFilterCount):
+        # Identifier using minus
+        dfilter = "mac-lte"
+        checkDFilterCount(dfilter, 0)
+
     def test_commute_1(self, checkDFilterCount):
         dfilter = "ip.proto == 6"
         checkDFilterCount(dfilter, 1)
@@ -135,6 +140,22 @@ class case_equality(unittest.TestCase):
 
     def test_literal_2(self, checkDFilterCount):
         dfilter = "udp contains <ce:13>"
+        checkDFilterCount(dfilter, 1)
+
+    def test_literal_3(self, checkDFilterCount):
+        dfilter = "frame[0:10] contains :00:01:6c"
+        checkDFilterCount(dfilter, 1)
+
+    def test_literal_4(self, checkDFilterCount):
+        dfilter = "frame[0:10] contains :00016c"
+        checkDFilterCount(dfilter, 1)
+
+    def test_literal_5(self, checkDFilterCount):
+        dfilter = "frame[0:10] contains :00.01.6c"
+        checkDFilterCount(dfilter, 1)
+
+    def test_literal_6(self, checkDFilterCount):
+        dfilter = "frame[0:10] contains :00-01-6c"
         checkDFilterCount(dfilter, 1)
 
 @fixtures.uses_fixtures

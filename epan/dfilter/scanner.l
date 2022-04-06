@@ -364,36 +364,46 @@ v6-cidr-prefix	\/[[:digit:]]{1,3}
 	/* None of the patterns below can match ".." anywhere in the token string. */
 
 {MacAddress}|{QuadMacAddress}		{
-	/* MAC Address literal or unparsed if using dots. */
+	/* MAC Address. */
 	return set_lval_str(TOKEN_UNPARSED, yytext);
 }
 
-{IPv4address}{v4-cidr-prefix}		{
-	/* IPv4 CIDR. */
-	return set_lval_str(TOKEN_LITERAL, yytext);
+{IPv4address}{v4-cidr-prefix}?		{
+	/* IPv4 with or without prefix. */
+	return set_lval_str(TOKEN_UNPARSED, yytext);
 }
 
-{IPv6address}{v6-cidr-prefix}		{
-	/* IPv6 CIDR. */
-	return set_lval_str(TOKEN_LITERAL, yytext);
+{IPv6address}{v6-cidr-prefix}?		{
+	/* IPv6 with or without prefix. */
+	return set_lval_str(TOKEN_UNPARSED, yytext);
 }
 
 [[:xdigit:]]+:[[:xdigit:]:]*		{
-	/* Bytes or address (IPv6, etc). */
-	return set_lval_str(TOKEN_LITERAL, yytext);
+	/* Bytes. */
+	return set_lval_str(TOKEN_UNPARSED, yytext);
+}
+
+:[[:xdigit:]:-]+(\.[[:xdigit:]:-]+)*			{
+	/* Literal starting with colon. Bytes, integer or float. */
+	/* Skip leading colon. */
+	return set_lval_str(TOKEN_LITERAL, yytext + 1);
 }
 
 "<"[^>=]+">"			{
-	/* Literal in angle brackets. */
-	return set_lval_str(TOKEN_LITERAL, yytext);
+	/* Literal in-between angle brackets (cannot be parsed as a protocol field). */
+	/* Strip brackets. */
+	char *end = strchr(yytext, '>');
+	*end = '\0';
+	df_lval->value = g_strdup(yytext + 1);
+	return TOKEN_LITERAL;
 }
 
-[:.]?[[:alnum:]_]{WORD_CHAR}*(\.{WORD_CHAR}+)*		{
-	/* Identifier or literal or unparsed. */
-	if (yytext[0] == '.')
-		return set_lval_str(TOKEN_IDENTIFIER, yytext);
-	if (yytext[0] == ':')
-		return set_lval_str(TOKEN_LITERAL, yytext);
+\.?[[:alnum:]_]{WORD_CHAR}*(\.{WORD_CHAR}+)*		{
+	/* Identifier or unparsed. */
+	if (yytext[0] == '.') {
+		/* Skip leading dot. */
+		return set_lval_str(TOKEN_IDENTIFIER, yytext + 1);
+	}
 	return set_lval_str(TOKEN_UNPARSED, yytext);
 }
 
