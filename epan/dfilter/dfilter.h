@@ -53,7 +53,7 @@ dfilter_expand(const char *expr, char **err_ret);
  */
 
 typedef struct _dfilter_loc {
-	int col_start;
+	long col_start;
 	size_t col_len;
 } dfilter_loc_t;
 
@@ -66,6 +66,9 @@ dfilter_compile_real(const gchar *text, dfilter_t **dfp,
 
 #define dfilter_compile(text, dfp, err_msg) \
 	dfilter_compile_real(text, dfp, err_msg, NULL, __func__, FALSE, TRUE)
+
+#define dfilter_compile2(text, dfp, err_msg, loc_ptr) \
+	dfilter_compile_real(text, dfp, err_msg, loc_ptr, __func__, FALSE, TRUE)
 
 /* Frees all memory used by dfilter, and frees
  * the dfilter itself. */

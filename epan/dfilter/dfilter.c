@@ -58,6 +58,10 @@ dfilter_vfail(dfwork_t *dfw, stloc_t *loc,
 	if (loc) {
 		dfw->err_loc = *loc;
 	}
+	else {
+		dfw->err_loc.col_start = -1;
+		dfw->err_loc.col_len = 0;
+	}
 }
 
 void
@@ -109,7 +113,8 @@ dfilter_resolve_unparsed(dfwork_t *dfw, const char *name)
 	hfinfo = proto_registrar_get_byalias(name);
 	if (hfinfo != NULL) {
 		/* It's an aliased field name */
-		add_deprecated_token(dfw, name);
+		if (dfw)
+			add_deprecated_token(dfw, name);
 		return hfinfo;
 	}
 
