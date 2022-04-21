@@ -16,8 +16,7 @@ It is used for troubleshooting, analysis, development and education.
 
 == What’s New
 
-// If we expand this to all Win32 packages we should make this more prominent, e.g. with an admonition.
-* We no longer ship Windows Installer (.msi) packages for 32-bit Windows. wsbuglink:17779[]
+NOTE: We no longer ship packages for 32-bit Windows. wsbuglink:17779[]
 
 * The PCRE2 library (https://www.pcre.org/) is now a required dependency to build Wireshark.
 
@@ -109,6 +108,9 @@ They previously shipped with Npcap 1.55.
 * macOS debugging symbols are now shipped in separate packages.
 
 * ZigBee ZCL Messaging: rename zbee_zcl_se.msg.msg_ctrl.depreciated to zbee_zcl_se.msg.msg_ctrl.deprecated
+
+* The interface list on the welcome page sorts active interfaces first and only displays the sparkline for active interfaces. 
+  Additionally, the interfaces can now be hidden/unhidden via the context menu in the interface list
 
 === Removed Features and Support
 
