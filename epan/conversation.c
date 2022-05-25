@@ -598,9 +598,10 @@ conversation_init(void)
     conversation_hashtable_element_list =
         wmem_map_new(wmem_epan_scope(), wmem_str_hash, g_str_equal);
 
-    conversation_element_t id_elements[2] = {0};
-    id_elements[0].type = CE_UINT64;
-    id_elements[1].type = CE_ENDPOINT;
+    conversation_element_t id_elements[2] = {
+        { CE_UINT, .uint_val = 0 },
+        { CE_ENDPOINT, .endpoint_type_val = ENDPOINT_NONE }
+    };
     char *id_map_key = conversation_element_list_name(id_elements);
     conversation_hashtable_id = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(),
                                                        conversation_hash_element_list,
@@ -994,9 +995,6 @@ conversation_new(const guint32 setup_frame, const address *addr1, const address 
 
     conversation->conv_index = new_index;
     conversation->setup_frame = conversation->last_frame = setup_frame;
-    conversation->data_list = NULL;
-
-    conversation->dissector_tree = wmem_tree_new(wmem_file_scope());
 
     /* set the options and key pointer */
     conversation->options = options;
@@ -1012,21 +1010,20 @@ conversation_new(const guint32 setup_frame, const address *addr1, const address 
 }
 
 conversation_t *
-conversation_new_by_id(const guint32 setup_frame, const endpoint_type etype, const guint64 id)
+conversation_new_by_id(const guint32 setup_frame, const endpoint_type etype, const guint32 id)
 {
-    conversation_element_t elements[2];
-    elements[0].type = CE_UINT64;
-    elements[0].uint64_val = id;
-    elements[1].type = CE_ENDPOINT;
-    elements[1].endpoint_type_val = etype;
-
     conversation_t *conversation = wmem_new0(wmem_file_scope(), conversation_t);
     conversation->conv_index = new_index;
     conversation->setup_frame = conversation->last_frame = setup_frame;
 
     new_index++;
 
-    // XXX Overloading conversation_key_t this way is terrible and we shouldn't do it.
+    conversation_element_t *elements = wmem_alloc(wmem_file_scope(), sizeof(conversation_element_t) * 2);
+    elements[0].type = CE_UINT;
+    elements[0].uint_val = id;
+    elements[1].type = CE_ENDPOINT;
+    elements[1].endpoint_type_val = etype;
+   // XXX Overloading conversation_key_t this way is terrible and we shouldn't do it.
     conversation->key_ptr = (conversation_key_t) elements;
     conversation_insert_into_hashtable(conversation_hashtable_id, conversation);
 
@@ -1573,13 +1570,12 @@ end:
 }
 
 conversation_t *
-find_conversation_by_id(const guint32 frame, const endpoint_type etype, const guint64 id)
+find_conversation_by_id(const guint32 frame, const endpoint_type etype, const guint32 id)
 {
-    conversation_element_t elements[2];
-    elements[0].type = CE_UINT64;
-    elements[0].uint64_val = id;
-    elements[1].type = CE_ENDPOINT;
-    elements[1].endpoint_type_val = etype;
+    conversation_element_t elements[2] = {
+        { CE_UINT, .uint_val = id },
+        { CE_ENDPOINT, .endpoint_type_val = etype }
+    };
 
     return conversation_lookup_hashtable(conversation_hashtable_id, frame, (conversation_key_t)elements);
 }
@@ -1625,6 +1621,9 @@ void
 conversation_set_dissector_from_frame_number(conversation_t *conversation,
         const guint32 starting_frame_num, const dissector_handle_t handle)
 {
+    if (!conversation->dissector_tree) {
+        conversation->dissector_tree = wmem_tree_new(wmem_file_scope());
+    }
     wmem_tree_insert32(conversation->dissector_tree, starting_frame_num, (void *)handle);
 }
 
@@ -1637,6 +1636,9 @@ conversation_set_dissector(conversation_t *conversation, const dissector_handle_
 dissector_handle_t
 conversation_get_dissector(conversation_t *conversation, const guint32 frame_num)
 {
+    if (!conversation->dissector_tree) {
+        return NULL;
+    }
     return (dissector_handle_t)wmem_tree_lookup32_le(conversation->dissector_tree, frame_num);
 }
 
@@ -1644,11 +1646,16 @@ static gboolean
 try_conversation_call_dissector_helper(conversation_t *conversation, gboolean* dissector_success,
         tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
 {
+    if (!conversation->dissector_tree) {
+        return FALSE;
+    }
+
     int ret;
     dissector_handle_t handle = (dissector_handle_t)wmem_tree_lookup32_le(
             conversation->dissector_tree, pinfo->num);
-    if (handle == NULL)
+    if (handle == NULL) {
         return FALSE;
+    }
 
     ret = call_dissector_only(handle, tvb, pinfo, tree, data);
 
@@ -1712,7 +1719,7 @@ try_conversation_dissector(const address *addr_a, const address *addr_b, const e
 }
 
 gboolean
-try_conversation_dissector_by_id(const endpoint_type etype, const guint64 id, tvbuff_t *tvb,
+try_conversation_dissector_by_id(const endpoint_type etype, const guint32 id, tvbuff_t *tvb,
         packet_info *pinfo, proto_tree *tree, void* data)
 {
     conversation_t *conversation;
@@ -1720,11 +1727,17 @@ try_conversation_dissector_by_id(const endpoint_type etype, const guint64 id, tv
     conversation = find_conversation_by_id(pinfo->num, etype, id);
 
     if (conversation != NULL) {
-        int ret;
-
-        dissector_handle_t handle = (dissector_handle_t)wmem_tree_lookup32_le(conversation->dissector_tree, pinfo->num);
-        if (handle == NULL)
+        if (!conversation->dissector_tree) {
             return FALSE;
+        }
+
+        int ret;
+        dissector_handle_t handle = (dissector_handle_t)wmem_tree_lookup32_le(conversation->dissector_tree, pinfo->num);
+
+        if (handle == NULL) {
+            return FALSE;
+        }
+
         ret = call_dissector_only(handle, tvb, pinfo, tree, data);
         if (!ret) {
             /* this packet was rejected by the dissector
@@ -1819,7 +1832,7 @@ find_or_create_conversation(packet_info *pinfo)
 }
 
 conversation_t *
-find_or_create_conversation_by_id(packet_info *pinfo, const endpoint_type etype, const guint64 id)
+find_or_create_conversation_by_id(packet_info *pinfo, const endpoint_type etype, const guint32 id)
 {
     conversation_t *conv=NULL;
 
