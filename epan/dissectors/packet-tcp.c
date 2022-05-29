@@ -3308,6 +3308,36 @@ print_tcp_fragment_tree(fragment_head *ipfd_head, proto_tree *tree, proto_tree *
  * However, frames can have multiple PDUs with certain encapsulations like
  * GSE or MPE over DVB BaseBand Frames.
  */
+
+typedef struct _tcp_endpoint {
+
+    address src_addr;
+    address dst_addr;
+    port_type ptype;
+    guint32 src_port;
+    guint32 dst_port;
+} tcp_endpoint_t;
+
+static void
+save_endpoint(packet_info *pinfo, tcp_endpoint_t *a)
+{
+    copy_address_shallow(&a->src_addr, &pinfo->src);
+    copy_address_shallow(&a->dst_addr, &pinfo->dst);
+    a->ptype = pinfo->ptype;
+    a->src_port = pinfo->srcport;
+    a->dst_port = pinfo->destport;
+}
+
+static void
+restore_endpoint(packet_info *pinfo, tcp_endpoint_t *a)
+{
+    copy_address_shallow(&pinfo->src, &a->src_addr);
+    copy_address_shallow(&pinfo->dst, &a->dst_addr);
+    pinfo->ptype = a->ptype;
+    pinfo->srcport = a->src_port;
+    pinfo->destport = a->dst_port;
+}
+
 typedef struct _tcp_segment_key {
         address src_addr;
         address dst_addr;
@@ -3676,6 +3706,7 @@ desegment_tcp(tvbuff_t *tvb, packet_info *pinfo, int offset,
     int last_fragment_len;
     gboolean must_desegment;
     gboolean called_dissector;
+    gboolean has_gap;
     int another_pdu_follows;
     int deseg_offset;
     guint32 deseg_seq;
@@ -3683,13 +3714,20 @@ desegment_tcp(tvbuff_t *tvb, packet_info *pinfo, int offset,
     proto_item *item;
     struct tcp_multisegment_pdu *msp;
     gboolean cleared_writable = col_get_writable(pinfo->cinfo, COL_PROTOCOL);
+    gboolean first_pdu = TRUE;
     const gboolean reassemble_ooo = tcp_analyze_seq && tcp_desegment && tcp_reassemble_out_of_order;
+
+    tcp_endpoint_t orig_endpoint, new_endpoint;
+
+    save_endpoint(pinfo, &orig_endpoint);
+    save_endpoint(pinfo, &new_endpoint);
 
 again:
     ipfd_head = NULL;
     last_fragment_len = 0;
     must_desegment = FALSE;
     called_dissector = FALSE;
+    has_gap = FALSE;
     another_pdu_follows = 0;
     msp = NULL;
 
@@ -3807,7 +3845,9 @@ again:
 
             if (msp->first_frame == pinfo->num || msp->first_frame_with_seq == pinfo->num) {
                 str = "";
-                col_append_sep_str(pinfo->cinfo, COL_INFO, " ", "[TCP segment of a reassembled PDU]");
+                if (first_pdu) {
+                    col_append_sep_str(pinfo->cinfo, COL_INFO, " ", "[TCP segment of a reassembled PDU]");
+                }
             } else {
                 str = "Retransmitted ";
                 is_retransmission = TRUE;
@@ -3832,7 +3872,7 @@ again:
             proto_tree_add_bytes_format(tcp_tree, hf_tcp_segment_data, tvb, offset,
                 nbytes, NULL, "%sTCP segment data (%u byte%s)", str, nbytes,
                 plurality(nbytes, "", "s"));
-            return;
+            goto clean_exit;
         }
 
         /* The above code only finds retransmission if the PDU boundaries and the seq coincide I think
@@ -3854,7 +3894,7 @@ again:
              * See issue 10289
              */
             if((tcpd->ta->flags&TCP_A_SPURIOUS_RETRANSMISSION) == TCP_A_SPURIOUS_RETRANSMISSION) {
-                return;
+                goto clean_exit;
             }
             if((tcpd->ta->flags&TCP_A_RETRANSMISSION) == TCP_A_RETRANSMISSION) {
                 const char* str = "Retransmitted ";
@@ -3862,7 +3902,7 @@ again:
                 proto_tree_add_bytes_format(tcp_tree, hf_tcp_segment_data, tvb, offset,
                     nbytes, NULL, "%sTCP segment data (%u byte%s)", str, nbytes,
                     plurality(nbytes, "", "s"));
-                return;
+                goto clean_exit;
             }
         }
         /* Else, find the most previous PDU starting before this sequence number */
@@ -3870,8 +3910,6 @@ again:
             msp = (struct tcp_multisegment_pdu *)wmem_tree_lookup32_le(tcpd->fwd->multisegment_pdus, seq-1);
         }
     }
-
-    gboolean has_gap = FALSE;
 
     if (reassemble_ooo && tcpd && !(tcpd->fwd->flags & TCP_FLOW_REASSEMBLE_UNTIL_FIN)) {
         if (!PINFO_FD_VISITED(pinfo)) {
@@ -4050,17 +4088,28 @@ again:
 
         process_tcp_payload(tvb, offset, pinfo, tree, tcp_tree,
                             sport, dport, 0, 0, FALSE, tcpd, tcpinfo);
+
+        /* Unless it failed to dissect any data at all, the subdissector
+         * might have changed the addresses and/or ports. Save them, and
+         * set them back to the original values temporarily so that the
+         * fragment functions work correctly (including in any later PDU.)
+         *
+         * (If we didn't dissect any data, the subdissector *shouldn't*
+         * have changed the addresses or ports, so don't save them, but
+         * restore them just in case.)
+         */
+        if (!(pinfo->desegment_len && pinfo->desegment_offset == 0)) {
+            save_endpoint(pinfo, &new_endpoint);
+        }
+        restore_endpoint(pinfo, &orig_endpoint);
         called_dissector = TRUE;
 
         /* Did the subdissector ask us to desegment some more data
          * before it could handle the packet?
-         * If so we have to create some structures in our table but
-         * this is something we only do the first time we see this
-         * packet.
+         * If so we'll have to handle that later.
          */
         if(pinfo->desegment_len) {
-            if (!PINFO_FD_VISITED(pinfo))
-                must_desegment = TRUE;
+            must_desegment = TRUE;
 
             /*
              * Set "deseg_offset" to the offset in "tvb"
@@ -4094,7 +4143,6 @@ again:
              * data.
              */
             tvbuff_t *next_tvb;
-            int old_len;
 
             /* create a new TVB structure for desegmented data */
             next_tvb = tvb_new_chain(tvb, ipfd_head->tvb_data);
@@ -4114,6 +4162,20 @@ again:
             /* call subdissector */
             process_tcp_payload(next_tvb, 0, pinfo, tree, tcp_tree, sport,
                                 dport, 0, 0, FALSE, tcpd, tcpinfo);
+
+            /* Unless it failed to dissect any data at all, the subdissector
+             * might have changed the addresses and/or ports. Save them, and
+             * set them back to the original values temporarily so that the
+             * fragment functions work correctly (including in any later PDU.)
+             *
+             * (If we didn't dissect any data, the subdissector *shouldn't*
+             * have changed the addresses or ports, so don't save them, but
+             * restore them just in case.)
+             */
+            if (!(pinfo->desegment_len && pinfo->desegment_offset == 0)) {
+                save_endpoint(pinfo, &new_endpoint);
+            }
+            restore_endpoint(pinfo, &orig_endpoint);
             called_dissector = TRUE;
 
             /*
@@ -4125,23 +4187,21 @@ again:
                 /* "desegment_len" isn't 0, so it needs more data to extend the MSP. */
                 msp->flags &= ~MSP_FLAGS_GOT_ALL_SEGMENTS;
             }
-            old_len = (int)(tvb_reported_length(next_tvb) - last_fragment_len);
-            if (pinfo->desegment_len &&
-                pinfo->desegment_offset<=old_len) {
+            if (pinfo->desegment_len) {
                 /*
-                 * "desegment_len" isn't 0, so it needs more
-                 * data for something - and "desegment_offset"
-                 * is before "old_len", so it needs more data
-                 * to dissect the stuff we thought was
-                 * completely desegmented (as opposed to the
-                 * stuff at the beginning being completely
-                 * desegmented, but the stuff at the end
-                 * being a new higher-level PDU that also
-                 * needs desegmentation).
+                 * "desegment_len" isn't 0, so it needs more data
+                 * to fully dissect the current MSP. msp->nxtpdu was
+                 * not accurate and needs to be updated.
                  *
                  * This can happen if a dissector asked for one
                  * more segment (but didn't know exactly how much data)
                  * or if segments were added out of order.
+                 *
+                 * This is opposed to the current MSP being completely
+                 * desegmented, but the stuff at the end of the
+                 * current frame past last_fragment_len starting a new
+                 * higher-level PDU that may also need desegmentation.
+                 * That case is handled on the next loop.
                  *
                  * We want to keep the same dissection and protocol layer
                  * numbers on subsequent passes.
@@ -4266,73 +4326,11 @@ again:
                     plurality(nbytes, "", "s"));
 
                 print_tcp_fragment_tree(ipfd_head, tree, tcp_tree, pinfo, next_tvb);
-
-                /* Did the subdissector ask us to desegment
-                 * some more data?  This means that the data
-                 * at the beginning of this segment completed
-                 * a higher-level PDU, but the data at the
-                 * end of this segment started a higher-level
-                 * PDU but didn't complete it.
-                 *
-                 * If so, we have to create some structures
-                 * in our table, but this is something we
-                 * only do the first time we see this packet.
-                 */
-                if(pinfo->desegment_len) {
-                    if (!PINFO_FD_VISITED(pinfo))
-                        must_desegment = TRUE;
-
-                    /* The stuff we couldn't dissect
-                     * must have come from this segment,
-                     * so it's all in "tvb".
-                     *
-                     * "pinfo->desegment_offset" is
-                     * relative to the beginning of
-                     * "next_tvb"; we want an offset
-                     * relative to the beginning of "tvb".
-                     *
-                     * First, compute the offset relative
-                     * to the *end* of "next_tvb" - i.e.,
-                     * the number of bytes before the end
-                     * of "next_tvb" at which the
-                     * subdissector stopped.  That's the
-                     * length of "next_tvb" minus the
-                     * offset, relative to the beginning
-                     * of "next_tvb, at which the
-                     * subdissector stopped.
-                     */
-                    deseg_offset = ipfd_head->datalen - pinfo->desegment_offset;
-
-                    /* "tvb" and "next_tvb" end at the
-                     * same byte of data, so the offset
-                     * relative to the end of "next_tvb"
-                     * of the byte at which we stopped
-                     * is also the offset relative to
-                     * the end of "tvb" of the byte at
-                     * which we stopped.
-                     *
-                     * Convert that back into an offset
-                     * relative to the beginning of
-                     * "tvb", by taking the length of
-                     * "tvb" and subtracting the offset
-                     * relative to the end.
-                     */
-                    deseg_offset = tvb_reported_length(tvb) - deseg_offset;
-                }
             }
         }
     }
 
     if (must_desegment) {
-        /* If the dissector requested "reassemble until FIN"
-         * just set this flag for the flow and let reassembly
-         * proceed at normal.  We will check/pick up these
-         * reassembled PDUs later down in dissect_tcp() when checking
-         * for the FIN flag.
-         */
-        if (tcpd && pinfo->desegment_len == DESEGMENT_UNTIL_FIN) {
-            tcpd->fwd->flags |= TCP_FLOW_REASSEMBLE_UNTIL_FIN;
-        }
         /*
          * The sequence number at which the stuff to be desegmented
          * starts is the sequence number of the byte at an offset
@@ -4345,43 +4343,64 @@ again:
          */
         deseg_seq = seq + (deseg_offset - offset);
 
-        if (tcpd && ((nxtseq - deseg_seq) <= 1024*1024)
-            && (!PINFO_FD_VISITED(pinfo))) {
-            if(pinfo->desegment_len == DESEGMENT_ONE_MORE_SEGMENT) {
-                /* The subdissector asked to reassemble using the
-                 * entire next segment.
-                 * Just ask reassembly for one more byte
-                 * but set this msp flag so we can pick it up
-                 * above.
-                 */
-                msp = pdu_store_sequencenumber_of_next_pdu(pinfo, deseg_seq,
-                    nxtseq+1, tcpd->fwd->multisegment_pdus);
-                msp->flags |= MSP_FLAGS_REASSEMBLE_ENTIRE_SEGMENT;
-            } else if (pinfo->desegment_len == DESEGMENT_UNTIL_FIN) {
-                /*
-                 * The subdissector asked to reassemble at the end of the
-                 * connection. That will be done in dissect_tcp, but here we
-                 * have to ask reassembly to collect all future segments.
-                 * Note that TCP_FLOW_REASSEMBLE_UNTIL_FIN was set before, this
-                 * ensures that OoO detection is skipped.
-                 * The exact nxtpdu offset does not matter, but it should be
-                 * smaller than half of the maximum 32-bit unsigned integer to
-                 * allow detection of sequence number wraparound, and larger
-                 * than the largest possible stream size. Hopefully 1GiB
-                 * (0x40000000 bytes) should be enough.
-                 */
-                msp = pdu_store_sequencenumber_of_next_pdu(pinfo, deseg_seq,
-                    nxtseq+0x40000000, tcpd->fwd->multisegment_pdus);
-            } else {
-                msp = pdu_store_sequencenumber_of_next_pdu(pinfo,
-                    deseg_seq, nxtseq+pinfo->desegment_len, tcpd->fwd->multisegment_pdus);
+        /* We have to create some structures in our table but
+         * this is something we only do the first time we see this
+         * packet. */
+        if (!PINFO_FD_VISITED(pinfo)) {
+            /* If the dissector requested "reassemble until FIN"
+             * just set this flag for the flow and let reassembly
+             * proceed at normal.  We will check/pick up these
+             * reassembled PDUs later down in dissect_tcp() when checking
+             * for the FIN flag.
+             */
+            if (tcpd && pinfo->desegment_len == DESEGMENT_UNTIL_FIN) {
+                tcpd->fwd->flags |= TCP_FLOW_REASSEMBLE_UNTIL_FIN;
             }
+            if (tcpd && ((nxtseq - deseg_seq) <= 1024*1024)) {
+                if(pinfo->desegment_len == DESEGMENT_ONE_MORE_SEGMENT) {
+                    /* The subdissector asked to reassemble using the
+                     * entire next segment.
+                     * Just ask reassembly for one more byte
+                     * but set this msp flag so we can pick it up
+                     * above.
+                     */
+                    msp = pdu_store_sequencenumber_of_next_pdu(pinfo, deseg_seq,
+                        nxtseq+1, tcpd->fwd->multisegment_pdus);
+                    msp->flags |= MSP_FLAGS_REASSEMBLE_ENTIRE_SEGMENT;
+                } else if (pinfo->desegment_len == DESEGMENT_UNTIL_FIN) {
+                    /*
+                     * The subdissector asked to reassemble at the end of the
+                     * connection. That will be done in dissect_tcp, but here we
+                     * have to ask reassembly to collect all future segments.
+                     * Note that TCP_FLOW_REASSEMBLE_UNTIL_FIN was set before,
+                     * this ensures that OoO detection is skipped.
+                     * The exact nxtpdu offset does not matter, but it should be
+                     * smaller than half of the maximum 32-bit unsigned integer
+                     * to allow detection of sequence number wraparound, and
+                     * larger than the largest possible stream size. Hopefully
+                     * 1GiB (0x40000000 bytes) should be enough.
+                     */
+                    msp = pdu_store_sequencenumber_of_next_pdu(pinfo, deseg_seq,
+                        nxtseq+0x40000000, tcpd->fwd->multisegment_pdus);
+                } else {
+                    msp = pdu_store_sequencenumber_of_next_pdu(pinfo,
+                        deseg_seq, nxtseq+pinfo->desegment_len, tcpd->fwd->multisegment_pdus);
+                }
 
-            /* add this segment as the first one for this new pdu */
-            fragment_add(&tcp_reassembly_table, tvb, deseg_offset,
-                         pinfo, msp->first_frame, msp,
-                         0, nxtseq - deseg_seq,
-                         LT_SEQ(nxtseq, msp->nxtpdu));
+                /* add this segment as the first one for this new pdu */
+                fragment_add(&tcp_reassembly_table, tvb, deseg_offset,
+                             pinfo, msp->first_frame, msp,
+                             0, nxtseq - deseg_seq,
+                             LT_SEQ(nxtseq, msp->nxtpdu));
+            }
+        } else {
+            /* If this is not the first time we have seen the packet, then
+             * the MSP should already be created. Retrieve it to see if we
+             * know what later frame the PDU is reassembled in.
+             */
+            if (tcpd && (msp = (struct tcp_multisegment_pdu *)wmem_tree_lookup32(tcpd->fwd->multisegment_pdus, deseg_seq))) {
+                    ipfd_head = fragment_get(&tcp_reassembly_table, pinfo, msp->first_frame, msp);
+            }
         }
     }
 
@@ -4416,19 +4435,22 @@ again:
              * Just mark this as TCP.
              */
             col_set_str(pinfo->cinfo, COL_PROTOCOL, "TCP");
-            col_append_sep_str(pinfo->cinfo, COL_INFO, " ", "[TCP segment of a reassembled PDU]");
+            if (first_pdu) {
+                col_append_sep_str(pinfo->cinfo, COL_INFO, " ", "[TCP segment of a reassembled PDU]");
+            }
         }
 
         /*
          * Show what's left in the packet as just raw TCP segment
-         * data.
+         * data. (It's possible that another PDU follows in the case
+         * of an out of order frame that is part of two MSPs.)
          * XXX - remember what protocol the last subdissector
          * was, and report it as a continuation of that, instead?
          */
-        nbytes = tvb_reported_length_remaining(tvb, deseg_offset);
+        nbytes = another_pdu_follows ? another_pdu_follows : tvb_reported_length_remaining(tvb, deseg_offset);
 
         proto_tree_add_bytes_format(tcp_tree, hf_tcp_segment_data, tvb, deseg_offset,
-            -1, NULL, "TCP segment data (%u byte%s)", nbytes,
+            nbytes, NULL, "TCP segment data (%u byte%s)", nbytes,
             plurality(nbytes, "", "s"));
     }
     pinfo->can_desegment = 0;
@@ -4446,6 +4468,7 @@ again:
         col_set_fence(pinfo->cinfo, COL_INFO);
         cleared_writable |= col_get_writable(pinfo->cinfo, COL_PROTOCOL);
         col_set_writable(pinfo->cinfo, COL_PROTOCOL, FALSE);
+        first_pdu = FALSE;
         offset += another_pdu_follows;
         seq += another_pdu_follows;
         goto again;
@@ -4457,6 +4480,12 @@ again:
             col_set_writable(pinfo->cinfo, COL_PROTOCOL, TRUE);
         }
     }
+
+clean_exit:
+    /* Restore the addresses and ports to whatever they were after
+     * the last segment that successfully dissected some data, if any.
+     */
+    restore_endpoint(pinfo, &new_endpoint);
 }
 
 void
@@ -4475,6 +4504,10 @@ tcp_dissect_pdus(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     const char *saved_proto;
     guint8 curr_layer_num;
     wmem_list_frame_t *frame;
+
+    tcp_endpoint_t orig_endpoint;
+
+    save_endpoint(pinfo, &orig_endpoint);
 
     while (tvb_reported_length_remaining(tvb, offset) > 0) {
         /*
@@ -4646,6 +4679,7 @@ tcp_dissect_pdus(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
          * data.
          */
         saved_proto = pinfo->current_proto;
+        restore_endpoint(pinfo, &orig_endpoint);
         TRY {
             (*dissect_pdu)(next_tvb, pinfo, tree, dissector_data);
         }
