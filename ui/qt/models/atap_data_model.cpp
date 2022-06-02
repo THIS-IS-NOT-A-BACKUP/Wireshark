@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include <glib.h>
+
 #include <epan/tap.h>
 #include <epan/conversation.h>
 #include <epan/conversation_table.h>
@@ -66,6 +68,7 @@ QString ATapDataModel::tap() const
     return proto_get_protocol_filter_name(_protoId);
 }
 
+#ifdef HAVE_MAXMINDDB
 bool ATapDataModel::hasGeoIPData()
 {
     QString key = QString("geoip_found_%1").arg(_protoId);
@@ -87,6 +90,7 @@ bool ATapDataModel::hasGeoIPData()
 
     return _lookUp.value(key, false).toBool();
 }
+#endif
 
 bool ATapDataModel::enableTap()
 {
@@ -102,9 +106,9 @@ bool ATapDataModel::enableTap()
         &ATapDataModel::tapReset, conversationPacketHandler(), &ATapDataModel::tapDraw, nullptr);
     if (errorString && errorString->len > 0) {
         _disableTap = true;
-        g_string_free(errorString, TRUE);
         return false;
     }
+    g_string_free(errorString, TRUE);
 
     return true;
 }
@@ -263,7 +267,14 @@ void ATapDataModel::setFilter(QString filter)
         return;
 
     _filter = filter;
-    set_tap_dfilter(&hash_, !filter.isEmpty() ? filter.toUtf8().constData() : nullptr);
+    GString * errorString = set_tap_dfilter(&hash_, !filter.isEmpty() ? filter.toUtf8().constData() : nullptr);
+    if (errorString && errorString->len > 0) {
+        /* If this fails, chances are that the main system failed as well. Silently exiting as the
+         * user cannot react to it */
+        disableTap();
+    }
+
+    g_string_free(errorString, TRUE);
 }
 
 ATapDataModel::dataModelType ATapDataModel::modelType() const
@@ -328,41 +339,6 @@ QVariant EndpointDataModel::headerData(int section, Qt::Orientation orientation,
         if (section == ENDP_COLUMN_ADDR)
             return Qt::AlignLeft;
         return Qt::AlignRight;
-#if 0
-    } else if (role == Qt::SizeHintRole) {
-        QFontMetrics fm = mainApp->mainWindow()->fontMetrics();
-        QSize size = QAbstractListModel::headerData(section, orientation, role).toSize();
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
-    #define FONT_WIDTH_FUNC horizontalAdvance
-#else
-    #define FONT_WIDTH_FUNC width
-#endif
-        switch (column) {
-        case ENDP_COLUMN_ADDR:
-            size.setWidth(fm.FONT_WIDTH_FUNC("000.000.000.000"));
-            return size;
-            break;
-        case ENDP_COLUMN_PORT:
-            size.setWidth(fm.FONT_WIDTH_FUNC("000000"));
-            return size;
-            break;
-        case ENDP_COLUMN_PACKETS:
-        case ENDP_COLUMN_PKT_AB:
-        case ENDP_COLUMN_PKT_BA:
-            size.setWidth(fm.FONT_WIDTH_FUNC("00,000"));
-            return size;
-            break;
-        case ENDP_COLUMN_BYTES:
-        case ENDP_COLUMN_BYTES_AB:
-        case ENDP_COLUMN_BYTES_BA:
-            size.setWidth(fm.FONT_WIDTH_FUNC("000,000"));
-            return size;
-            break;
-        default:
-            size.setWidth(fm.FONT_WIDTH_FUNC("000000000000000")); // Geolocation
-            return size;
-        }
-#endif
     }
 
     return QVariant();
@@ -380,9 +356,9 @@ QVariant EndpointDataModel::data(const QModelIndex &idx, int role) const
 
     // Column text cooked representation.
     hostlist_talker_t *item = &g_array_index(storage_, hostlist_talker_t, idx.row());
-    char addr[WS_INET6_ADDRSTRLEN];
     const mmdb_lookup_t *mmdb_lookup = nullptr;
 #ifdef HAVE_MAXMINDDB
+    char addr[WS_INET6_ADDRSTRLEN];
     if (item->myaddress.type == AT_IPv4) {
         const ws_in4_addr * ip4 = (const ws_in4_addr *) item->myaddress.data;
         mmdb_lookup = maxmind_db_lookup_ipv4(ip4);
@@ -392,6 +368,7 @@ QVariant EndpointDataModel::data(const QModelIndex &idx, int role) const
         mmdb_lookup = maxmind_db_lookup_ipv6(ip6);
         ws_inet_ntop6(ip6, addr, sizeof(addr));
     }
+    QString ipAddress(addr);
 #endif
 
     if (role == Qt::DisplayRole || role == ATapDataModel::UNFORMATTED_DISPLAYDATA) {
@@ -416,7 +393,6 @@ QVariant EndpointDataModel::data(const QModelIndex &idx, int role) const
             } else {
                 return quint32(item->port);
             }
-            return QVariant();
         case ENDP_COLUMN_PACKETS:
             return (qlonglong)(item->tx_frames + item->rx_frames);
         case ENDP_COLUMN_BYTES:
@@ -434,18 +410,22 @@ QVariant EndpointDataModel::data(const QModelIndex &idx, int role) const
             if (mmdb_lookup && mmdb_lookup->found && mmdb_lookup->country) {
                 return QVariant(mmdb_lookup->country);
             }
+            return QVariant();
         case ENDP_COLUMN_GEO_CITY:
             if (mmdb_lookup && mmdb_lookup->found && mmdb_lookup->city) {
                 return QVariant(mmdb_lookup->city);
             }
+            return QVariant();
         case ENDP_COLUMN_GEO_AS_NUM:
             if (mmdb_lookup && mmdb_lookup->found && mmdb_lookup->as_number) {
                 return QVariant(mmdb_lookup->as_number);
             }
+            return QVariant();
         case ENDP_COLUMN_GEO_AS_ORG:
             if (mmdb_lookup && mmdb_lookup->found && mmdb_lookup->as_org) {
                 return QVariant(mmdb_lookup->as_org);
             }
+            return QVariant();
         default:
             return QVariant();
         }
@@ -462,7 +442,7 @@ QVariant EndpointDataModel::data(const QModelIndex &idx, int role) const
     } else if (role == ATapDataModel::GEODATA_LOOKUPTABLE) {
         return VariantPointer<const mmdb_lookup_t>::asQVariant(mmdb_lookup);
     } else if (role == ATapDataModel::GEODATA_ADDRESS) {
-        return QString(addr);
+        return ipAddress;
     }
 #endif
 
@@ -561,7 +541,6 @@ QVariant ConversationDataModel::headerData(int section, Qt::Orientation orientat
 }
 
 static const double min_bw_calc_duration_ = 5 / 1000.0; // seconds
-static const char *bps_na_ = UTF8_EM_DASH;
 
 QVariant ConversationDataModel::data(const QModelIndex &idx, int role) const
 {
@@ -584,8 +563,6 @@ QVariant ConversationDataModel::data(const QModelIndex &idx, int role) const
 
     // Column text cooked representation.
     conv_item_t *conv_item = (conv_item_t *)&g_array_index(storage_, conv_item_t,idx.row());
-    if (!conv_item)
-        return QVariant();
 
     double duration = nstime_to_sec(&conv_item->stop_time) - nstime_to_sec(&conv_item->start_time);
     double bps_ab = 0, bps_ba = 0;
