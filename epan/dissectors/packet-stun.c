@@ -62,10 +62,11 @@ void proto_reg_handoff_stun(void);
 
 /* Dissection relevant differences between STUN/TURN specification documents
  *
- *  Aspect   | MS-TURN 15.1       | RFC 3489           | RFC 5389           | RFC 8489 (*1)      |
+ *  Aspect   | MS-TURN 18.0       | RFC 3489           | RFC 5389           | RFC 8489 (*1)      |
  * ===============================================================================================
  *  Message  | 0b00+14-bit        | 16-bit             | 0b00+14-bit, type= |                    |
  *  Type     | No class or method | No class or method | class+method       |                    |
+ *           |                    |                    | Method: 0x000-0xFFF| Method: 0x000-0x0FF|
  * -----------------------------------------------------------------------------------------------
  *  Transac- | 128 bits, seen     | 128 bits           | 32 bit Magic +     |                    |
  *  tion ID  | with MAGIC as well |                    | 96 bit Trans ID    |                    |
@@ -84,14 +85,24 @@ void proto_reg_handoff_stun(void);
  * -----------------------------------------------------------------------------------------------
  *  Password | Opaque             | Deprecated         | Deprecated         |                    |
  * -----------------------------------------------------------------------------------------------
- *  NONCE &  | 0x0014             | 0x0015             | 0x0015             |                    |
+ *  NONCE &  | 0x0014             | 0x0015 (*2)        | 0x0015             |                    |
  *  REALM    | 0x0015             | 0x0014             | 0x0014             |                    |
  * -----------------------------------------------------------------------------------------------
- *  TURN     | RFC 5766/8656 or   | N/A                | RFC 5766/8656      |                    |
- *  Channels | Multiplexed TURN   |                    |                    |                    |
- *           | Channels           |                    |                    |                    |
+ *  TURN     | RFC 5766/8656 or   | N/A                | RFC 5766:          | RFC 8656:          |
+ *  Channels | Multiplexed TURN   |                    | 0x4000-0x7FFF used | 0x4000-0x4FFF used |
+ *           | Channels (0xFF10)  |                    | 0x8000-0xFFFF res. | 0x5000-0xFFFF res. |
+ *           |                    |                    | Reserved MUST NOT  | Reserved MUST be   |
+ *           |                    |                    | be rejected        | dropped (collision)|
  * -----------------------------------------------------------------------------------------------
  * *1: Only where different from RFC 5389
+ * *2: NONCE & REALM were first defined in Internet-Drafts after RFC 3489 was
+ * published. Early drafts, up to draft-ietf-behave-rfc3489bis-02 and
+ * draft-rosenberg-midcom-turn-08, used 0x0014 for NONCE and 0x0015 for REALM.
+ * The attribute numbers were swapped in draft-ietf-behave-rfc3489bis-03 (when
+ * moved from the TURN spec to the STUN spec), the same version that added the
+ * fixed 32-bit magic. Since this dissector only handles packets with the magic
+ * (others are rejected and processed by the classicstun dissector instead),
+ * the swapped values are used for RFC 3489 mode here.
  */
 
 enum {
@@ -102,6 +113,12 @@ enum {
 };
 
 /* Auto-tuning. Default: NET_VER_5389; NET_VER_MS_TURN if MAGIC_COOKIE is found */
+/* NET_VER_3489 is only useful for packets that conform specifically to
+ * draft-ietf-behave-rfc3849bis-03; i.e. that have the 32 bit magic so that they
+ * are not handled by classicstun instead, have the current (swapped) NONE and
+ * REALM attribute numbers, but do not have the attribute padding that was
+ * introduced in draft-ietf-behave-rfc3849bis-04.
+ */
 
 static gint stun_network_version = NET_VER_5389;
 
@@ -275,6 +292,9 @@ typedef struct _stun_conv_info_t {
 #define GOOG_PING               0x0080 /* Google undocumented */
 
 /* 0x080-0x0FF Expert Review */
+/* 0x100-0xFFF Reserved (for DTLS-SRTP multiplexing collision avoidance,
+ * see RFC7983.  Cannot be made available for assignment without IETF Review.)
+ */
 
 /* Attribute Types */
 /* 0x0000-0x3FFF IETF Review comprehension-required range */
@@ -401,6 +421,8 @@ typedef struct _stun_conv_info_t {
 #define GOOG_MULTI_MAPPING      0xff04
 #define GOOG_LOGGING_ID         0xff05
 /* 0xff06-0xffff Unassigned */
+
+#define MS_MULTIPLEX_TURN 0xFF10
 
 /* Initialize the subtree pointers */
 static gint ett_stun = -1;
@@ -750,11 +772,11 @@ dissect_stun_message_channel_data(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
         proto_tree_add_item(stun_tree, hf_stun_channel, tvb, 0, 2, ENC_BIG_ENDIAN);
         proto_tree_add_item(stun_tree, hf_stun_length,  tvb, 2, 2, ENC_BIG_ENDIAN);
         /* MS-TURN Multiplexed TURN Channel */
-        if (msg_type == 0xFF10 && msg_length >= 8) {
+        if (msg_type == MS_MULTIPLEX_TURN && msg_length >= 8) {
             proto_tree_add_item(stun_tree, hf_stun_att_ms_turn_session_id, tvb, 4, 8, ENC_NA);
         }
     }
-    if (msg_type == 0xFF10 && msg_length >= 8) {
+    if (msg_type == MS_MULTIPLEX_TURN && msg_length >= 8) {
         msg_length -= 8;
         offset += 8;
     }
@@ -833,6 +855,26 @@ dissect_stun_message(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gboole
     if (msg_type & 0xC000) {
         /* two first bits not NULL => should be a channel-data message */
 
+        /* RFC 5764 defined a demultiplexing scheme to allow STUN to co-exist
+         * on the same 5-tuple as DTLS-SRTP (and ZRTP) by rejecting previously
+         * reserved channel numbers and method types, implicitly restricting
+         * channel numbers to 0x4000-0x7FFF.  RFC 5766 did not incorporate this
+         * restriction, instead indicating that reserved numbers MUST NOT be
+         * dropped.
+         * RFCs 7983, 8489, and 8656 reconciled this and formally indicated
+         * that channel numbers in the reserved range MUST be dropped, while
+         * further restricting the channel numbers to 0x4000-0x4FFF.
+         * Reject the range 0x8000-0xFFFF, except for the special
+         * MS-TURN multiplex channel number, since no implementation has
+         * used any other value in that range.
+         * This allows us to set the conversation for non-heuristic STUN
+         * dissection on UDP if we see any STUN message, not just a TURN
+         * message type.
+         */
+        if (msg_type & 0x8000 && msg_type != MS_MULTIPLEX_TURN) {
+            return 0;
+        }
+
         /*
          * If the packet is being dissected through heuristics, we never match
          * TURN ChannelData because the heuristics are otherwise rather weak.
@@ -864,7 +906,21 @@ dissect_stun_message(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gboole
     if (captured_length < STUN_HDR_LEN)
         return 0;
 
-    /* Check if it is really a STUN message */
+    msg_type_class = ((msg_type & 0x0010) >> 4) | ((msg_type & 0x0100) >> 7) ;
+    msg_type_method = (msg_type & 0x000F) | ((msg_type & 0x00E0) >> 1) | ((msg_type & 0x3E00) >> 2);
+
+    if (msg_type_method > 0xFF) {
+        /* "Reserved for DTLS-SRTP multiplexing collision avoidance, see RFC
+         * 7983. Cannot be made available for assignment without IETF Review."
+         * Even though not reserved until RFC 7983, these have never been
+         * assigned or used, including by MS-TURN.
+         */
+        return 0;
+    }
+
+    /* Check if it is really a STUN message - reject messages without the
+     * RFC 5389 Magic and let the classicstun dissector handle those.
+     */
     if ( tvb_get_ntohl(tvb, tcp_framing_offset + 4) != MESSAGE_COOKIE)
         return 0;
 
@@ -886,9 +942,6 @@ dissect_stun_message(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gboole
     transaction_id_key[0].key =  transaction_id;
     transaction_id_key[1].length = 0;
     transaction_id_key[1].key = NULL;
-
-    msg_type_class = ((msg_type & 0x0010) >> 4) | ((msg_type & 0x0100) >> 7) ;
-    msg_type_method = (msg_type & 0x000F) | ((msg_type & 0x00E0) >> 1) | ((msg_type & 0x3E00) >> 2);
 
     switch (msg_type_method) {
         /* if it's a TURN method, remember that */
@@ -1055,7 +1108,7 @@ dissect_stun_message(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gboole
         const gchar       *attribute_name_str;
 
         /* According to [MS-TURN] section 2.2.2.8: "This attribute MUST be the
-           first attribute following the TURN message header in all TURN messages  */
+           first attribute following the TURN message header in all TURN messages" */
         if (stun_network_version == NET_VER_AUTO &&
             offset < (STUN_HDR_LEN + msg_length) &&
             tvb_get_ntohs(tvb, offset) == MAGIC_COOKIE) {
