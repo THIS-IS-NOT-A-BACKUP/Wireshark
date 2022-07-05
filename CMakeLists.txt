@@ -39,11 +39,10 @@ endif()
 project(${_project_name} C CXX)
 
 # Updated by tools/make-version.pl
-set(GIT_REVISION 0)
 set(PROJECT_MAJOR_VERSION 3)
 set(PROJECT_MINOR_VERSION 7)
 set(PROJECT_PATCH_VERSION 2)
-set(PROJECT_BUILD_VERSION ${GIT_REVISION})
+set(PROJECT_BUILD_VERSION 0)
 set(PROJECT_VERSION_EXTENSION "")
 
 if(DEFINED ENV{WIRESHARK_VERSION_EXTRA})
@@ -3839,7 +3838,7 @@ set(_test_group_list
 	suite_dfilter.group_integer_1byte
 	suite_dfilter.group_ipv4
 	suite_dfilter.group_membership
-	suite_dfilter.group_range_method
+	suite_dfilter.group_slice
 	suite_dfilter.group_scanner
 	suite_dfilter.group_string_type
 	suite_dfilter.group_stringz
