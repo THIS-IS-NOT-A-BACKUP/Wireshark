@@ -2831,10 +2831,12 @@ capture_input_new_file(capture_session *cap_session, gchar *new_file)
     gboolean is_tempfile;
     int      err;
 
-    if (cap_session->state == CAPTURE_PREPARING) {
-        ws_message("Capture started.");
+    if (really_quiet == FALSE) {
+        if (cap_session->state == CAPTURE_PREPARING) {
+            ws_message("Capture started.");
+        }
+        ws_message("File: \"%s\"", new_file);
     }
-    ws_message("File: \"%s\"", new_file);
 
     ws_assert(cap_session->state == CAPTURE_PREPARING || cap_session->state == CAPTURE_RUNNING);
 
@@ -4213,13 +4215,14 @@ print_columns(capture_file *cf, const epan_dissect_t *edt)
         /* Skip columns not marked as visible. */
         if (!get_column_visible(i))
             continue;
+        const gchar* col_text = get_column_text(&cf->cinfo, i);
         switch (col_item->col_fmt) {
             case COL_NUMBER:
-                column_len = col_len = strlen(col_item->col_data);
+                column_len = col_len = strlen(col_text);
                 if (column_len < 5)
                     column_len = 5;
                 line_bufp = get_line_buf(buf_offset + column_len);
-                put_spaces_string(line_bufp + buf_offset, col_item->col_data, col_len, column_len);
+                put_spaces_string(line_bufp + buf_offset, col_text, col_len, column_len);
                 break;
 
             case COL_CLS_TIME:
@@ -4230,11 +4233,11 @@ print_columns(capture_file *cf, const epan_dissect_t *edt)
             case COL_UTC_TIME:
             case COL_UTC_YMD_TIME:  /* XXX - wider */
             case COL_UTC_YDOY_TIME: /* XXX - wider */
-                column_len = col_len = strlen(col_item->col_data);
+                column_len = col_len = strlen(col_text);
                 if (column_len < 10)
                     column_len = 10;
                 line_bufp = get_line_buf(buf_offset + column_len);
-                put_spaces_string(line_bufp + buf_offset, col_item->col_data, col_len, column_len);
+                put_spaces_string(line_bufp + buf_offset, col_text, col_len, column_len);
                 break;
 
             case COL_DEF_SRC:
@@ -4246,11 +4249,11 @@ print_columns(capture_file *cf, const epan_dissect_t *edt)
             case COL_DEF_NET_SRC:
             case COL_RES_NET_SRC:
             case COL_UNRES_NET_SRC:
-                column_len = col_len = strlen(col_item->col_data);
+                column_len = col_len = strlen(col_text);
                 if (column_len < 12)
                     column_len = 12;
                 line_bufp = get_line_buf(buf_offset + column_len);
-                put_spaces_string(line_bufp + buf_offset, col_item->col_data, col_len, column_len);
+                put_spaces_string(line_bufp + buf_offset, col_text, col_len, column_len);
                 break;
 
             case COL_DEF_DST:
@@ -4262,17 +4265,17 @@ print_columns(capture_file *cf, const epan_dissect_t *edt)
             case COL_DEF_NET_DST:
             case COL_RES_NET_DST:
             case COL_UNRES_NET_DST:
-                column_len = col_len = strlen(col_item->col_data);
+                column_len = col_len = strlen(col_text);
                 if (column_len < 12)
                     column_len = 12;
                 line_bufp = get_line_buf(buf_offset + column_len);
-                put_string_spaces(line_bufp + buf_offset, col_item->col_data, col_len, column_len);
+                put_string_spaces(line_bufp + buf_offset, col_text, col_len, column_len);
                 break;
 
             default:
-                column_len = strlen(col_item->col_data);
+                column_len = strlen(col_text);
                 line_bufp = get_line_buf(buf_offset + column_len);
-                put_string(line_bufp + buf_offset, col_item->col_data, column_len);
+                put_string(line_bufp + buf_offset, col_text, column_len);
                 break;
         }
         buf_offset += column_len;
