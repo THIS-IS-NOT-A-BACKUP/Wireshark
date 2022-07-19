@@ -335,7 +335,7 @@ conversation_create_from_template(conversation_t *conversation, const address *a
  * (formerly at http://eternallyconfuzzled.com/tuts/algorithms/jsw_tut_hashing.aspx#existing)
  * One-at-a-Time hash
  */
-guint
+static guint
 conversation_hash_element_list(gconstpointer v)
 {
     const conversation_element_t *element = (const conversation_element_t*)v;
@@ -1781,7 +1781,7 @@ conversation_create_endpoint_by_id(struct _packet_info *pinfo, endpoint_type ety
 {
     pinfo->conv_elements = wmem_alloc0(pinfo->pool, sizeof(conversation_element_t) * 2);
     pinfo->conv_elements[0].type = CE_UINT;
-    pinfo->conv_elements[1].uint_val = id;
+    pinfo->conv_elements[0].uint_val = id;
     pinfo->conv_elements[1].type = CE_ENDPOINT;
     pinfo->conv_elements[1].endpoint_type_val = etype;
 }
