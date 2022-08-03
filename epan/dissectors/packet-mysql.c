@@ -100,8 +100,13 @@ void proto_reg_handoff_mysql(void);
 #define MYSQL_CAPS_EP 0x0040 /* CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS */
 #define MYSQL_CAPS_ST 0x0080 /* CLIENT_SESSION_TRACK */
 #define MYSQL_CAPS_DE 0x0100 /* CLIENT_DEPRECATE_EOF */
+#define MYSQL_CAPS_RM 0x0200 /* CLIENT_OPTIONAL_RESULTSET_METADATA */
+#define MYSQL_CAPS_ZS 0x0400 /* CLIENT_ZSTD_COMPRESSION_ALGORITHM */
 #define MYSQL_CAPS_QA 0x0800 /* CLIENT_QUERY_ATTRIBUTES */
-#define MYSQL_CAPS_UNUSED 0xFE00
+#define MYSQL_CAPS_MF 0x1000 /* MULTI_FACTOR_AUTHENTICATION */
+#define MYSQL_CAPS_CE 0x2000 /* CLIENT_CAPABILITY_EXTENSION */
+
+#define MYSQL_CAPS_UNUSED 0xC000
 
 /* status bitfield */
 #define MYSQL_STAT_IT 0x0001
@@ -946,6 +951,11 @@ static int hf_mysql_cap_plugin_auth_lenenc_client_data = -1;
 static int hf_mysql_cap_client_can_handle_expired_passwords = -1;
 static int hf_mysql_cap_session_track = -1;
 static int hf_mysql_cap_deprecate_eof = -1;
+static int hf_mysql_cap_optional_metadata = -1;
+static int hf_mysql_cap_compress_zstd = -1;
+static int hf_mysql_cap_query_attrs = -1;
+static int hf_mysql_cap_mf_auth = -1;
+static int hf_mysql_cap_cap_ext = -1;
 static int hf_mysql_cap_unused = -1;
 static int hf_mysql_server_language = -1;
 static int hf_mysql_server_status = -1;
@@ -1017,6 +1027,7 @@ static int hf_mysql_connattrs_name_length = -1;
 static int hf_mysql_connattrs_name = -1;
 static int hf_mysql_connattrs_value_length = -1;
 static int hf_mysql_connattrs_value = -1;
+static int hf_mysql_zstd_compression_level = -1;
 static int hf_mysql_thread_id  = -1;
 static int hf_mysql_salt = -1;
 static int hf_mysql_salt2 = -1;
@@ -1419,6 +1430,11 @@ static int * const mysql_extcaps_flags[] = {
 	&hf_mysql_cap_client_can_handle_expired_passwords,
 	&hf_mysql_cap_session_track,
 	&hf_mysql_cap_deprecate_eof,
+	&hf_mysql_cap_optional_metadata,
+	&hf_mysql_cap_compress_zstd,
+	&hf_mysql_cap_query_attrs,
+	&hf_mysql_cap_mf_auth,
+	&hf_mysql_cap_cap_ext,
 	&hf_mysql_cap_unused,
 	NULL
 };
@@ -1647,7 +1663,11 @@ mysql_dissect_login(tvbuff_t *tvb, packet_info *pinfo, int offset,
 	proto_item *login_tree;
 
 	/* after login there can be OK or DENIED */
-	mysql_set_conn_state(pinfo, conn_data, RESPONSE_OK);
+	if (conn_data->clnt_caps & MYSQL_CAPS_SL) {
+		mysql_set_conn_state(pinfo, conn_data, LOGIN);
+	} else if (!(conn_data->clnt_caps == 0)) {
+		mysql_set_conn_state(pinfo, conn_data, RESPONSE_OK);
+	}
 
 	tf = proto_tree_add_item(tree, hf_mysql_login_request, tvb, offset, -1, ENC_NA);
 	login_tree = proto_item_add_subtree(tf, ett_login_request);
@@ -1762,6 +1782,11 @@ mysql_dissect_login(tvbuff_t *tvb, packet_info *pinfo, int offset,
 		}
 	}
 
+	if (conn_data->clnt_caps & MYSQL_CAPS_ZS)
+	{
+		proto_tree_add_item(login_tree, hf_mysql_zstd_compression_level, tvb, offset, 1, ENC_LITTLE_ENDIAN);
+		offset += 1;
+	}
 	return offset;
 }
 
@@ -2458,8 +2483,8 @@ mysql_dissect_response(tvbuff_t *tvb, packet_info *pinfo, int offset,
 			} else {
 				proto_item_append_text(pi, " - %s", val_to_str(RESPONSE_OK, state_vals, "Unknown (%u)"));
 				offset = mysql_dissect_ok_packet(tvb, pinfo, offset, tree, conn_data);
+				mysql_set_conn_state(pinfo, conn_data, REQUEST);
 			}
-			mysql_set_conn_state(pinfo, conn_data, REQUEST);
 		} else {
 			// text row packet
 			proto_item_append_text(pi, " - %s", val_to_str(ROW_PACKET, state_vals, "Unknown (%u)"));
@@ -3451,19 +3476,25 @@ mysql_dissect_auth_switch_request(tvbuff_t *tvb, packet_info *pinfo, int offset,
 	col_set_fence(pinfo->cinfo, COL_INFO);
 	mysql_set_conn_state(pinfo, conn_data, AUTH_SWITCH_RESPONSE);
 
-	/* Status (Always 0xfe) */
-	proto_tree_add_item(tree, hf_mysql_auth_switch_request_status, tvb, offset, 1, ENC_LITTLE_ENDIAN);
-	offset += 1;
+	if (conn_data->clnt_caps_ext & MYSQL_CAPS_PA) {
+		/* https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_auth_switch_request.html */
 
-	/* name */
-	lenstr = my_tvb_strsize(tvb, offset);
-	proto_tree_add_item(tree, hf_mysql_auth_switch_request_name, tvb, offset, lenstr, ENC_ASCII);
-	offset += lenstr;
+		/* name */
+		lenstr = my_tvb_strsize(tvb, offset);
+		proto_tree_add_item(tree, hf_mysql_auth_switch_request_name, tvb, offset, lenstr, ENC_ASCII);
+		offset += lenstr;
 
-	/* Data */
-	lenstr = my_tvb_strsize(tvb, offset);
-	proto_tree_add_item(tree, hf_mysql_auth_switch_request_data, tvb, offset, lenstr, ENC_NA);
-	offset += lenstr;
+		/* Data */
+		lenstr = my_tvb_strsize(tvb, offset);
+		proto_tree_add_item(tree, hf_mysql_auth_switch_request_data, tvb, offset, lenstr, ENC_NA);
+		offset += lenstr;
+	} else {
+		/* https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_old_auth_switch_request.html */
+
+		/* Status (Always 0xfe) */
+		proto_tree_add_item(tree, hf_mysql_auth_switch_request_status, tvb, offset, 1, ENC_LITTLE_ENDIAN);
+		offset += 1;
+	}
 
 	return offset + tvb_reported_length_remaining(tvb, offset);
 
@@ -4042,6 +4073,31 @@ void proto_register_mysql(void)
 		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_DE,
 		NULL, HFILL }},
 
+		{ &hf_mysql_cap_optional_metadata,
+		{ "Client can hanle optional resultset metadata","mysql.caps.optional_metadata",
+		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_RM,
+		NULL, HFILL }},
+
+		{ &hf_mysql_cap_compress_zstd,
+		{ "ZSTD Compression Algorithm","mysql.caps.compress_zsd",
+		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_ZS,
+		NULL, HFILL }},
+
+		{ &hf_mysql_cap_query_attrs,
+		{ "Query Attributes","mysql.caps.query_attrs",
+		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_QA,
+		NULL, HFILL }},
+
+		{ &hf_mysql_cap_mf_auth,
+		{ "Multifactor Authentication","mysql.caps.mf_auth",
+		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_MF,
+		NULL, HFILL }},
+
+		{ &hf_mysql_cap_cap_ext,
+		{ "Capability Extension","mysql.caps.cap_ext",
+		FT_BOOLEAN, 16, TFS(&tfs_set_notset), MYSQL_CAPS_CE,
+		NULL, HFILL }},
+
 		{ &hf_mysql_cap_unused,
 		{ "Unused","mysql.caps.unused",
 		FT_UINT16, BASE_HEX, NULL, MYSQL_CAPS_UNUSED,
@@ -4121,6 +4177,11 @@ void proto_register_mysql(void)
 		{ "Connection Attribute Value", "mysql.connattrs.value",
 		  FT_STRINGZ, BASE_NONE, NULL, 0x0,
 		  NULL, HFILL }},
+
+		{ &hf_mysql_zstd_compression_level,
+		{ "ZSTD Compression Level", "mysql.compression.zstd_level",
+		FT_UINT8, BASE_DEC, NULL, 0x0,
+		NULL, HFILL }},
 
 
 		{ &hf_mariadb_extmeta_data,
