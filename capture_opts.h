@@ -210,7 +210,10 @@ typedef struct interface_options_tag {
     GHashTable       *extcap_args;
     GPid              extcap_pid;           /* pid of running process or WS_INVALID_PID */
     gpointer          extcap_pipedata;
+    GString          *extcap_stderr;
     guint             extcap_child_watch;
+    guint             extcap_stdout_watch;
+    guint             extcap_stderr_watch;
 #ifdef _WIN32
     HANDLE            extcap_pipe_h;
     HANDLE            extcap_control_in_h;
@@ -326,6 +329,8 @@ typedef struct capture_options_tag {
     gboolean           output_to_pipe;        /**< save_file is a pipe (named or stdout) */
     gboolean           capture_child;         /**< hidden option: Wireshark child mode */
     gchar             *compress_type;         /**< compress type */
+    gchar             *closed_msg;            /**< Dumpcap capture closed message */
+    guint              extcap_terminate_id;   /**< extcap process termination source ID */
 } capture_options;
 
 /* initialize the capture_options with some reasonable values */
