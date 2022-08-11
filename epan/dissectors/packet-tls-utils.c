@@ -3006,6 +3006,7 @@ static const SslDigestAlgo digests[]={
     {"SHA1",    20},
     {"SHA256",  32},
     {"SHA384",  48},
+    {"SM3",     32},
     {"Not Applicable",  0},
 };
 
@@ -3029,6 +3030,8 @@ static const gchar *ciphers[]={
     "CAMELLIA256",
     "SEED",
     "CHACHA20", /* since Libgcrypt 1.7.0 */
+    "SM1",
+    "SM4",
     "*UNKNOWN*"
 };
 
@@ -4476,7 +4479,7 @@ create_decoders:
     ssl_debug_printf("%s ssl_create_decoder(server)\n", G_STRFUNC);
     ssl_session->server_new = ssl_create_decoder(cipher_suite, cipher_algo, ssl_session->session.compression, s_mk, s_wk, s_iv, write_iv_len);
     if (!ssl_session->server_new) {
-        ssl_debug_printf("%s can't init client decoder\n", G_STRFUNC);
+        ssl_debug_printf("%s can't init server decoder\n", G_STRFUNC);
         goto fail;
     }
 
