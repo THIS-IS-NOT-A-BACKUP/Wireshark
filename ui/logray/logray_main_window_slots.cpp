@@ -1663,98 +1663,83 @@ void LograyMainWindow::softwareUpdateRequested() {
 
 // File Menu
 
-void LograyMainWindow::on_actionFileOpen_triggered()
+void LograyMainWindow::connectFileMenuActions()
 {
-    openCaptureFile();
+    connect(main_ui_->actionFileOpen, &QAction::triggered, this,
+            [this]() { openCaptureFile(); });
+
+    connect(main_ui_->actionFileMerge, &QAction::triggered, this,
+            [this]() { mergeCaptureFile(); });
+
+    connect(main_ui_->actionFileImportFromHexDump, &QAction::triggered, this,
+            [this]() { importCaptureFile(); });
+
+    connect(main_ui_->actionFileClose, &QAction::triggered, this, [this]() {
+        QString before_what(tr(" before closing the file"));
+        if (testCaptureFileClose(before_what)) {
+            showWelcome();
+        }
+    });
+
+    connect(main_ui_->actionFileSave, &QAction::triggered, this,
+        [this]() { saveCaptureFile(capture_file_.capFile(), false); });
+
+    connect(main_ui_->actionFileSaveAs, &QAction::triggered, this,
+        [this]() { saveAsCaptureFile(capture_file_.capFile()); });
+
+    connect(main_ui_->actionFileSetListFiles, &QAction::triggered, this,
+        [this]() { file_set_dialog_->show(); });
+
+    connect(main_ui_->actionFileSetNextFile, &QAction::triggered, this, [this]() {
+        fileset_entry *entry = fileset_get_next();
+
+        if (entry) {
+            QString new_cf_path = entry->fullname;
+            openCaptureFile(new_cf_path);
+        }
+    });
+
+    connect(main_ui_->actionFileSetPreviousFile, &QAction::triggered, this, [this]() {
+        fileset_entry *entry = fileset_get_previous();
+
+        if (entry) {
+            QString new_cf_path = entry->fullname;
+            openCaptureFile(new_cf_path);
+        }
+    });
+
+    connect(main_ui_->actionFileExportPackets, &QAction::triggered, this,
+        [this]() { exportSelectedPackets(); });
+
+    connect(main_ui_->actionFileExportAsPlainText, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_text); });
+
+    connect(main_ui_->actionFileExportAsCSV, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_csv); });
+
+    connect(main_ui_->actionFileExportAsCArrays, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_carrays); });
+
+    connect(main_ui_->actionFileExportAsPSML, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_psml); });
+
+    connect(main_ui_->actionFileExportAsPDML, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_pdml); });
+
+    connect(main_ui_->actionFileExportAsJSON, &QAction::triggered, this,
+        [this]() { exportDissections(export_type_json); });
+
+    connect(main_ui_->actionFileExportPacketBytes, &QAction::triggered, this,
+        [this]() { exportPacketBytes(); });
+
+    connect(main_ui_->actionFileExportPDU, &QAction::triggered, this,
+        [this]() { exportPDU(); });
+
+    connect(main_ui_->actionFilePrint, &QAction::triggered, this,
+        [this]() { printFile(); });
 }
 
-void LograyMainWindow::on_actionFileMerge_triggered()
-{
-    mergeCaptureFile();
-}
-
-void LograyMainWindow::on_actionFileImportFromHexDump_triggered()
-{
-    importCaptureFile();
-}
-
-void LograyMainWindow::on_actionFileClose_triggered() {
-    QString before_what(tr(" before closing the file"));
-    if (testCaptureFileClose(before_what))
-        showWelcome();
-}
-
-void LograyMainWindow::on_actionFileSave_triggered()
-{
-    saveCaptureFile(capture_file_.capFile(), false);
-}
-
-void LograyMainWindow::on_actionFileSaveAs_triggered()
-{
-    saveAsCaptureFile(capture_file_.capFile());
-}
-
-void LograyMainWindow::on_actionFileSetListFiles_triggered()
-{
-    file_set_dialog_->show();
-}
-
-void LograyMainWindow::on_actionFileSetNextFile_triggered()
-{
-    fileset_entry *entry = fileset_get_next();
-
-    if (entry) {
-        QString new_cf_path = entry->fullname;
-        openCaptureFile(new_cf_path);
-    }
-}
-
-void LograyMainWindow::on_actionFileSetPreviousFile_triggered()
-{
-    fileset_entry *entry = fileset_get_previous();
-
-    if (entry) {
-        QString new_cf_path = entry->fullname;
-        openCaptureFile(new_cf_path);
-    }
-}
-
-void LograyMainWindow::on_actionFileExportPackets_triggered()
-{
-    exportSelectedPackets();
-}
-
-void LograyMainWindow::on_actionFileExportAsPlainText_triggered()
-{
-    exportDissections(export_type_text);
-}
-
-void LograyMainWindow::on_actionFileExportAsCSV_triggered()
-{
-    exportDissections(export_type_csv);
-}
-
-void LograyMainWindow::on_actionFileExportAsCArrays_triggered()
-{
-    exportDissections(export_type_carrays);
-}
-
-void LograyMainWindow::on_actionFileExportAsPSML_triggered()
-{
-    exportDissections(export_type_psml);
-}
-
-void LograyMainWindow::on_actionFileExportAsPDML_triggered()
-{
-    exportDissections(export_type_pdml);
-}
-
-void LograyMainWindow::on_actionFileExportAsJSON_triggered()
-{
-    exportDissections(export_type_json);
-}
-
-void LograyMainWindow::on_actionFileExportPacketBytes_triggered()
+void LograyMainWindow::exportPacketBytes()
 {
     QString file_name;
 
@@ -1778,14 +1763,7 @@ void LograyMainWindow::on_actionFileExportPacketBytes_triggered()
     }
 }
 
-void LograyMainWindow::on_actionAnalyzeShowPacketBytes_triggered()
-{
-    ShowPacketBytesDialog *spbd = new ShowPacketBytesDialog(*this, capture_file_);
-    spbd->addCodecs(text_codec_map_);
-    spbd->show();
-}
-
-void LograyMainWindow::on_actionFileExportPDU_triggered()
+void LograyMainWindow::exportPDU()
 {
     ExportPDUDialog *exportpdu_dialog = new ExportPDUDialog(this);
 
@@ -1802,7 +1780,7 @@ void LograyMainWindow::on_actionFileExportPDU_triggered()
     exportpdu_dialog->activateWindow();
 }
 
-void LograyMainWindow::on_actionFilePrint_triggered()
+void LograyMainWindow::printFile()
 {
     capture_file *cf = capture_file_.capFile();
     g_return_if_fail(cf);
@@ -1821,139 +1799,31 @@ void LograyMainWindow::on_actionFilePrint_triggered()
 
 // Edit Menu
 
-// XXX This should probably be somewhere else.
-void LograyMainWindow::actionEditCopyTriggered(LograyMainWindow::CopySelected selection_type)
-{
-    char label_str[ITEM_LABEL_LENGTH];
-    QString clip;
-
-    if (!capture_file_.capFile()) return;
-
-    field_info *finfo_selected = capture_file_.capFile()->finfo_selected;
-
-    switch (selection_type) {
-    case CopySelectedDescription:
-        if (proto_tree_->selectionModel()->hasSelection()) {
-            QModelIndex idx = proto_tree_->selectionModel()->selectedIndexes().first();
-            clip = idx.data(Qt::DisplayRole).toString();
-        }
-        break;
-    case CopySelectedFieldName:
-        if (finfo_selected && finfo_selected->hfinfo->abbrev != 0) {
-            clip.append(finfo_selected->hfinfo->abbrev);
-        }
-        break;
-    case CopySelectedValue:
-        if (finfo_selected && capture_file_.capFile()->edt != 0) {
-            gchar* field_str = get_node_field_value(finfo_selected, capture_file_.capFile()->edt);
-            clip.append(field_str);
-            g_free(field_str);
-        }
-        break;
-    case CopyAllVisibleItems:
-        clip = proto_tree_->toString();
-        break;
-    case CopyAllVisibleSelectedTreeItems:
-        if (proto_tree_->selectionModel()->hasSelection()) {
-            clip = proto_tree_->toString(proto_tree_->selectionModel()->selectedIndexes().first());
-        }
-        break;
-    case CopyListAsText:
-    case CopyListAsCSV:
-    case CopyListAsYAML:
-        if (packet_list_->selectedRows().count() > 0)
-        {
-            QList<int> rows = packet_list_->selectedRows();
-            QStringList content;
-
-            PacketList::SummaryCopyType copyType = PacketList::CopyAsText;
-            if (selection_type == CopyListAsCSV)
-                copyType = PacketList::CopyAsCSV;
-            else if (selection_type == CopyListAsYAML)
-                copyType = PacketList::CopyAsYAML;
-
-            if ((copyType == PacketList::CopyAsText) ||
-                (copyType == PacketList::CopyAsCSV)) {
-                QString headerEntry = packet_list_->createHeaderSummaryText(copyType);
-                content << headerEntry;
-            }
-            foreach (int row, rows)
-            {
-                QModelIndex idx = packet_list_->model()->index(row, 0);
-                if (! idx.isValid())
-                    continue;
-
-                QString entry = packet_list_->createSummaryText(idx, copyType);
-                content << entry;
-            }
-
-            if (content.count() > 0) {
-                clip = content.join("\n");
-                //
-                // Each YAML item ends with a newline, so the string
-                // ends with a newline already if it's CopyListAsYAML.
-                // If we add a newline, there'd be an extra blank
-                // line.
-                //
-                // Otherwise, we've used newlines as separators, not
-                // terminators, so there's no final newline.  Add it.
-                //
-                if (selection_type != CopyListAsYAML)
-                    clip += "\n";
-            }
-        }
-        break;
-    }
-
-    if (clip.length() == 0) {
-        /* If no representation then... Try to read the value */
-        proto_item_fill_label(capture_file_.capFile()->finfo_selected, label_str);
-        clip.append(label_str);
-    }
-
-    if (clip.length()) {
-        mainApp->clipboard()->setText(clip);
-    } else {
-        QString err = tr("Couldn't copy text. Try another item.");
-        mainApp->pushStatus(WiresharkApplication::TemporaryStatus, err);
-    }
-}
-
-void LograyMainWindow::on_actionCopyAllVisibleItems_triggered()
-{
-    actionEditCopyTriggered(CopyAllVisibleItems);
-}
-
-void LograyMainWindow::on_actionCopyListAsText_triggered()
-{
-    actionEditCopyTriggered(CopyListAsText);
-}
-
-void LograyMainWindow::on_actionCopyListAsCSV_triggered()
-{
-    actionEditCopyTriggered(CopyListAsCSV);
-}
-
-void LograyMainWindow::on_actionCopyListAsYAML_triggered()
-{
-    actionEditCopyTriggered(CopyListAsYAML);
-}
-
-void LograyMainWindow::on_actionCopyAllVisibleSelectedTreeItems_triggered()
-{
-    actionEditCopyTriggered(CopyAllVisibleSelectedTreeItems);
-}
-
 void LograyMainWindow::connectEditMenuActions()
 {
+    connect(main_ui_->actionCopyAllVisibleItems, &QAction::triggered, this,
+            [this]() { copySelectedItems(CopyAllVisibleItems); });
+
+    connect(main_ui_->actionCopyListAsText, &QAction::triggered, this,
+            [this]() { copySelectedItems(CopyListAsText); });
+
+    connect(main_ui_->actionCopyListAsCSV, &QAction::triggered, this,
+            [this]() { copySelectedItems(CopyListAsCSV); });
+
+    connect(main_ui_->actionCopyListAsYAML, &QAction::triggered, this,
+            [this]() { copySelectedItems(CopyListAsYAML); });
+
+    connect(main_ui_->actionCopyAllVisibleSelectedTreeItems, &QAction::triggered, this,
+            [this]() { copySelectedItems(CopyAllVisibleSelectedTreeItems); });
+
     connect(main_ui_->actionEditCopyDescription, &QAction::triggered, this,
-            [this]() { actionEditCopyTriggered(CopySelectedDescription); });
+            [this]() { copySelectedItems(CopySelectedDescription); });
 
     connect(main_ui_->actionEditCopyFieldName, &QAction::triggered, this,
-            [this]() { actionEditCopyTriggered(CopySelectedFieldName); });
+            [this]() { copySelectedItems(CopySelectedFieldName); });
 
     connect(main_ui_->actionEditCopyValue, &QAction::triggered, this,
-            [this]() { actionEditCopyTriggered(CopySelectedValue); });
+            [this]() { copySelectedItems(CopySelectedValue); });
 
     connect(main_ui_->actionEditCopyAsFilter, &QAction::triggered, this,
             [this]() { matchFieldFilter(FilterAction::ActionCopy, FilterAction::ActionTypePlain); });
@@ -2054,6 +1924,103 @@ void LograyMainWindow::connectEditMenuActions()
             [this]() { showPreferencesDialog(PrefsModel::typeToString(PrefsModel::Appearance)); }, Qt::QueuedConnection);
 }
 
+// XXX This should probably be somewhere else.
+void LograyMainWindow::copySelectedItems(LograyMainWindow::CopySelected selection_type)
+{
+    char label_str[ITEM_LABEL_LENGTH];
+    QString clip;
+
+    if (!capture_file_.capFile()) return;
+
+    field_info *finfo_selected = capture_file_.capFile()->finfo_selected;
+
+    switch (selection_type) {
+    case CopySelectedDescription:
+        if (proto_tree_->selectionModel()->hasSelection()) {
+            QModelIndex idx = proto_tree_->selectionModel()->selectedIndexes().first();
+            clip = idx.data(Qt::DisplayRole).toString();
+        }
+        break;
+    case CopySelectedFieldName:
+        if (finfo_selected && finfo_selected->hfinfo->abbrev != 0) {
+            clip.append(finfo_selected->hfinfo->abbrev);
+        }
+        break;
+    case CopySelectedValue:
+        if (finfo_selected && capture_file_.capFile()->edt != 0) {
+            gchar* field_str = get_node_field_value(finfo_selected, capture_file_.capFile()->edt);
+            clip.append(field_str);
+            g_free(field_str);
+        }
+        break;
+    case CopyAllVisibleItems:
+        clip = proto_tree_->toString();
+        break;
+    case CopyAllVisibleSelectedTreeItems:
+        if (proto_tree_->selectionModel()->hasSelection()) {
+            clip = proto_tree_->toString(proto_tree_->selectionModel()->selectedIndexes().first());
+        }
+        break;
+    case CopyListAsText:
+    case CopyListAsCSV:
+    case CopyListAsYAML:
+        if (packet_list_->selectedRows().count() > 0)
+        {
+            QList<int> rows = packet_list_->selectedRows();
+            QStringList content;
+
+            PacketList::SummaryCopyType copyType = PacketList::CopyAsText;
+            if (selection_type == CopyListAsCSV)
+                copyType = PacketList::CopyAsCSV;
+            else if (selection_type == CopyListAsYAML)
+                copyType = PacketList::CopyAsYAML;
+
+            if ((copyType == PacketList::CopyAsText) ||
+                (copyType == PacketList::CopyAsCSV)) {
+                QString headerEntry = packet_list_->createHeaderSummaryText(copyType);
+                content << headerEntry;
+            }
+            foreach (int row, rows)
+            {
+                QModelIndex idx = packet_list_->model()->index(row, 0);
+                if (! idx.isValid())
+                    continue;
+
+                QString entry = packet_list_->createSummaryText(idx, copyType);
+                content << entry;
+            }
+
+            if (content.count() > 0) {
+                clip = content.join("\n");
+                //
+                // Each YAML item ends with a newline, so the string
+                // ends with a newline already if it's CopyListAsYAML.
+                // If we add a newline, there'd be an extra blank
+                // line.
+                //
+                // Otherwise, we've used newlines as separators, not
+                // terminators, so there's no final newline.  Add it.
+                //
+                if (selection_type != CopyListAsYAML)
+                    clip += "\n";
+            }
+        }
+        break;
+    }
+
+    if (clip.length() == 0) {
+        /* If no representation then... Try to read the value */
+        proto_item_fill_label(capture_file_.capFile()->finfo_selected, label_str);
+        clip.append(label_str);
+    }
+
+    if (clip.length()) {
+        mainApp->clipboard()->setText(clip);
+    } else {
+        QString err = tr("Couldn't copy text. Try another item.");
+        mainApp->pushStatus(WiresharkApplication::TemporaryStatus, err);
+    }
+}
 
 void LograyMainWindow::findPacket()
 {
@@ -2792,6 +2759,13 @@ void LograyMainWindow::statCommandExpertInfo(const char *, void *)
             this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
 
     expert_dialog->show();
+}
+
+void LograyMainWindow::on_actionAnalyzeShowPacketBytes_triggered()
+{
+    ShowPacketBytesDialog *spbd = new ShowPacketBytesDialog(*this, capture_file_);
+    spbd->addCodecs(text_codec_map_);
+    spbd->show();
 }
 
 void LograyMainWindow::on_actionAnalyzeExpertInfo_triggered()
