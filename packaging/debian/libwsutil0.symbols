@@ -322,6 +322,7 @@ libwsutil.so.0 libwsutil0 #MINVER#
  wmem_strbuf_get_str@Base 3.5.0
  wmem_strbuf_new@Base 3.5.0
  wmem_strbuf_new_len@Base 3.7.1rc0-272-gfe25d701baa2
+ wmem_strbuf_sanitize_utf8@Base 4.1.0rc0-307-g402bb0ee81d8
  wmem_strbuf_sized_new@Base 3.5.0
  wmem_strbuf_strcmp@Base 3.7.1rc0-272-gfe25d701baa2
  wmem_strbuf_strstr@Base 3.7.1rc0-272-gfe25d701baa2
@@ -411,8 +412,9 @@ libwsutil.so.0 libwsutil0 #MINVER#
  ws_log_set_debug_filter@Base 3.5.0
  ws_log_set_domain_filter@Base 3.5.0
  ws_log_set_noisy_filter@Base 3.5.0
- ws_log_set_fatal@Base 3.5.0
- ws_log_set_fatal_str@Base 3.5.0
+ ws_log_set_fatal_domain_filter@Base 4.1.0
+ ws_log_set_fatal_level@Base 4.1.0
+ ws_log_set_fatal_level_str@Base 4.1.0
  ws_log_set_level@Base 3.5.0
  ws_log_set_level_str@Base 3.5.0
  ws_log_set_writer@Base 3.7.0
