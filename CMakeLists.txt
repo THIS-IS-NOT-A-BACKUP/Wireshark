@@ -669,6 +669,13 @@ else() # ! MSVC
 		# seem to flag very interesting issues.
 		#
 		-Wno-format-truncation
+		#
+		# Updating external dependencies can introduce new deprecations.
+		# Also fixing new internal deprecations takes time.
+		# We want to be able to build with -Werror in that case. New
+		# code should not introduce new deprecations in any case.
+		#
+		-Wno-error=deprecated-declarations
 	)
 
 	#
@@ -1903,7 +1910,6 @@ feature_summary(WHAT ALL)
 # Should this be part of libui?
 if(WIN32)
 	set(PLATFORM_UI_SRC
-		ui/win32/console_win32.cpp
 		ui/win32/file_dlg_win32.cpp
 	)
 	set(PLATFORM_UI_RC_FILES
@@ -1985,6 +1991,7 @@ set(INSTALL_FILES
 
 if (BUILD_logray)
 	set(LOG_INSTALL_FILES
+		docbook/ws.css
 		resources/share/logray/colorfilters
 		resources/share/logray/dfilter_buttons
 	)
@@ -2002,7 +2009,6 @@ if (ASCIIDOCTOR_FOUND)
 		${CMAKE_BINARY_DIR}/doc/dumpcap.html
 		${CMAKE_BINARY_DIR}/doc/editcap.html
 		${CMAKE_BINARY_DIR}/doc/extcap.html
-		${CMAKE_BINARY_DIR}/doc/falcodump.html
 		${CMAKE_BINARY_DIR}/doc/mergecap.html
 		${CMAKE_BINARY_DIR}/doc/randpkt.html
 		${CMAKE_BINARY_DIR}/doc/randpktdump.html
@@ -2027,6 +2033,11 @@ if (ASCIIDOCTOR_FOUND)
 		list(APPEND INSTALL_FILES
 			${CMAKE_BINARY_DIR}/doc/asn2deb.html
 			${CMAKE_BINARY_DIR}/doc/idl2deb.html
+		)
+	endif()
+	if (BUILD_logray)
+		list(APPEND LOG_INSTALL_FILES
+			${CMAKE_BINARY_DIR}/doc/falcodump.html
 		)
 	endif()
 endif()
