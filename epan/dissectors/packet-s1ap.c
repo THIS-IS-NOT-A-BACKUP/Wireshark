@@ -3150,7 +3150,7 @@ dissect_s1ap_AerialUEsubscriptionInformation(tvbuff_t *tvb _U_, int offset _U_, 
 
 static int
 dissect_s1ap_CellIdentity(tvbuff_t *tvb _U_, int offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
-#line 2692 "./asn1/s1ap/s1ap.cnf"
+#line 2691 "./asn1/s1ap/s1ap.cnf"
   tvbuff_t *cell_id_tvb = NULL;
   offset = dissect_per_bit_string(tvb, offset, actx, tree, -1,
                                      28, 28, FALSE, NULL, 0, &cell_id_tvb, NULL);
@@ -7971,7 +7971,7 @@ static const per_sequence_t NR_CGI_sequence[] = {
 
 static int
 dissect_s1ap_NR_CGI(tvbuff_t *tvb _U_, int offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
-#line 2700 "./asn1/s1ap/s1ap.cnf"
+#line 2699 "./asn1/s1ap/s1ap.cnf"
   struct s1ap_private_data *s1ap_data = s1ap_get_private_data(actx->pinfo);
   s1ap_data->number_type = E212_NRCGI;
   offset = dissect_per_sequence(tvb, offset, actx, tree, hf_index,
@@ -18951,7 +18951,7 @@ proto_reg_handoff_s1ap(void)
   dissector_add_uint("s1ap.extension", id_LastNG_RANPLMNIdentity, create_dissector_handle(dissect_PLMNidentity_PDU, proto_s1ap));
   dissector_add_uint("s1ap.extension", id_PSCellInformation, create_dissector_handle(dissect_s1ap_PSCellInformation_PDU, proto_s1ap));
   dissector_add_uint("s1ap.extension", id_IMSvoiceEPSfallbackfrom5G, create_dissector_handle(dissect_IMSvoiceEPSfallbackfrom5G_PDU, proto_s1ap));
-  dissector_add_uint("s1ap.extension", id_TimeSinceSecondaryNodeRelease, create_dissector_handle(dissect_RequestTypeAdditionalInfo_PDU, proto_s1ap));
+  dissector_add_uint("s1ap.extension", id_RequestTypeAdditionalInfo, create_dissector_handle(dissect_RequestTypeAdditionalInfo_PDU, proto_s1ap));
   dissector_add_uint("s1ap.extension", id_ContextatSource, create_dissector_handle(dissect_ContextatSource_PDU, proto_s1ap));
   dissector_add_uint("s1ap.extension", id_Ethernet_Type, create_dissector_handle(dissect_Ethernet_Type_PDU, proto_s1ap));
   dissector_add_uint("s1ap.extension", id_IntersystemMeasurementConfiguration, create_dissector_handle(dissect_IntersystemMeasurementConfiguration_PDU, proto_s1ap));
