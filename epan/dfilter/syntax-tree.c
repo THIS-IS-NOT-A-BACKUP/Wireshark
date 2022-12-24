@@ -102,7 +102,7 @@ stnode_clear(stnode_t *node)
 }
 
 void
-stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data, char *token, const stloc_t *loc)
+stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data, char *token, df_loc_t loc)
 {
 	sttype_t	*type;
 
@@ -112,13 +112,7 @@ stnode_init(stnode_t *node, sttype_id_t type_id, gpointer data, char *token, con
 	node->repr_display = NULL;
 	node->repr_debug = NULL;
 	node->repr_token = token;
-	if (loc) {
-		node->location = *loc;
-	}
-	else {
-		node->location.col_start = -1;
-		node->location.col_len = 0;
-	}
+	node->location = loc;
 
 	if (type_id == STTYPE_UNINITIALIZED) {
 		node->type = NULL;
@@ -143,13 +137,13 @@ void
 stnode_replace(stnode_t *node, sttype_id_t type_id, gpointer data)
 {
 	char *token = g_strdup(node->repr_token);
-	stloc_t loc = node->location;
+	df_loc_t loc = node->location;
 	stnode_clear(node);
-	stnode_init(node, type_id, data, token, &loc);
+	stnode_init(node, type_id, data, token, loc);
 }
 
 stnode_t*
-stnode_new(sttype_id_t type_id, gpointer data, char *token, const stloc_t *loc)
+stnode_new(sttype_id_t type_id, gpointer data, char *token, df_loc_t loc)
 {
 	stnode_t	*node;
 
@@ -159,6 +153,13 @@ stnode_new(sttype_id_t type_id, gpointer data, char *token, const stloc_t *loc)
 	stnode_init(node, type_id, data, token, loc);
 
 	return node;
+}
+
+stnode_t*
+stnode_new_empty(sttype_id_t type_id)
+{
+	df_loc_t loc = {-1, 0};
+	return stnode_new(type_id, NULL, NULL, loc);
 }
 
 stnode_t*
@@ -243,10 +244,41 @@ stnode_token(stnode_t *node)
 	return node->repr_token;
 }
 
-stloc_t *
+df_loc_t
 stnode_location(stnode_t *node)
 {
-	return &node->location;
+	return node->location;
+}
+
+/* Finds the first and last location from a set and creates
+ * a new location from start of first (col_start) to end of
+ * last (col_start + col_len). */
+df_loc_t
+stnode_merge_location(stnode_t *st, ...)
+{
+	df_loc_t first, last, loc;
+	df_loc_t result;
+	va_list ap;
+
+	first = last = stnode_location(st);
+
+	va_start(ap, st);
+	while ((st = va_arg(ap, stnode_t *)) != NULL) {
+		loc = stnode_location(st);
+		if (loc.col_start >= 0) {
+			if (loc.col_start < first.col_start) {
+				first = loc;
+			}
+			else if (loc.col_start > last.col_start) {
+				last = loc;
+			}
+		}
+	}
+	va_end(ap);
+
+	result.col_start = first.col_start;
+	result.col_len = last.col_start - first.col_start + last.col_len;
+	return result;
 }
 
 #define IS_OPERATOR(node) \
