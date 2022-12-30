@@ -121,14 +121,6 @@ dfilter_init(void)
 	/* Allocate an instance of our Lemon-based parser */
 	ParserObj = DfilterAlloc(g_malloc);
 
-/* Enable parser tracing by defining AM_CFLAGS
- * so that it contains "-DDFTRACE".
- */
-#ifdef DFTRACE
-	/* Trace parser */
-	DfilterTrace(stdout, "lemon> ");
-#endif
-
 	/* Initialize the syntax-tree sub-sub-system */
 	sttype_init();
 
@@ -157,12 +149,10 @@ dfilter_new(GPtrArray *deprecated)
 
 	df = g_new0(dfilter_t, 1);
 	df->insns = NULL;
-
+	df->function_stack = NULL;
+	df->warnings = NULL;
 	if (deprecated)
 		df->deprecated = g_ptr_array_ref(deprecated);
-
-	df->function_stack = NULL;
-
 	return df;
 }
 
@@ -204,6 +194,9 @@ dfilter_free(dfilter_t *df)
 		g_slist_free(df->function_stack);
 	}
 
+	if (df->warnings)
+		g_slist_free_full(df->warnings, g_free);
+
 	g_free(df->registers);
 	g_free(df->attempted_load);
 	g_free(df->free_registers);
@@ -225,6 +218,7 @@ dfwork_new(void)
 	dfwork_t *dfw = g_new0(dfwork_t, 1);
 
 	dfw_error_init(&dfw->error);
+	dfw->warnings = NULL;
 
 	dfw->references =
 		g_hash_table_new_full(g_direct_hash, g_direct_equal,
@@ -273,6 +267,9 @@ dfwork_free(dfwork_t *dfw)
 	if (dfw->deprecated)
 		g_ptr_array_unref(dfw->deprecated);
 
+	if (dfw->warnings)
+		g_slist_free_full(dfw->warnings, g_free);
+
 	g_free(dfw->expanded_text);
 
 	wmem_destroy_allocator(dfw->dfw_scope);
@@ -308,7 +305,8 @@ const char *tokenstr(int token)
 		case TOKEN_TEST_NOT:	return "TEST_NOT";
 		case TOKEN_STRING:	return "STRING";
 		case TOKEN_CHARCONST:	return "CHARCONST";
-		case TOKEN_UNPARSED:	return "UNPARSED";
+		case TOKEN_IDENTIFIER:	return "IDENTIFIER";
+		case TOKEN_CONSTANT:	return "CONSTANT";
 		case TOKEN_LITERAL:	return "LITERAL";
 		case TOKEN_FIELD:	return "FIELD";
 		case TOKEN_LBRACKET:	return "LBRACKET";
@@ -323,6 +321,7 @@ const char *tokenstr(int token)
 		case TOKEN_RPAREN:	return "RPAREN";
 		case TOKEN_DOLLAR:	return "DOLLAR";
 		case TOKEN_ATSIGN:	return "ATSIGN";
+		case TOKEN_HASH:	return "HASH";
 	}
 	return "<unknown>";
 }
@@ -343,6 +342,16 @@ add_deprecated_token(dfwork_t *dfw, const char *token)
 		}
 	}
 	g_ptr_array_add(deprecated, g_strdup(token));
+}
+
+void
+add_compile_warning(dfwork_t *dfw, const char *format, ...)
+{
+	va_list ap;
+	va_start(ap, format);
+	char *msg = ws_strdup_vprintf(format, ap);
+	va_end(ap);
+	dfw->warnings = g_slist_prepend(dfw->warnings, msg);
 }
 
 char *
@@ -416,18 +425,32 @@ dfilter_compile_real(const gchar *text, dfilter_t **dfp,
 
 	df_set_extra(&state, scanner);
 
+	/* Enable/disable debugging for Flex. */
+	df_set_debug(flags & DF_DEBUG_FLEX, scanner);
+
+#ifndef NDEBUG
+	/* Enable/disable debugging for Lemon. */
+	DfilterTrace(flags & DF_DEBUG_LEMON ? stderr : NULL, "lemon> ");
+#else
+	if (flags & DF_DEBUG_LEMON) {
+		ws_message("Compile Wireshark without NDEBUG to enable Lemon debug traces");
+	}
+#endif
+
 	while (1) {
 		df_lval = stnode_new_empty(STTYPE_UNINITIALIZED);
 		token = df_lex(scanner);
 
 		/* Check for scanner failure */
 		if (token == SCAN_FAILED) {
+			ws_noisy("Scanning failed");
 			failure = TRUE;
 			break;
 		}
 
 		/* Check for end-of-input */
 		if (token == 0) {
+			ws_noisy("Scanning finished");
 			break;
 		}
 
@@ -511,6 +534,8 @@ dfilter_compile_real(const gchar *text, dfilter_t **dfp,
 		dfw->references = NULL;
 		dfilter->raw_references = dfw->raw_references;
 		dfw->raw_references = NULL;
+		dfilter->warnings = dfw->warnings;
+		dfw->warnings = NULL;
 
 		if (flags & DF_SAVE_TREE) {
 			ws_assert(tree_str);
@@ -595,6 +620,12 @@ dfilter_deprecated_tokens(dfilter_t *df) {
 		return df->deprecated;
 	}
 	return NULL;
+}
+
+GSList *
+dfilter_get_warnings(dfilter_t *df)
+{
+	return df->warnings;
 }
 
 void

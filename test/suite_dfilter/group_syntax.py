@@ -132,6 +132,12 @@ class case_syntax(unittest.TestCase):
         dfilter = '\ttcp.stream \r\n== 1'
         checkDFilterSucceed(dfilter)
 
+    def test_func_name_clash1(self, checkDFilterFail):
+        # "tcp" is a (non-existent) function, not a protocol
+        error = "Function 'tcp' does not exist"
+        dfilter = 'frame == tcp()'
+        checkDFilterFail(dfilter, error)
+
 @fixtures.uses_fixtures
 class case_equality(unittest.TestCase):
     trace_file = "sip.pcapng"
@@ -310,7 +316,7 @@ class case_field_reference(unittest.TestCase):
         checkDFilterCountWithSelectedFrame(dfilter, 1, 1)
 
 @fixtures.uses_fixtures
-class case_field_reference(unittest.TestCase):
+class case_layer(unittest.TestCase):
     trace_file = "ipoipoip.pcap"
 
     def test_layer_1(self, checkDFilterCount):
