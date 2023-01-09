@@ -41,11 +41,15 @@
 #include "ui/version_info.h"
 
 static int opt_verbose = 0;
-static int opt_noisy = 0;
+#define DFTEST_LOG_NONE     0
+#define DFTEST_LOG_DEBUG    1
+#define DFTEST_LOG_NOISY    2
+static int opt_log_level = DFTEST_LOG_NONE;
 static int opt_flex = 0;
 static int opt_lemon = 0;
 static int opt_syntax_tree = 0;
 static int opt_timer = 0;
+static long opt_optimize = 1;
 
 static gdouble elapsed_expand = 0;
 static gdouble elapsed_compile = 0;
@@ -85,10 +89,11 @@ putloc(FILE *fp, df_loc_t loc)
     fputc('\n', fp);
 }
 
-static void
-print_usage(void)
+WS_NORETURN static void
+print_usage(int status)
 {
     FILE *fp = stdout;
+    fprintf(fp, "\n");
     fprintf(fp, "Usage: dftest [OPTIONS] -- EXPRESSION\n");
     fprintf(fp, "Options:\n");
     fprintf(fp, "  -V, --verbose       enable verbose mode\n");
@@ -97,8 +102,12 @@ print_usage(void)
     fprintf(fp, "  -l, --lemon         enable Lemon debug trace\n");
     fprintf(fp, "  -s, --syntax        print syntax tree\n");
     fprintf(fp, "  -t, --timer         print elapsed compilation time\n");
+    fprintf(fp, "  -0, --optimize=0    do not optimize (check syntax)\n");
     fprintf(fp, "  -h, --help          display this help and exit\n");
     fprintf(fp, "  -v, --version       print version\n");
+    fprintf(fp, "\n");
+    ws_log_print_usage(fp);
+    exit(status);
 }
 
 static void
@@ -166,7 +175,8 @@ compile_filter(const char *text, dfilter_t **dfp, GTimer *timer)
     gboolean ok;
     df_error_t *df_err = NULL;
 
-    df_flags |= DF_OPTIMIZE;
+    if (opt_optimize > 0)
+        df_flags |= DF_OPTIMIZE;
     if (opt_syntax_tree)
         df_flags |= DF_SAVE_TREE;
     if (opt_flex)
@@ -222,7 +232,7 @@ main(int argc, char **argv)
 
     ws_init_version_info("DFTest", NULL, NULL);
 
-    const char *optstring = "hvdflsVt";
+    const char *optstring = "hvdflstV0";
     static struct ws_option long_options[] = {
         { "help",     ws_no_argument,   0,  'h' },
         { "version",  ws_no_argument,   0,  'v' },
@@ -232,6 +242,7 @@ main(int argc, char **argv)
         { "syntax",   ws_no_argument,   0,  's' },
         { "timer",    ws_no_argument,   0,  't' },
         { "verbose",  ws_no_argument,   0,  'V' },
+        { "optimize", ws_required_argument, 0, 1000 },
         { NULL,       0,                0,  0   }
     };
     int opt;
@@ -246,7 +257,7 @@ main(int argc, char **argv)
                 opt_verbose = 1;
                 break;
             case 'd':
-                opt_noisy = 1;
+                opt_log_level = DFTEST_LOG_NOISY;
                 break;
             case 'f':
                 opt_flex = 1;
@@ -260,20 +271,31 @@ main(int argc, char **argv)
             case 't':
                 opt_timer = 1;
                 break;
+            case '0':
+                opt_optimize = 0;
+                break;
+            case 1000:
+                if (strlen(ws_optarg) > 1 || !g_ascii_isdigit(*ws_optarg)) {
+                    printf("Error: \"%s\" is not a valid number 0-9\n", ws_optarg);
+                    print_usage(EXIT_FAILURE);
+                }
+                errno = 0;
+                opt_optimize = strtol(ws_optarg, NULL, 10);
+                if (errno) {
+                    printf("Error: %s\n", g_strerror(errno));
+                    print_usage(EXIT_FAILURE);
+                }
+                break;
             case 'v':
                 show_help_header(NULL);
                 exit(EXIT_SUCCESS);
                 break;
             case 'h':
                 show_help_header(NULL);
-                printf("\n");
-                print_usage();
-                exit(EXIT_SUCCESS);
+                print_usage(EXIT_SUCCESS);
                 break;
             case '?':
-                printf("\n");
-                print_usage();
-                exit(EXIT_FAILURE);
+                print_usage(EXIT_FAILURE);
             default:
                 ws_assert_not_reached();
         }
@@ -281,13 +303,18 @@ main(int argc, char **argv)
 
     /* Check for filter on command line */
     if (argv[ws_optind] == NULL) {
-        printf("Error: Missing argument.\n\n");
-        print_usage();
-        exit(EXIT_FAILURE);
+        printf("Error: Missing argument.\n");
+        print_usage(EXIT_FAILURE);
     }
 
-    if (opt_noisy)
+    if (opt_log_level == DFTEST_LOG_NOISY) {
         ws_log_set_noisy_filter(LOG_DOMAIN_DFILTER);
+    }
+    else if (opt_flex || opt_lemon) {
+        /* Enable some dfilter logs with flex/lemon traces for context. */
+        ws_log_set_debug_filter(LOG_DOMAIN_DFILTER);
+        opt_log_level = DFTEST_LOG_DEBUG;
+    }
 
     /*
      * Get credential information for later use.
@@ -376,6 +403,11 @@ main(int argc, char **argv)
     if (!compile_filter(expanded_text, &df, timer)) {
         exit_status = 2;
         goto out;
+    }
+
+    /* If logging is enabled add an empty line. */
+    if (opt_log_level > DFTEST_LOG_NONE) {
+        printf("\n");
     }
 
     if (df == NULL) {
