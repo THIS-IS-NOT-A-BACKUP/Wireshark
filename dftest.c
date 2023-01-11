@@ -39,6 +39,7 @@
 #include "ui/cmdarg_err.h"
 #include "ui/failure_message.h"
 #include "ui/version_info.h"
+#include "ui/exit_codes.h"
 
 static int opt_verbose = 0;
 #define DFTEST_LOG_NONE     0
@@ -50,6 +51,7 @@ static int opt_lemon = 0;
 static int opt_syntax_tree = 0;
 static int opt_timer = 0;
 static long opt_optimize = 1;
+static int opt_show_types = 0;
 
 static gdouble elapsed_expand = 0;
 static gdouble elapsed_compile = 0;
@@ -103,6 +105,7 @@ print_usage(int status)
     fprintf(fp, "  -s, --syntax        print syntax tree\n");
     fprintf(fp, "  -t, --timer         print elapsed compilation time\n");
     fprintf(fp, "  -0, --optimize=0    do not optimize (check syntax)\n");
+    fprintf(fp, "      --types         show field value types\n");
     fprintf(fp, "  -h, --help          display this help and exit\n");
     fprintf(fp, "  -v, --version       print version\n");
     fprintf(fp, "\n");
@@ -243,6 +246,7 @@ main(int argc, char **argv)
         { "timer",    ws_no_argument,   0,  't' },
         { "verbose",  ws_no_argument,   0,  'V' },
         { "optimize", ws_required_argument, 0, 1000 },
+        { "types",    ws_no_argument,   0, 2000 },
         { NULL,       0,                0,  0   }
     };
     int opt;
@@ -277,14 +281,17 @@ main(int argc, char **argv)
             case 1000:
                 if (strlen(ws_optarg) > 1 || !g_ascii_isdigit(*ws_optarg)) {
                     printf("Error: \"%s\" is not a valid number 0-9\n", ws_optarg);
-                    print_usage(EXIT_FAILURE);
+                    print_usage(INVALID_OPTION);
                 }
                 errno = 0;
                 opt_optimize = strtol(ws_optarg, NULL, 10);
                 if (errno) {
                     printf("Error: %s\n", g_strerror(errno));
-                    print_usage(EXIT_FAILURE);
+                    print_usage(INVALID_OPTION);
                 }
+                break;
+            case 2000:
+                opt_show_types = 1;
                 break;
             case 'v':
                 show_help_header(NULL);
@@ -392,7 +399,7 @@ main(int argc, char **argv)
     /* Expand macros. */
     expanded_text = expand_filter(text, timer);
     if (expanded_text == NULL) {
-        exit_status = 2;
+        exit_status = INVALID_FILTER;
         goto out;
     }
 
@@ -401,7 +408,7 @@ main(int argc, char **argv)
 
     /* Compile it */
     if (!compile_filter(expanded_text, &df, timer)) {
-        exit_status = 2;
+        exit_status = INVALID_FILTER;
         goto out;
     }
 
@@ -412,14 +419,17 @@ main(int argc, char **argv)
 
     if (df == NULL) {
         printf("Filter is empty.\n");
-        exit_status = 1;
+        exit_status = INVALID_FILTER;
         goto out;
     }
 
     if (opt_syntax_tree)
         print_syntax_tree(df);
 
-    dfilter_dump(stdout, df);
+    uint16_t dump_flags = 0;
+    if (opt_show_types)
+        dump_flags |= DF_DUMP_SHOW_FTYPE;
+    dfilter_dump(stdout, df, dump_flags);
 
     print_warnings(df);
 
