@@ -477,16 +477,6 @@ if(WIN32)
 		# This avoids conflicts with the C++ standard library.
 		#
 		-DNOMINMAX
-		#
-		# Make sure everyone is using the same API and that it's sufficient
-		# for our needs.
-		# This should match the following:
-		# - The <compatibility><application> section in resources\wireshark.exe.manifest.in
-		# - The GetWindowsVersion parts of packaging\nsis\wireshark.nsi
-		# - The VersionNT parts of packaging\wix\Prerequisites.wxi
-		#
-		-DNTDDI_VERSION=NTDDI_WIN7
-		-D_WIN32_WINNT=_WIN32_WINNT_WIN7
 	)
 endif()
 
@@ -695,7 +685,7 @@ else() # ! MSVC
 	#
 	if((CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS "5.1") OR
 	   (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_COMPILER_VERSION VERSION_LESS "6.0") OR
-	   (CMAKE_C_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_C_COMPILER_VERSION VERSION_LESS "10.0"))
+	   (CMAKE_C_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_C_COMPILER_VERSION VERSION_LESS "12.0"))
 		if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_VERSION VERSION_LESS "4.7")
 			list(APPEND WIRESHARK_C_ONLY_FLAGS -Wno-missing-field-initializers)
 		endif()
@@ -3724,7 +3714,7 @@ if(CLEAN_C_FILES)
 	# the INCLUDE environment variable).
 	# This should apparently be handled for us via CMAKE_RC_FLAG_REGEX
 	# in CMakeRCInformation.cmake but that doesn't appear to work.
-	if(MSVC)
+	if(WIN32)
 		list(FILTER CLEAN_C_FILES EXCLUDE REGEX ".*\\.rc")
 	endif()
 
