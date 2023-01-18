@@ -3766,6 +3766,8 @@ set(SHARK_PUBLIC_HEADERS
 
 install(FILES ${SHARK_PUBLIC_HEADERS}
 	DESTINATION ${PROJECT_INSTALL_INCLUDEDIR}
+	COMPONENT "Development"
+	EXCLUDE_FROM_ALL
 )
 
 # Install icons and other desktop files for Freedesktop.org-compliant desktops.
@@ -3794,11 +3796,39 @@ if(BUILD_wireshark AND QT_FOUND AND NOT APPLE AND (NOT WIN32 OR USE_MSYSTEM))
 		RENAME org.wireshark.Wireshark.svg)
 endif()
 
+if(BUILD_logray AND QT_FOUND AND NOT APPLE AND (NOT WIN32 OR USE_MSYSTEM))
+	install(FILES resources/freedesktop/org.wireshark.Logray-mime.xml
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/mime/packages"
+		RENAME org.wireshark.Logray.xml
+	)
+	install(FILES resources/freedesktop/org.wireshark.Logray.metainfo.xml
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/metainfo"
+	)
+	if(BUILD_wireshark AND QT_FOUND)
+		install(FILES resources/freedesktop/org.wireshark.Logray.desktop
+			DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/applications")
+	endif()
+	foreach(size 16 24 32 48 64 128 256)
+		install(FILES resources/icons/lricon${size}.png
+			DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps"
+			RENAME org.wireshark.Logray.png)
+		install(FILES resources/icons/WiresharkDoc-${size}.png
+			DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/mimetypes"
+			RENAME org.wireshark.Logray-mimetype.png)
+	endforeach()
+	install(FILES resources/icons/lricon.svg
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps"
+		RENAME org.wireshark.Logray.svg)
+endif()
+
 install(
 	FILES
 		"${CMAKE_BINARY_DIR}/wireshark.pc"
 	DESTINATION
 		${CMAKE_INSTALL_LIBDIR}/pkgconfig
+	COMPONENT
+		"Development"
+	EXCLUDE_FROM_ALL
 )
 
 install(
@@ -3827,19 +3857,6 @@ else()
 	set(WIRESHARK_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/cmake")
 endif()
 
-install(
-	FILES
-		# Qt6 extends CMAKE_MODULE_PATH, so use our local version
-		${WS_CMAKE_MODULE_PATH}/FindGLIB2.cmake
-		${WS_CMAKE_MODULE_PATH}/FindWSLibrary.cmake
-		${WS_CMAKE_MODULE_PATH}/FindWSWinLibs.cmake
-		${WS_CMAKE_MODULE_PATH}/UseAsn2Wrs.cmake
-		${WS_CMAKE_MODULE_PATH}/LocatePythonModule.cmake
-		${WS_CMAKE_MODULE_PATH}/UseMakePluginReg.cmake
-	DESTINATION
-		${WIRESHARK_INSTALL_CMAKEDIR}
-)
-
 include(CMakePackageConfigHelpers)
 
 configure_package_config_file(WiresharkConfig.cmake.in
@@ -3863,10 +3880,21 @@ install(
 		${CMAKE_BINARY_DIR}/WiresharkConfigVersion.cmake
 	DESTINATION
 		${WIRESHARK_INSTALL_CMAKEDIR}
+	COMPONENT
+		"Development"
+	EXCLUDE_FROM_ALL
 )
 
 install(EXPORT WiresharkTargets
 	DESTINATION ${WIRESHARK_INSTALL_CMAKEDIR}
+	COMPONENT "Development"
+	EXCLUDE_FROM_ALL
+)
+
+# This isn't strictly needed but it makes working around debhelper's
+# cleverness a lot easier.
+add_custom_target(install-headers
+	COMMAND ${CMAKE_COMMAND} -DCOMPONENT=Development -P cmake_install.cmake
 )
 
 if (DOXYGEN_EXECUTABLE)
