@@ -509,7 +509,6 @@ File "${STAGING_DIR}\COPYING.txt"
 File "${STAGING_DIR}\NEWS.txt"
 File "${STAGING_DIR}\README.txt"
 File "${STAGING_DIR}\README.windows.txt"
-File "${STAGING_DIR}\AUTHORS-SHORT"
 File "${STAGING_DIR}\manuf"
 File "${STAGING_DIR}\wka"
 File "${STAGING_DIR}\services"
@@ -521,8 +520,6 @@ File "${STAGING_DIR}\dumpcap.exe"
 File "${STAGING_DIR}\dumpcap.html"
 File "${STAGING_DIR}\extcap.html"
 File "${STAGING_DIR}\ipmap.html"
-File "${STAGING_DIR}\gpl-2.0-standalone.html"
-File "${STAGING_DIR}\Acknowledgements.md"
 
 ; C-runtime redistributable
 ; vc_redist.x64.exe or vc_redist.x86.exe - copy and execute the redistributable installer
