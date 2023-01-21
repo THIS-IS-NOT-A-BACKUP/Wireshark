@@ -79,8 +79,12 @@ AStringListListModel(parent)
 #endif
 
     while (!ReadFile_authors.atEnd()) {
-        QStringList entry = ReadFile_authors.readLine().split(",", Qt::SkipEmptyParts);
-
+        QString line = ReadFile_authors.readLine();
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+        QStringList entry = line.split(",", Qt::SkipEmptyParts);
+#else
+        QStringList entry = QStringList() << line.section(',', 0, 0) << line.section(',', 1, 1);
+#endif
         if (entry.size() == 2) {
             appendRow(entry);
         }
@@ -215,8 +219,8 @@ FolderListModel::FolderListModel(QObject * parent):
 #endif
 
     /* Extcap */
-    appendRow(QStringList() << tr("Personal Extcap path") << QString(get_persconffile_path("extcap", FALSE)).trimmed() << tr("external capture (extcap) plugins"));
-    appendRow(QStringList() << tr("Global Extcap path") << QString(get_extcap_dir()).trimmed() << tr("external capture (extcap) plugins"));
+    appendRow(QStringList() << tr("Personal Extcap path") << QString(get_extcap_pers_dir()) << tr("external capture (extcap) plugins"));
+    appendRow(QStringList() << tr("Global Extcap path") << QString(get_extcap_dir()) << tr("external capture (extcap) plugins"));
 
 #ifdef HAVE_MAXMINDDB
     /* MaxMind DB */
