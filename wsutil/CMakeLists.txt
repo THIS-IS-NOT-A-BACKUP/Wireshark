@@ -260,6 +260,7 @@ set_source_files_properties(
 	PROPERTIES
 	COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
+
 if (HAVE_SSE4_2)
 	# TODO with CMake 2.8.12, we could use COMPILE_OPTIONS and just append
 	# instead of this COMPILE_FLAGS duplication...
@@ -268,6 +269,14 @@ if (HAVE_SSE4_2)
 		PROPERTIES
 		COMPILE_FLAGS "${WERROR_COMMON_FLAGS} ${SSE4_2_FLAG}"
 	)
+endif()
+
+if (ENABLE_APPLICATION_BUNDLE)
+	set_source_files_properties(
+		filesystem.c
+		PROPERTIES
+		COMPILE_FLAGS "${WERROR_COMMON_FLAGS} -DENABLE_APPLICATION_BUNDLE"
+)
 endif()
 
 add_library(wsutil
@@ -322,6 +331,38 @@ install(TARGETS wsutil
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+add_library(wsutil_static STATIC
+	${WSUTIL_FILES}
+	$<TARGET_OBJECTS:wmem>
+)
+
+target_compile_definitions(wsutil_static PRIVATE
+	ENABLE_STATIC
+	BUILD_WSUTIL
+)
+
+target_link_libraries(wsutil_static
+	PUBLIC
+		${GLIB2_LIBRARIES}
+		${GMODULE2_LIBRARIES}
+		${GNUTLS_LIBRARIES}
+		${PCRE2_LIBRARIES}
+		${GCRYPT_LIBRARIES}
+	PRIVATE
+		${APPLE_CORE_FOUNDATION_LIBRARY}
+		${CMAKE_DL_LIBS}
+		${M_LIBRARIES}
+		${WIN_IPHLPAPI_LIBRARY}
+		${WIN_WS2_32_LIBRARY}
+)
+
+target_include_directories(wsutil_static
+	SYSTEM PUBLIC
+		${GCRYPT_INCLUDE_DIRS}
+		${GNUTLS_INCLUDE_DIRS}
+		${PCRE2_INCLUDE_DIRS}
 )
 
 add_executable(test_wsutil EXCLUDE_FROM_ALL
