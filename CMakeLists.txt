@@ -32,6 +32,7 @@ if(WIN32)
 		message(STATUS "Using 3rd party repository")
 	endif()
 	set(USE_MSYSTEM ${_msystem} CACHE INTERNAL "Use MSYS2 subsystem")
+	set(HAVE_MSYSTEM ${USE_MSYSTEM}) # For config.h
 	set(USE_REPOSITORY ${_repository} CACHE INTERNAL "Use Wireshark 3rd Party Repository")
 endif()
 
@@ -3811,6 +3812,7 @@ set(SHARK_PUBLIC_HEADERS
 	include/ws_codepoints.h
 	include/ws_compiler_tests.h
 	include/ws_diag_control.h
+	include/ws_exit_codes.h
 	include/ws_log_defs.h
 	include/ws_posix_compat.h
 	include/ws_symbol_export.h
