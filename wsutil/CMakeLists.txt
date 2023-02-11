@@ -32,6 +32,8 @@ set(WSUTIL_PUBLIC_HEADERS
 	bits_ctz.h
 	bitswap.h
 	buffer.h
+	clopts_common.h
+	cmdarg_err.h
 	codecs.h
 	color.h
 	cpu_info.h
@@ -103,6 +105,8 @@ set(WSUTIL_COMMON_FILES
 	base32.c
 	bitswap.c
 	buffer.c
+	clopts_common.c
+	cmdarg_err.c
 	codecs.c
 	crash_info.c
 	crc10.c
@@ -119,6 +123,7 @@ set(WSUTIL_COMMON_FILES
 	eax.c
 	feature_list.c
 	filesystem.c
+	filter_files.c
 	g711.c
 	inet_addr.c
 	interface.c
