@@ -247,7 +247,7 @@ endif()
 if(CMAKE_C_COMPILER_ID MATCHES "MSVC")
 	set(COMPILER_CAN_HANDLE_SSE4_2 TRUE)
 	set(SSE4_2_FLAG "")
-else()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686|x86|x86_64|AMD64")
 	check_c_compiler_flag(-msse4.2 COMPILER_CAN_HANDLE_SSE4_2)
 	if(COMPILER_CAN_HANDLE_SSE4_2)
 		set(SSE4_2_FLAG "-msse4.2")
@@ -257,11 +257,15 @@ else()
 			set(SSE4_2_FLAG "-xarch=sse4_2")
 		endif()
 	endif()
-	if(SSE4_2_FLAG)
-		message(STATUS "SSE4.2 compiler flag: ${SSE4_2_FLAG}")
-	else()
-		message(STATUS "No SSE4.2 compiler flag enabled")
-	endif()
+else()
+	set(COMPILE_CAN_HANDLE_SSE4_2 FALSE)
+	set(SSE4_2_FLAG "")
+endif()
+
+if(SSE4_2_FLAG)
+	message(STATUS "SSE4.2 compiler flag: ${SSE4_2_FLAG}")
+else()
+	message(STATUS "No SSE4.2 compiler flag enabled")
 endif()
 if(COMPILER_CAN_HANDLE_SSE4_2)
 	#
@@ -405,6 +409,45 @@ install(FILES ${WSUTIL_PUBLIC_HEADERS}
 	COMPONENT "Development"
 	EXCLUDE_FROM_ALL
 )
+
+add_library(wsutil_static STATIC
+	${WSUTIL_FILES}
+)
+
+target_compile_definitions(wsutil_static PRIVATE
+	ENABLE_STATIC
+	BUILD_WSUTIL
+)
+
+target_link_libraries(wsutil_static
+	PUBLIC
+		${GLIB2_LIBRARIES}
+	PRIVATE
+		${GMODULE2_LIBRARIES}
+		${APPLE_CORE_FOUNDATION_LIBRARY}
+		${CMAKE_DL_LIBS}
+		${GCRYPT_LIBRARIES}
+		${GNUTLS_LIBRARIES}
+		${ZLIB_LIBRARIES}
+		${PCRE2_LIBRARIES}
+		${WIN_IPHLPAPI_LIBRARY}
+		${WIN_WS2_32_LIBRARY}
+)
+
+target_include_directories(wsutil_static SYSTEM
+	PUBLIC
+		${GLIB2_INCLUDE_DIRS}
+		${GCRYPT_INCLUDE_DIRS}
+		${GNUTLS_INCLUDE_DIRS}
+	PRIVATE
+		${GMODULE2_INCLUDE_DIRS}
+		${ZLIB_INCLUDE_DIRS}
+		${PCRE2_INCLUDE_DIRS}
+)
+
+if(NOT VCSVERSION_OVERRIDE)
+	add_dependencies(wsutil_static vcs_version)
+endif()
 
 add_executable(wmem_test EXCLUDE_FROM_ALL wmem/wmem_test.c ${WMEM_FILES})
 
