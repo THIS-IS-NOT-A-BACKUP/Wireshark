@@ -107,6 +107,7 @@ static int hf_oran_reserved = -1;
 static int hf_oran_reserved_1bit = -1;
 static int hf_oran_reserved_2bits = -1;
 static int hf_oran_reserved_4bits = -1;
+static int hf_oran_reserved_6bits = -1;
 
 static int hf_oran_ext11_reserved = -1;
 
@@ -178,6 +179,25 @@ static int hf_oran_prb_allocation = -1;
 static int hf_oran_nextSymbolId = -1;
 static int hf_oran_nextStartPrbc = -1;
 
+static int hf_oran_puncPattern = -1;
+static int hf_oran_numPuncPatterns = -1;
+static int hf_oran_symbolMask_ext20 = -1;
+static int hf_oran_startPuncPrb = -1;
+static int hf_oran_numPuncPrb = -1;
+static int hf_oran_puncReMask = -1;
+static int hf_oran_RbgIncl = -1;
+
+static int hf_oran_ci_prb_group_size = -1;
+
+static int hf_oran_num_ueid = -1;
+
+static int hf_oran_antMask = -1;
+
+static int hf_oran_transmissionWindowOffset = -1;
+static int hf_oran_transmissionWindowSize = -1;
+static int hf_oran_toT = -1;
+
+
 /* Computed fields */
 static int hf_oran_c_eAxC_ID = -1;
 static int hf_oran_refa = -1;
@@ -203,6 +223,7 @@ static gint ett_oran_bfwcomphdr = -1;
 static gint ett_oran_bfwcompparam = -1;
 static gint ett_oran_ext19_port = -1;
 static gint ett_oran_prb_allocation = -1;
+static gint ett_oran_punc_pattern = -1;
 
 
 /* Expert info */
@@ -491,6 +512,13 @@ static const value_string beam_group_type_vals[] = {
 static const value_string interface_name_vals[] = {
     {0x0, "LTE"},
     {0x1, "NR"},
+    {0, NULL}
+};
+
+/* 7.7.18.4 toT (type of transmission) */
+static const value_string type_of_transmission_vals[] = {
+    {0x0, "normal transmission mode, data can be distributed in any way the O-RU is implemented to transmit data"},
+    {0x1, "uniformly distributed over the transmission window"},
     {0, NULL}
 };
 
@@ -1116,7 +1144,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
         proto_item_append_text(extension_ti, " (%s)", val_to_str_const(exttype, exttype_vals, "Unknown"));
 
         /* extLen (number of 32-bit words) */
-        guint32 extlen_len = ((exttype==11)||(exttype==19)) ? 2 : 1;  /* Extensions 11/19 are special */
+        guint32 extlen_len = ((exttype==11)||(exttype==19)||(exttype==20)) ? 2 : 1;  /* Extensions 11/19/20 are special */
         guint32 extlen;
         proto_item *extlen_ti = proto_tree_add_item_ret_uint(extension_tree, hf_oran_extlen, tvb,
                                                              offset, extlen_len, ENC_BIG_ENDIAN, &extlen);
@@ -1584,15 +1612,45 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 break;
 
             case 16:  /* Section description for antenna mapping in UE channel information based UL beamforming */
-                /* TODO */
+            {
+                guint32 extlen_remaining_bytes = (extlen*4) - 2;
+                guint num_ant_masks = extlen_remaining_bytes / 8;
+                for (guint n=0; n < num_ant_masks; n++) {
+                    proto_item *ti = proto_tree_add_item(extension_tree, hf_oran_antMask, tvb, offset, 8, ENC_BIG_ENDIAN);
+                    proto_item_append_text(ti, " (RX eAxC #%u)", n+1);
+                    offset += 8;
+                }
                 break;
+            }
 
             case 17:  /* Section description for indication of user port group */
-                /* TODO */
+            {
+                guint32 extlen_remaining_bytes = (extlen*4) - 2;
+                guint32 end_bit = (offset+extlen_remaining_bytes) * 8;
+                guint32 ueid_index = 1;
+                /* TODO: just filling up all available bytes - some may actually be padding.. */
+                for (guint32 bit_offset=offset*8; bit_offset < end_bit; bit_offset+=4, ueid_index++) {
+                    proto_item *ti = proto_tree_add_bits_item(extension_tree, hf_oran_num_ueid, tvb, bit_offset, 4, ENC_BIG_ENDIAN);
+                    proto_item_append_text(ti, " (user #%u)", ueid_index);
+                }
                 break;
+            }
 
             case 18:  /* Section description for Uplink Transmission Management */
-                /* TODO */
+                /* transmissionWindowOffset */
+                proto_tree_add_item(extension_tree, hf_oran_transmissionWindowOffset, tvb, offset, 2, ENC_BIG_ENDIAN);
+                offset += 2;
+                /* reserved (2 bits) */
+                proto_tree_add_item(extension_tree, hf_oran_reserved_2bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                /* transmissionWindowSize (14 bits) */
+                proto_tree_add_item(extension_tree, hf_oran_transmissionWindowSize, tvb, offset, 2, ENC_BIG_ENDIAN);
+                offset += 2;
+
+                /* reserved (6 bits) */
+                proto_tree_add_item(extension_tree, hf_oran_reserved_6bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                /* toT (2 bits) */
+                proto_tree_add_item(extension_tree, hf_oran_toT, tvb, offset, 1, ENC_BIG_ENDIAN);
+                offset += 1;
                 break;
 
             case 19:  /* Compact beamforming information for multiple port */
@@ -1723,11 +1781,65 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
             }
 
             case 20:  /* Puncturing extension */
-                /* TODO */
-                break;
+            {
+                /* numPuncPatterns */
+                guint32 numPuncPatterns;
+                proto_tree_add_item_ret_uint(extension_tree, hf_oran_numPuncPatterns, tvb, offset, 1, ENC_BIG_ENDIAN, &numPuncPatterns);
+                offset += 1;
 
+                /* Add each puncturing pattern */
+                for (guint32 n=0; n < numPuncPatterns; n++) {
+                    guint pattern_start_offset = offset;
+
+                    /* Subtree for this puncturing pattern */
+                    proto_item *pattern_ti = proto_tree_add_string_format(extension_tree, hf_oran_puncPattern,
+                                                                         tvb, offset, 0,
+                                                                         "", "Puncturing Pattern: %u/%u", n+1, hf_oran_numPuncPatterns);
+                    proto_tree *pattern_tree = proto_item_add_subtree(pattern_ti, ett_oran_punc_pattern);
+
+                    /* SymbolMask (14 bits) */
+                    proto_tree_add_item(pattern_tree, hf_oran_symbolMask_ext20, tvb, offset, 2, ENC_BIG_ENDIAN);
+                    offset += 1;
+                    /* startPuncPrb (10 bits) */
+                    proto_tree_add_item(pattern_tree, hf_oran_startPuncPrb, tvb, offset, 1, ENC_BIG_ENDIAN);
+                    offset += 2;
+                    /* numPuncPrb (8 bits) */
+                    proto_tree_add_item(pattern_tree, hf_oran_numPuncPrb, tvb, offset, 1, ENC_BIG_ENDIAN);
+                    offset += 1;
+                    /* puncReMask (12 bits) */
+                    proto_tree_add_item(pattern_tree, hf_oran_puncReMask, tvb, offset, 2, ENC_BIG_ENDIAN);
+                    offset += 1;
+                    /* rb (1 bit) */
+                    proto_tree_add_item(pattern_tree, hf_oran_rb, tvb, offset, 1, ENC_BIG_ENDIAN);
+                    /* reserved (2 bits? - spec says 1) */
+                    proto_tree_add_bits_item(pattern_tree, hf_oran_reserved, tvb, offset*8, 2, ENC_BIG_ENDIAN);
+                    /* rbgIncl */
+                    gboolean rbgIncl;
+                    proto_tree_add_item_ret_boolean(pattern_tree, hf_oran_RbgIncl, tvb, offset, 1, ENC_BIG_ENDIAN, &rbgIncl);
+                    offset += 1;
+
+                    if (rbgIncl) {
+                        /* reserved (1 bit) */
+                        proto_tree_add_item(pattern_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* rbgSize(3 bits) */
+                        proto_tree_add_item(pattern_tree, hf_oran_rbgSize, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* rbgMask (28 bits) */
+                        proto_tree_add_item(pattern_tree, hf_oran_rbgMask, tvb, offset, 4, ENC_BIG_ENDIAN);
+                        offset += 4;
+                    }
+
+                    proto_item_set_len(pattern_ti, offset-pattern_start_offset);
+                }
+
+                break;
+            }
             case 21:  /* Variable PRB group size for channel information */
-                /* TODO */
+                /* ciPrbGroupSize */
+                proto_tree_add_item(extension_tree, hf_oran_ci_prb_group_size, tvb, offset, 1, ENC_BIG_ENDIAN);
+                offset += 1;
+                /* reserved (8 bits) */
+                proto_tree_add_bits_item(extension_tree, hf_oran_reserved, tvb, offset*8, 8, ENC_BIG_ENDIAN);
+                offset += 1;
                 break;
 
             case 22:  /* ACK/NACK request */
@@ -2821,6 +2933,13 @@ proto_register_oran(void)
           NULL,
           HFILL}
         },
+        {&hf_oran_reserved_6bits,
+         {"reserved", "oran_fh_cus.reserved",
+          FT_UINT8, BASE_HEX,
+          NULL, 0xfc,
+          NULL,
+          HFILL}
+        },
 
         {&hf_oran_ext11_reserved,
          {"Reserved", "oran_fh_cus.reserved",
@@ -3295,6 +3414,116 @@ proto_register_oran(void)
             "number of PRBs in PRB range",
             HFILL }
         },
+
+        /* Puncturing patters as appears in SE 20 */
+        {&hf_oran_puncPattern,
+         {"puncPattern", "oran_fh_cus.puncPattern",
+          FT_STRING, FT_NONE,
+          NULL, 0x0,
+          NULL,
+          HFILL}
+        },
+
+        /* 7.7.20.2 numPuncPatterns */
+        { &hf_oran_numPuncPatterns,
+          { "numPuncPatterns", "oran_fh_cus.numPuncPatterns",
+            FT_UINT8, BASE_DEC,
+            NULL, 0x0,
+            "number of puncturing patterns",
+            HFILL }
+        },
+        /* 7.7.20.3 symbolMask */
+        {&hf_oran_symbolMask_ext20,
+         {"symbolMask", "oran_fh_cus.symbolMask",
+          FT_UINT16, BASE_HEX,
+          NULL, 0xfffc,
+          "Bitmask where each bit indicates the symbols associated with the puncturing pattern",
+          HFILL}
+        },
+        /* 7.7.20.4 startPuncPrb */
+        {&hf_oran_startPuncPrb,
+         {"numPuncPrb", "oran_fh_cus.startPuncPrb",
+          FT_UINT16, BASE_DEC,
+          NULL, 0x03ff,
+          "starting PRB to which one puncturing pattern applies",
+          HFILL}
+        },
+        /* 7.7.20.5 numPuncPrb */
+        {&hf_oran_numPuncPrb,
+         {"numPuncPrb", "oran_fh_cus.numPuncPrb",
+          FT_UINT24, BASE_DEC,
+          NULL, 0x03ffff,
+          "the number of PRBs of the puncturing pattern",
+          HFILL}
+        },
+        /* 7.7.20.6 puncReMask */
+        {&hf_oran_puncReMask,
+         {"puncReMask", "oran_fh_cus.punkReMask",
+          FT_UINT16, BASE_DEC,
+          NULL, 0xffc0,
+          "puncturing pattern RE mask",
+          HFILL}
+        },
+        /* 7.7.20.4 rbgIncl */
+        {&hf_oran_RbgIncl,
+         {"rbgIncl", "oran_fh_cus.rbgIncl",
+          FT_BOOLEAN, 8,
+          NULL, 0x01,
+          "rbg included flag",
+          HFILL}
+        },
+
+        /* 7.7.21.2 ciPrbGroupSize */
+        {&hf_oran_ci_prb_group_size,
+         {"ciPrbGroupSize", "oran_fh_cus.ciPrbGroupSize",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "channel information PRB group size",
+          HFILL}
+        },
+
+        /* 7.7.17.2 numUeID */
+        {&hf_oran_num_ueid,
+         {"numUeID", "oran_fh_cus.numUeID",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "number of ueIDs per user",
+          HFILL}
+        },
+
+        /* 7.7.16.2 antMask */
+        {&hf_oran_antMask,
+         {"antMask", "oran_fh_cus.antMask",
+          FT_UINT64, BASE_HEX,
+          NULL, 0xffffffffffffffff,
+          "indices of antennas to be pre-combined per RX endpoint",
+          HFILL}
+        },
+
+        /* 7.7.18.2 transmissionWindowOffset */
+        {&hf_oran_transmissionWindowOffset,
+         {"transmissionWindowOffset", "oran_fh_cus.transmissionWindowOffset",
+          FT_UINT16, BASE_DEC,
+          NULL, 0x0,
+          "start of the transmission window as an offset to when the transmission window would have been without this parameter, i.e. (Ta3_max - Ta3_min)",
+          HFILL}
+        },
+        /* 7.7.18.3 transmissionWindowSize */
+        {&hf_oran_transmissionWindowSize,
+         {"transmissionWindowSize", "oran_fh_cus.transmissionWindowSize",
+          FT_UINT16, BASE_DEC,
+          NULL, 0x3fff,
+          "size of the transmission window in resolution µs",
+          HFILL}
+        },
+        /* 7.7.18.4 toT */
+        {&hf_oran_toT,
+         {"toT", "oran_fh_cus.toT",
+          FT_UINT8, BASE_DEC,
+          VALS(type_of_transmission_vals), 0x03,
+          "type of transmission",
+          HFILL}
+        }
     };
 
     /* Setup protocol subtree array */
@@ -3318,7 +3547,8 @@ proto_register_oran(void)
         &ett_oran_bfwcomphdr,
         &ett_oran_bfwcompparam,
         &ett_oran_ext19_port,
-        &ett_oran_prb_allocation
+        &ett_oran_prb_allocation,
+        &ett_oran_punc_pattern
     };
 
     expert_module_t* expert_oran;
