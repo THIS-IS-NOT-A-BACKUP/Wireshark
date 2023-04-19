@@ -703,7 +703,6 @@ load_references(GHashTable *table, proto_tree *tree, gboolean raw)
 	field_info *finfo;
 	header_field_info *hfinfo;
 	GPtrArray *refs;
-	int i, len;
 
 	if (g_hash_table_size(table) == 0) {
 		/* Nothing to do. */
@@ -717,17 +716,14 @@ load_references(GHashTable *table, proto_tree *tree, gboolean raw)
 
 		while (hfinfo) {
 			finfos = proto_find_finfo(tree, hfinfo->id);
-			if ((finfos == NULL) || (g_ptr_array_len(finfos) == 0)) {
+			if (finfos == NULL) {
 				hfinfo = hfinfo->same_name_next;
 				continue;
 			}
-
-			len = finfos->len;
-			for (i = 0; i < len; i++) {
+			for (guint i = 0; i < finfos->len; i++) {
 				finfo = g_ptr_array_index(finfos, i);
 				g_ptr_array_add(refs, reference_new(finfo, raw));
 			}
-
 			g_ptr_array_free(finfos, TRUE);
 			hfinfo = hfinfo->same_name_next;
 		}
@@ -752,7 +748,7 @@ reference_new(const field_info *finfo, gboolean raw)
 		ref->value = dfvm_get_raw_fvalue(finfo);
 	}
 	else {
-		ref->value = fvalue_dup(&finfo->value);
+		ref->value = fvalue_dup(finfo->value);
 	}
 	ref->proto_layer_num = finfo->proto_layer_num;
 	return ref;

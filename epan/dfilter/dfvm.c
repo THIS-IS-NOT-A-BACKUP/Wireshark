@@ -748,7 +748,7 @@ filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboole
 				if (raw)
 					fv = dfvm_get_raw_fvalue(finfo);
 				else
-					fv = &finfo->value;
+					fv = finfo->value;
 				fvalues = g_slist_prepend(fvalues, fv);
 			}
 		}
@@ -759,7 +759,7 @@ filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboole
 				if (raw)
 					fv = dfvm_get_raw_fvalue(finfo);
 				else
-					fv = &finfo->value;
+					fv = finfo->value;
 				fvalues = g_slist_prepend(fvalues, fv);
 			}
 		}
@@ -804,6 +804,7 @@ read_tree(dfilter_t *df, proto_tree *tree,
 	df->attempted_load[reg] = TRUE;
 
 	while (hfinfo) {
+		/* The caller should NOT free the GPtrArray. */
 		finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
 		if ((finfos == NULL) || (g_ptr_array_len(finfos) == 0)) {
 			hfinfo = hfinfo->same_name_next;
@@ -820,7 +821,7 @@ read_tree(dfilter_t *df, proto_tree *tree,
 				if (raw)
 					fv = dfvm_get_raw_fvalue(finfo);
 				else
-					fv = &finfo->value;
+					fv = finfo->value;
 				fvalues = g_slist_prepend(fvalues, fv);
 			}
 		}
