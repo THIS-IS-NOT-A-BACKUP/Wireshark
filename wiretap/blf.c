@@ -529,7 +529,6 @@ blf_pull_logcontainer_into_memory(blf_params_t *params, guint index_log_containe
         }
 
         /* pull compressed data into buffer */
-        unsigned char *compressed_data = g_try_malloc0((gsize)tmp.infile_length);
         if (tmp.infile_start_pos < 0) {
             /*
              * XXX - does this represent a bug (WTAP_ERR_INTERNAL) or a
@@ -573,7 +572,20 @@ blf_pull_logcontainer_into_memory(blf_params_t *params, guint index_log_containe
                                          data_length);
             return FALSE;
         }
+        unsigned char *compressed_data = g_try_malloc0((gsize)tmp.infile_length);
         if (!wtap_read_bytes_or_eof(params->fh, compressed_data, (unsigned int)data_length, err, err_info)) {
+            g_free(compressed_data);
+            if (*err == WTAP_ERR_SHORT_READ) {
+                /*
+                 * XXX - our caller will turn this into an EOF.
+                 * How *should* it be treated?
+                 * For now, we turn it into Yet Another Internal Error,
+                 * pending having better documentation of the file
+                 * format.
+                 */
+                *err = WTAP_ERR_INTERNAL;
+                *err_info = ws_strdup("blf_pull_logcontainer_into_memory: short read on compressed data");
+            }
             return FALSE;
         }
 
@@ -590,6 +602,8 @@ blf_pull_logcontainer_into_memory(blf_params_t *params, guint index_log_containe
             /*
              * XXX - check the error code and handle this appropriately.
              */
+            g_free(buf);
+            g_free(compressed_data);
             *err = WTAP_ERR_INTERNAL;
             if (infstream.msg != NULL) {
                 *err_info = ws_strdup_printf("blf_pull_logcontainer_into_memory: inflateInit failed for LogContainer %d, message\"%s\"",
@@ -653,10 +667,14 @@ blf_pull_logcontainer_into_memory(blf_params_t *params, guint index_log_containe
                                              (infstream.msg != NULL) ? infstream.msg : "(none)");
                 break;
             }
+            g_free(buf);
+            g_free(compressed_data);
             ws_debug("inflate failed (return code %d) for LogContainer %d", ret, index_log_container);
             if (infstream.msg != NULL) {
                 ws_debug("inflate returned: \"%s\"", infstream.msg);
             }
+            /* Free up any dynamically-allocated memory in infstream */
+            inflateEnd(&infstream);
             return FALSE;
         }
 
@@ -671,6 +689,7 @@ blf_pull_logcontainer_into_memory(blf_params_t *params, guint index_log_containe
             return FALSE;
         }
 
+        g_free(compressed_data);
         tmp.real_data = buf;
         g_array_index(blf_data->log_containers, blf_log_container_t, index_log_container) = tmp;
         return TRUE;
@@ -1979,13 +1998,15 @@ blf_read_apptextmessage(blf_params_t *params, int *err, gchar **err_info, gint64
         return TRUE;
     }
 
-    gchar *text = g_try_malloc0((gsize)apptextheader.textLength);
+    /* Add an extra byte for a terminating '\0' */
+    gchar *text = g_try_malloc((gsize)apptextheader.textLength + 1);
 
     if (!blf_read_bytes(params, data_start + sizeof(apptextheader), text, apptextheader.textLength, err, err_info)) {
         ws_debug("not enough bytes for apptext text in file");
         g_free(text);
         return FALSE;
     }
+    text[apptextheader.textLength] = '\0'; /* Here's the '\0' */
 
     /* returns a NULL terminated array of NULL terminates strings */
     gchar **tokens = g_strsplit_set(text, ";", -1);
@@ -2201,7 +2222,6 @@ static gboolean blf_read(wtap *wth, wtap_rec *rec, Buffer *buf, int *err, gchar 
     blf_tmp.blf_data = (blf_t *)wth->priv;
 
     if (!blf_read_block(&blf_tmp, blf_tmp.blf_data->current_real_seek_pos, err, err_info)) {
-        ws_debug("data_offset is %" PRId64, *data_offset);
         return FALSE;
     }
     *data_offset = blf_tmp.blf_data->start_of_last_obj;
