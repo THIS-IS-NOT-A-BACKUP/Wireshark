@@ -39,6 +39,9 @@ That must be done explicitly using ``cmake --install <builddir> --component Deve
 The Wireshark installation is relocatable on Linux (and other ELF platforms
 with support for relative RPATHs).
 
+Support for building an NSIS Windows installer using the MinGW-w64 toolchain
+and https://www.msys2.org/[MSYS2]. Read README.msys2 in the distribution for more information.
+
 Many other improvements have been made.
 See the “New and Updated Features” section below for more details.
 
@@ -137,6 +140,7 @@ Matter home automation protocol
 UBX protocol of u-blox GNSS receivers (UBX)
 SBAS L1 Navigation Messages (SBAS L1)
 FiveCo's Register Access Protocol (5CoRAP)
+UDP Tracker Protocol for BitTorrent (BT-Tracker)
 --
 
 === Updated Protocol Support
