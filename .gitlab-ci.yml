@@ -179,8 +179,8 @@ variables:
 # https://gitlab.com/gitlab-org/ci-cd/shared-runners/images/macstadium/orka/-/blob/main/toolchain/monterey.yml
 .build-macos:
   stage: build
-  tags: [ shared-macos-amd64 ]
-  image: macos-11-xcode-12 # https://docs.gitlab.com/ee/ci/runners/saas/macos/environment.html
+  tags: [ saas-macos-medium-m1 ]
+  image: macos-12-xcode-14 # https://docs.gitlab.com/ee/ci/runners/saas/macos/environment.html
   retry: 1
   # https://gould.cx/ted/blog/2017/06/10/ccache-for-Gitlab-CI/
   cache:
@@ -582,6 +582,10 @@ Clang + Code Checks:
     # We don't have an "All options" job, so build fuzzshark and tfshark here.
     - cmake -DENABLE_CHECKHF_CONFLICT=on -DCMAKE_EXPORT_COMPILE_COMMANDS=on -DBUILD_fuzzshark=ON -DBUILD_tfshark=On -DBUILD_logray=ON -DENABLE_CCACHE=ON -DENABLE_WERROR=ON -G Ninja ..
     - printf "\e[0Ksection_end:%s:cmake_section\r\e[0K" "$( date +%s)"
+    - printf "\e[0Ksection_start:%s:asn1_section[collapsed=true]\r\e[0KRegenerating ASN.1 dissectors" "$( date +%s)"
+    - ninja asn1
+    - git diff --exit-code ${CI_COMMIT_SHA} ..
+    - printf "\e[0Ksection_end:%s:asn1_section\r\e[0K" "$( date +%s)"
     - mkdir ../html
     - script --command ninja --flush --quiet --return ../tmp_clang_report.txt
     - ansi2txt < ../tmp_clang_report.txt > ../clang_report.txt
