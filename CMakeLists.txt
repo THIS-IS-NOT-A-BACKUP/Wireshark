@@ -20,6 +20,9 @@ cmake_minimum_required(VERSION 3.13)
 if(POLICY CMP0083)
 	cmake_policy(SET CMP0083 NEW)
 endif()
+if(POLICY CMP0135)
+	cmake_policy(SET CMP0135 NEW)
+endif()
 
 if(WIN32)
 	if(DEFINED ENV{MSYSTEM})
@@ -77,6 +80,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 message(STATUS "Generating build using CMake ${CMAKE_VERSION}")
+
+if(USE_MSYSTEM)
+	# Use the deprecated FindPythonInterp.cmake module to Work around bugs and odd behavior in MSYS2 CMake
+	# searching in the wrong paths for python3.exe using FindPython3.cmake
+	find_package(PythonInterp REQUIRED)
+	set(Python3_Executable ${PYTHON_EXECUTABLE})
+else()
+	find_package(Python3 3.6 REQUIRED)
+endif()
 
 # Set a default build type if none was specified
 set(_default_build_type "RelWithDebInfo")
@@ -220,6 +232,34 @@ and CPU target ${WIRESHARK_TARGET_PROCESSOR_ARCHITECTURE}"
 	else()
 		set(EXTRA_INSTALLER_DIR ${CMAKE_BINARY_DIR}/packaging/nsis)
 	endif()
+
+	include(FetchContent)
+	set(LIBS_URL "https://dev-libs.wireshark.org/windows/packages")
+	file(TO_CMAKE_PATH ${EXTRA_INSTALLER_DIR} _file_download_dir)
+
+	# Download Npcap required by the Windows installer
+	set(NPCAP_VERSION "1.75")
+	set(NPCAP_SHA256 "9ac38dff01b48e18033e8a9015b27042ef847c8c84a9065961a30f8ae22d5245")
+	set(NPCAP_FILENAME "npcap-${NPCAP_VERSION}.exe")
+	set(NPCAP_URL "${LIBS_URL}/Npcap/${NPCAP_FILENAME}")
+	FetchContent_Declare(Npcap
+		URL ${NPCAP_URL}
+		DOWNLOAD_DIR ${_file_download_dir}
+		URL_HASH SHA256=${NPCAP_SHA256}
+		DOWNLOAD_NO_EXTRACT True
+	)
+
+	# Download USBPcap required by the Windows installer
+	set(USBPCAP_VERSION "1.5.4.0")
+	set(USBPCAP_SHA256 "87a7edf9bbbcf07b5f4373d9a192a6770d2ff3add7aa1e276e82e38582ccb622")
+	set(USBPCAP_FILENAME "USBPcapSetup-${USBPCAP_VERSION}.exe")
+	set(USBPCAP_URL "${LIBS_URL}/USBPcap/${USBPCAP_FILENAME}")
+	FetchContent_Declare(USBPcap
+		URL ${USBPCAP_URL}
+		DOWNLOAD_DIR ${_file_download_dir}
+		URL_HASH SHA256=${USBPCAP_SHA256}
+		DOWNLOAD_NO_EXTRACT True
+	)
 endif(WIN32)
 
 include(UseCustomIncludes)
@@ -1163,11 +1203,6 @@ find_package(LEX REQUIRED)
 find_package(Perl)
 find_package(PCRE2 REQUIRED)
 
-find_package(Python3 3.6 REQUIRED)
-# Several files (including LocatePythonModule) still use the old name
-# from FindPythonInterp, let's stick to it for now.
-set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
-
 if (NOT WIN32)
 	find_package(Gettext)
 	find_package(M REQUIRED)
@@ -1749,7 +1784,7 @@ if(VCSVERSION_OVERRIDE)
 else()
 	add_custom_target(vcs_version
 		BYPRODUCTS vcs_version.h
-		COMMAND ${PYTHON_EXECUTABLE}
+		COMMAND ${Python3_EXECUTABLE}
 			${CMAKE_SOURCE_DIR}/tools/make-version.py
 			${CMAKE_SOURCE_DIR}
 	)
@@ -3715,7 +3750,7 @@ if(RPMBUILD_EXECUTABLE)
 	endif()
 
 	execute_process(
-		COMMAND ${PYTHON_EXECUTABLE}
+		COMMAND ${Python3_EXECUTABLE}
 			${CMAKE_SOURCE_DIR}/tools/make-version.py
 			${CMAKE_SOURCE_DIR}
 	)
@@ -4106,7 +4141,7 @@ endif()
 
 add_custom_target(test
 	COMMAND ${CMAKE_COMMAND} -E env PYTHONIOENCODING=UTF-8
-		${PYTHON_EXECUTABLE} -m pytest
+		${Python3_EXECUTABLE} -m pytest
 	WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 	DEPENDS test-programs
 	USES_TERMINAL
@@ -4125,7 +4160,7 @@ if (GIT_EXECUTABLE)
 	# Update AUTHORS file with entries from git shortlog
 	add_custom_target(
 		gen-authors
-		COMMAND ${PYTHON_EXECUTABLE} tools/generate_authors.py AUTHORS
+		COMMAND ${Python3_EXECUTABLE} tools/generate_authors.py AUTHORS
 		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 	)
 else (GIT_EXECUTABLE)

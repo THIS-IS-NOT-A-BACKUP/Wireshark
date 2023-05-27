@@ -296,7 +296,7 @@ macro( ADD_NSIS_PACKAGE_TARGETS )
 			)
 		else()
 			add_custom_command(OUTPUT ${_nsis_binary_dir}/wireshark-qt-manifest.nsh
-				COMMAND ${PYTHON_EXECUTABLE} "${_nsis_source_dir}/windeployqt-to-nsis.py"
+				COMMAND ${Python3_EXECUTABLE} "${_nsis_source_dir}/windeployqt-to-nsis.py"
 					$<TARGET_FILE:wireshark>
 					${_nsis_binary_dir}/wireshark-qt-manifest.nsh
 					#$<$<CONFIG:Debug>:-DebugConfig>
@@ -319,6 +319,9 @@ macro( ADD_NSIS_PACKAGE_TARGETS )
 			FOLDER "Packaging"
 			EXCLUDE_FROM_DEFAULT_BUILD True
 		)
+
+		# Make sure required blobs are available
+		FetchContent_MakeAvailable(Npcap USBPcap)
 
 		# Dump the installer into
 		# ${CMAKE_CURRENT_SOURCE_DIR}/packaging/nsis
