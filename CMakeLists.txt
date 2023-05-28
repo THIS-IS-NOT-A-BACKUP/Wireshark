@@ -85,7 +85,7 @@ if(USE_MSYSTEM)
 	# Use the deprecated FindPythonInterp.cmake module to Work around bugs and odd behavior in MSYS2 CMake
 	# searching in the wrong paths for python3.exe using FindPython3.cmake
 	find_package(PythonInterp REQUIRED)
-	set(Python3_Executable ${PYTHON_EXECUTABLE})
+	set(Python3_EXECUTABLE ${PYTHON_EXECUTABLE} CACHE FILEPATH "")
 else()
 	find_package(Python3 3.6 REQUIRED)
 endif()
@@ -194,7 +194,9 @@ if(WIN32)
 and CPU target ${WIRESHARK_TARGET_PROCESSOR_ARCHITECTURE}"
 	)
 
-	find_package(PowerShell REQUIRED)
+	if(NOT CMAKE_CROSSCOMPILING)
+		find_package(PowerShell REQUIRED)
+	endif()
 
 	# Determine where the 3rd party libraries will be
 	if(USE_REPOSITORY)
