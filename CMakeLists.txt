@@ -24,22 +24,7 @@ if(POLICY CMP0135)
 	cmake_policy(SET CMP0135 NEW)
 endif()
 
-if(WIN32)
-	if(DEFINED ENV{MSYSTEM})
-		set(_msystem $ENV{MSYSTEM})
-		set(_repository False)
-		message(STATUS "Using MSYS2 with MSYSTEM=${_msystem}")
-	else()
-		set(_msystem False)
-		set(_repository True)
-		message(STATUS "Using 3rd party repository")
-	endif()
-	set(USE_MSYSTEM ${_msystem} CACHE INTERNAL "Use MSYS2 subsystem")
-	set(HAVE_MSYSTEM ${USE_MSYSTEM}) # For config.h
-	set(USE_REPOSITORY ${_repository} CACHE INTERNAL "Use Wireshark 3rd Party Repository")
-endif()
-
-if(WIN32 AND NOT USE_MSYSTEM)
+if(WIN32 AND NOT DEFINED ENV{MSYSTEM})
 	set(_project_name Wireshark)
 	set(_log_project_name Logray)
 else()
@@ -48,6 +33,23 @@ else()
 endif()
 
 project(${_project_name} C CXX)
+
+if(WIN32)
+	set(_msystem False)
+	set(_repository False)
+	if(DEFINED ENV{MSYSTEM})
+		set(_msystem $ENV{MSYSTEM})
+		message(STATUS "Using MSYS2 with MSYSTEM=${_msystem}")
+	elseif(MSVC)
+		set(_repository True)
+		message(STATUS "Using 3rd party repository")
+	else()
+		# Neither own package repository nor MSYS2 repository.
+	endif()
+	set(USE_MSYSTEM ${_msystem} CACHE INTERNAL "Use MSYS2 subsystem")
+	set(HAVE_MSYSTEM ${USE_MSYSTEM}) # For config.h
+	set(USE_REPOSITORY ${_repository} CACHE INTERNAL "Use Wireshark 3rd Party Repository")
+endif()
 
 # Updated by tools/make-version.py
 set(PROJECT_MAJOR_VERSION 4)
@@ -165,21 +167,18 @@ if(WIN32)
 	endif()
 
 	# Sanity check
-	if(MSVC)
-		if(DEFINED ENV{PLATFORM})
-			string(TOLOWER $ENV{PLATFORM} _vs_platform)
-		else()
-			set(_vs_platform "[undefined]") # x86
-		endif()
+	if(MSVC AND DEFINED ENV{PLATFORM})
+		string(TOLOWER $ENV{PLATFORM} _vs_platform)
 		if(
 			(_vs_platform STREQUAL "x64" AND NOT WIRESHARK_TARGET_PLATFORM STREQUAL "x64")
 			OR
-			(_vs_platform STREQUAL "[undefined]" AND NOT WIRESHARK_TARGET_PLATFORM STREQUAL "win32")
+			(_vs_platform STREQUAL "arm64" AND NOT WIRESHARK_TARGET_PLATFORM STREQUAL "arm64")
 		)
 			message(FATAL_ERROR "The PLATFORM environment variable (${_vs_platform})"
 				" doesn't match the generator platform (${WIRESHARK_TARGET_PLATFORM})")
 		endif()
 	endif()
+
 	message(STATUS
 		"Building for ${WIRESHARK_TARGET_PLATFORM}"
 	)
@@ -600,6 +599,7 @@ if( CMAKE_C_COMPILER_ID MATCHES "MSVC")
 	#                                   See https://devblogs.microsoft.com/cppblog/spectre-mitigations-in-msvc/
 	list(APPEND LOCAL_CFLAGS /diagnostics:caret /Zo /utf-8 /guard:cf)
 	set(WS_LINK_FLAGS "${WS_LINK_FLAGS} /guard:cf")
+	set(WS_LINK_FLAGS "${WS_LINK_FLAGS} /STACK:0x800000")
 	# /Qspectre is not available for VS2015 or older VS2017. Test for its availability.
 	set(WIRESHARK_COMMON_FLAGS /Qspectre)
 
@@ -1220,6 +1220,7 @@ ws_find_package(Systemd BUILD_sdjournal HAVE_SYSTEMD)
 # Build one of the Qt GUIs?
 if(BUILD_wireshark OR BUILD_logray)
 	if(USE_qt6)
+		set(qtver 6)
 		if(DEFINED ENV{WIRESHARK_QT6_PREFIX_PATH})
 			list(APPEND CMAKE_PREFIX_PATH $ENV{WIRESHARK_QT6_PREFIX_PATH})
 		endif()
@@ -1247,6 +1248,7 @@ if(BUILD_wireshark OR BUILD_logray)
 				Multimedia
 		)
 	else(USE_qt6)
+		set(qtver 5)
 		if(DEFINED ENV{WIRESHARK_QT5_PREFIX_PATH})
 			list(APPEND CMAKE_PREFIX_PATH $ENV{WIRESHARK_QT5_PREFIX_PATH})
 		endif()
@@ -1355,7 +1357,12 @@ ws_find_package(ZSTD ENABLE_ZSTD HAVE_ZSTD "1.0.0")
 ws_find_package(NGHTTP2 ENABLE_NGHTTP2 HAVE_NGHTTP2 "1.11.0")
 
 # Embedded Lua interpreter
-ws_find_package(LUA ENABLE_LUA HAVE_LUA "5.1")
+if(FETCH_lua)
+	# Download and build lua
+	include(${CMAKE_SOURCE_DIR}/cmake/external/lua52/Lua52.cmake)
+else()
+	ws_find_package(LUA ENABLE_LUA HAVE_LUA "5.1")
+endif()
 
 ws_find_package(NL ENABLE_NETLINK HAVE_LIBNL)
 

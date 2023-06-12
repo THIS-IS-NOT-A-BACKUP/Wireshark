@@ -321,7 +321,7 @@ static gboolean
 json_prep(char* buf, const jsmntok_t* tokens, int count)
 {
     int i;
-    char* method = NULL;
+    const char* method = NULL;
     char* attr_name = NULL;
     char* attr_value = NULL;
 
@@ -484,6 +484,55 @@ json_prep(char* buf, const jsmntok_t* tokens, int count)
 
     for (i = 0; i < count; i += 2)
     {
+        buf[tokens[i + 0].end] = '\0';
+        buf[tokens[i + 1].end] = '\0';
+    }
+
+    // we must get the id as soon as possible so that it's available in all future error messages
+    attr_value = (char*)json_find_attr(buf, tokens, count, "id");
+    if (attr_value)
+    {
+        if (!ws_strtou32(attr_value, NULL, &rpcid))
+        {
+            sharkd_json_error(
+                    rpcid, -32600, NULL,
+                    "The id value must be a positive integer"
+                    );
+            return FALSE;
+        }
+    }
+
+    method = json_find_attr(buf, tokens, count, "method");
+
+    if (method)
+    {
+        gboolean is_supported = FALSE;
+        i = 0;  // name array index
+
+        // check that the request method is good
+        while (name_array[i].value_type != SHARKD_ARRAY_END)
+        {
+            if (name_array[i].parent_ctx)
+            {
+                if (!strcmp(method, name_array[i].name) && !strcmp(name_array[i].parent_ctx, "method"))
+                    is_supported = TRUE;  // the method is valid
+            }
+
+            i++;
+        }
+
+        if (!is_supported)
+        {
+            sharkd_json_error(
+                    rpcid, -32601, NULL,
+                    "The method %s is not supported", method
+                    );
+            return FALSE;
+        }
+    }
+
+    for (i = 0; i < count; i += 2)
+    {
         if (tokens[i].type != JSMN_STRING)
         {
             sharkd_json_error(
@@ -493,24 +542,8 @@ json_prep(char* buf, const jsmntok_t* tokens, int count)
             return FALSE;
         }
 
-        buf[tokens[i + 0].end] = '\0';
-        buf[tokens[i + 1].end] = '\0';
-
         attr_name = &buf[tokens[i + 0].start];
         attr_value = &buf[tokens[i + 1].start];
-
-        // we must get the id as soon as possible so that it's available in all future error messages
-        if (!strcmp(attr_name, "id"))
-        {
-            if (!ws_strtou32(attr_value, NULL, &rpcid))
-            {
-                sharkd_json_error(
-                        rpcid, -32600, NULL,
-                        "The id value must be a positive integer"
-                        );
-                return FALSE;
-            }
-        }
 
         if (!strcmp(attr_name, "jsonrpc"))
         {
@@ -623,31 +656,6 @@ json_prep(char* buf, const jsmntok_t* tokens, int count)
                     break; // looks like a valid match
                 }
                 j++;
-            }
-
-            if (!strcmp(attr_name, "method"))
-            {
-                int k = 0;  // name array index
-                // check that the request method is good
-                while (name_array[k].value_type != SHARKD_ARRAY_END)
-                {
-                    if (name_array[k].parent_ctx)
-                    {
-                        if (!strcmp(attr_value, name_array[k].name) && !strcmp(name_array[k].parent_ctx, "method"))
-                            method = attr_value;  // the method is valid
-                    }
-
-                    k++;
-                }
-
-                if (!method)
-                {
-                    sharkd_json_error(
-                            rpcid, -32601, NULL,
-                            "The method %s is not supported", attr_value
-                            );
-                    return FALSE;
-                }
             }
         }
 
@@ -5165,9 +5173,12 @@ sharkd_session_process(char *buf, const jsmntok_t *tokens, int count)
 int
 sharkd_session_main(int mode_setting)
 {
-    char buf[2 * 1024];
+    char buf[2 * 1024 + 1];
+    char* start_ptr, *i_ptr;
     jsmntok_t *tokens = NULL;
     int tokens_max = -1;
+    int buf_len;
+    unsigned open_brackets = 0;
 
     mode = mode_setting;
 
@@ -5182,45 +5193,81 @@ sharkd_session_main(int mode_setting)
     uat_get_table_by_name("MaxMind Database Paths")->post_update_cb();
 #endif
 
-    while (fgets(buf, sizeof(buf), stdin))
+    buf_len = (int)fread(buf, sizeof(char), sizeof(buf) - 1, stdin);
+
+    for ( start_ptr = i_ptr = buf; i_ptr < ( buf + buf_len ); i_ptr++ )
     {
-        /* every command is line seperated JSON */
-        int ret;
-
-        ret = json_parse(buf, NULL, 0);
-        if (ret <= 0)
+        switch ( *i_ptr )
         {
-            sharkd_json_error(
-                    rpcid, -32600, NULL,
-                    "Invalid JSON(1)"
-                    );
-            continue;
+            case '{':
+                if ( open_brackets == 0 )
+                    start_ptr = i_ptr;
+                open_brackets++;
+                break;
+            case '}':
+                open_brackets--;
+                if ( open_brackets == 0 )
+                {
+                    int ret;
+                    char * next_ptr;
+                    char next_char;
+
+                    next_ptr = i_ptr + 1;
+                    next_char = *next_ptr;
+                    *next_ptr = '\0';
+
+                    ret = json_parse(start_ptr, NULL, 0);
+                    if (ret <= 0)
+                    {
+                        sharkd_json_error(
+                                rpcid, -32600, NULL,
+                                "Invalid JSON(1)"
+                                );
+                        *next_ptr = next_char;
+                        continue;
+                    }
+
+                    ret += 1;
+
+                    if (tokens == NULL || tokens_max < ret)
+                    {
+                        tokens_max = ret;
+                        tokens = (jsmntok_t *) g_realloc(tokens, sizeof(jsmntok_t) * tokens_max);
+                    }
+
+                    memset(tokens, 0, ret * sizeof(jsmntok_t));
+
+                    ret = json_parse(start_ptr, tokens, ret);
+                    if (ret <= 0)
+                    {
+                        sharkd_json_error(
+                                rpcid, -32600, NULL,
+                                "Invalid JSON(2)"
+                                );
+                        *next_ptr = next_char;
+                        continue;
+                    }
+
+                    host_name_lookup_process();
+
+                    sharkd_session_process(start_ptr, tokens, ret);
+
+                    *next_ptr = next_char;
+                }
+                break;
+            case '\"':
+                /* jump over the string key/value */
+                for (i_ptr++ ; i_ptr  < ( buf + buf_len ); i_ptr++ )
+                {
+                    if ( *i_ptr == '\\' )
+                        i_ptr++;
+                    else if ( *i_ptr == '\"' )
+                        break;
+                }
+                break;
+            default:
+                break;
         }
-
-        /* fprintf(stderr, "JSON: %d tokens\n", ret); */
-        ret += 1;
-
-        if (tokens == NULL || tokens_max < ret)
-        {
-            tokens_max = ret;
-            tokens = (jsmntok_t *) g_realloc(tokens, sizeof(jsmntok_t) * tokens_max);
-        }
-
-        memset(tokens, 0, ret * sizeof(jsmntok_t));
-
-        ret = json_parse(buf, tokens, ret);
-        if (ret <= 0)
-        {
-            sharkd_json_error(
-                    rpcid, -32600, NULL,
-                    "Invalid JSON(2)"
-                    );
-            continue;
-        }
-
-        host_name_lookup_process();
-
-        sharkd_session_process(buf, tokens, ret);
     }
 
     g_hash_table_destroy(filter_table);
