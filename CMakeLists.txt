@@ -2384,6 +2384,7 @@ if(LUA_FOUND AND ENABLE_LUA)
 	set(_lua_files
 		"${CMAKE_SOURCE_DIR}/epan/wslua/init.lua"
 		"${CMAKE_SOURCE_DIR}/epan/wslua/console.lua"
+		"${CMAKE_SOURCE_DIR}/epan/wslua/browser_sslkeylog.lua"
 		"${CMAKE_SOURCE_DIR}/epan/wslua/dtd_gen.lua"
 	)
 	foreach(_lua_file ${_lua_files})
@@ -4052,7 +4053,7 @@ if(WIN32 AND NOT USE_MSYSTEM)
 	# path (incorrect relative path computation).
 	set(WIRESHARK_INSTALL_CMAKEDIR "cmake")
 else()
-	set(WIRESHARK_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/cmake")
+	set(WIRESHARK_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}")
 endif()
 
 include(CMakePackageConfigHelpers)
