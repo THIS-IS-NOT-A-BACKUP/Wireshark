@@ -16,28 +16,12 @@ import platform
 import re
 import sys
 
-type_map = {
-    # Try to preserve alignment first
-    'gboolean  ': 'bool      ',
-    'gchar  ': 'char   ',
-    'gint  ': 'int   ',
-    'guint    ': 'unsigned ',
-    'gint8  ': 'int8_t ',
-    'gint16  ': 'int16_t ',
-    'gint32  ': 'int32_t ',
-    'gint64  ': 'int64_t ',
-    'guint8'  : 'uint8_t ',
-    'guint16  ': 'uint16_t ',
-    'guint32  ': 'uint32_t ',
-    'guint64  ': 'uint64_t ',
-    'gfloat  ': 'float ',
-    'gdouble  ': 'double ',
-    'gpointer  ': 'void *    ',
-    'gsize  ': 'size_t ',
-    'gssize  ': 'ssize_t ',
+padded_type_map = {}
 
+type_map = {
     'gboolean': 'bool',
     'gchar': 'char',
+    'guchar': 'unsigned char',
     'gint': 'int',
     'guint': 'unsigned', # Matches README.developer
     'gint8': 'int8_t',
@@ -58,14 +42,39 @@ type_map = {
 
     'TRUE': 'true',
     'FALSE': 'false',
+    'G_MAXINT8': 'INT8_MAX',
+    'G_MAXINT16': 'INT16_MAX',
+    'G_MAXINT32': 'INT32_MAX',
+    'G_MAXINT64': 'INT64_MAX',
+    'G_MAXUINT8': 'UINT8_MAX',
+    'G_MAXUINT16': 'UINT16_MAX',
+    'G_MAXUINT32': 'UINT32_MAX',
+    'G_MAXUINT64': 'UINT64_MAX',
+    'G_MININT8': 'INT8_MIN',
+    'G_MININT16': 'INT16_MIN',
+    'G_MININT32': 'INT32_MIN',
+    'G_MININT64': 'INT64_MIN',
 }
 
 def convert_file(file):
     lines = ''
-    with open(file, 'r') as f:
-        lines = f.read()
-        for glib_type, c99_type in type_map.items():
-            lines = re.sub(rf'([^"])\b{glib_type}\b([^"])', rf'\1{c99_type}\2', lines, flags=re.MULTILINE)
+    try:
+        with open(file, 'r') as f:
+            lines = f.read()
+            for glib_type, c99_type in padded_type_map.items():
+                lines = lines.replace(glib_type, c99_type)
+            for glib_type, c99_type in type_map.items():
+                lines = re.sub(rf'([^"])\b{glib_type}\b([^"])', rf'\1{c99_type}\2', lines, flags=re.MULTILINE)
+    except IsADirectoryError:
+        sys.stderr.write(f'{file} is a directory.\n')
+        return
+    except UnicodeDecodeError:
+        sys.stderr.write(f"{file} isn't valid UTF-8.\n")
+        return
+    except:
+        sys.stderr.write(f'Unable to open {file}.\n')
+        return
+
     with open(file, 'w') as f:
         f.write(lines)
     print(f'Converted {file}')
@@ -74,6 +83,13 @@ def main():
     parser = argparse.ArgumentParser(description='Convert glib types to their C and C99 eqivalents.')
     parser.add_argument('files', metavar='FILE', nargs='*')
     args = parser.parse_args()
+
+    # Build a padded version of type_map which attempts to preseve alignment
+    for glib_type, c99_type in type_map.items():
+        pg_type = glib_type + '  '
+        pc_type = c99_type + ' '
+        pad_len = max(len(pg_type), len(pc_type))
+        padded_type_map[f'{pg_type:{pad_len}s}'] = f'{pc_type:{pad_len}s}'
 
     files = []
     if platform.system() == 'Windows':
