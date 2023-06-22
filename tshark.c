@@ -530,6 +530,7 @@ glossary_option_help(void)
     fprintf(output, "  -G column-formats        dump column format codes and exit\n");
     fprintf(output, "  -G decodes               dump \"layer type\"/\"decode as\" associations and exit\n");
     fprintf(output, "  -G dissector-tables      dump dissector table names, types, and properties\n");
+    fprintf(output, "  -G dissectors            dump registered dissector names\n");
     fprintf(output, "  -G elastic-mapping       dump ElasticSearch mapping file\n");
     fprintf(output, "  -G fieldcount            dump count of header fields and exit\n");
     fprintf(output, "  -G fields [prefix]       dump fields glossary and exit\n");
@@ -1148,6 +1149,8 @@ main(int argc, char *argv[])
                 write_prefs(NULL);
             else if (strcmp(argv[2], "dissector-tables") == 0)
                 dissector_dump_dissector_tables();
+            else if (strcmp(argv[2], "dissectors") == 0)
+                dissector_dump_dissectors();
             else if (strcmp(argv[2], "elastic-mapping") == 0)
                 proto_registrar_dump_elastic(elastic_mapping_filter);
             else if (strcmp(argv[2], "fieldcount") == 0) {
@@ -2108,23 +2111,6 @@ main(int argc, char *argv[])
             goto clean_exit;
         }
     }
-#ifdef HAVE_LIBPCAP
-    /* We currently don't support taps, or printing dissected packets,
-       if we're writing to a pipe. */
-    if (global_capture_opts.saving_to_file &&
-            global_capture_opts.output_to_pipe) {
-        if (tap_listeners_require_dissection()) {
-            cmdarg_err("Taps aren't supported when saving to a pipe.");
-            exit_status = WS_EXIT_INVALID_OPTION;
-            goto clean_exit;
-        }
-        if (print_packet_info) {
-            cmdarg_err("Printing dissected packets isn't supported when saving to a pipe.");
-            exit_status = WS_EXIT_INVALID_OPTION;
-            goto clean_exit;
-        }
-    }
-#endif
 
     if (ex_opt_count("read_format") > 0) {
         const gchar* name = ex_opt_get_next("read_format");
@@ -2273,8 +2259,6 @@ main(int argc, char *argv[])
         }
     }
 
-    ws_debug("tshark: do_dissection = %s", do_dissection ? "TRUE" : "FALSE");
-
     if (cf_name) {
         ws_debug("tshark: Opening capture file: %s", cf_name);
         /*
@@ -2299,6 +2283,7 @@ main(int argc, char *argv[])
            other things, what taps are listening, so determine that after
            starting the statistics taps. */
         do_dissection = must_do_dissection(rfcode, dfcode, pdu_export_arg);
+        ws_debug("tshark: do_dissection = %s", do_dissection ? "TRUE" : "FALSE");
 
         /* Process the packets in the file */
         ws_debug("tshark: invoking process_cap_file() to process the packets");
@@ -2454,14 +2439,6 @@ main(int argc, char *argv[])
         else
             print_packet_counts = TRUE;
 
-        if (print_packet_info) {
-            if (!write_preamble(&cfile)) {
-                show_print_file_io_error();
-                exit_status = WS_EXIT_INVALID_FILE;
-                goto clean_exit;
-            }
-        }
-
         ws_debug("tshark: performing live capture");
 
         /* Start statistics taps; we should only do so after the capture
@@ -2478,6 +2455,54 @@ main(int argc, char *argv[])
            other things, what taps are listening, so determine that after
            starting the statistics taps. */
         do_dissection = must_do_dissection(rfcode, dfcode, pdu_export_arg);
+        ws_debug("tshark: do_dissection = %s", do_dissection ? "TRUE" : "FALSE");
+
+        /* We're doing live capture; if the capture child is writing to a pipe,
+           we can't do dissection, because that would mean two readers for
+           the pipe, tshark and whatever else. */
+        if (do_dissection && global_capture_opts.output_to_pipe) {
+            if (tap_listeners_require_dissection()) {
+                cmdarg_err("Taps aren't supported when capturing and saving to a pipe.");
+                exit_status = WS_EXIT_INVALID_OPTION;
+                goto clean_exit;
+            }
+            if (print_packet_info) {
+                cmdarg_err("Printing dissected packets isn't supported when capturing and saving to a pipe.");
+                exit_status = WS_EXIT_INVALID_OPTION;
+                goto clean_exit;
+            }
+            /* We already checked the next three reasons for supersets of
+               capturing and saving to a pipe, but this doesn't hurt. */
+            if (pdu_export_arg) {
+                cmdarg_err("PDUs export isn't supported when capturing and saving to a pipe.");
+                exit_status = WS_EXIT_INVALID_OPTION;
+                goto clean_exit;
+            }
+            if (rfcode != NULL) {
+                cmdarg_err("Read filters aren't supported when capturing and saving to a pipe.");
+                exit_status = WS_EXIT_INVALID_OPTION;
+                goto clean_exit;
+            }
+            if (dfcode != NULL) {
+                cmdarg_err("Display filters aren't supported when capturing and saving to a pipe.");
+                exit_status = WS_EXIT_INVALID_OPTION;
+                goto clean_exit;
+            }
+            /* There's some other reason we're dissecting. */
+            cmdarg_err("Dissection isn't supported when capturing and saving to a pipe.");
+            exit_status = WS_EXIT_INVALID_OPTION;
+            goto clean_exit;
+        }
+
+        /* Write a preamble if we're printing one. Do this after all checking
+         * for invalid options, so we don't print just a preamble and quit. */
+        if (print_packet_info) {
+            if (!write_preamble(&cfile)) {
+                show_print_file_io_error();
+                exit_status = WS_EXIT_INVALID_FILE;
+                goto clean_exit;
+            }
+        }
 
         /*
          * XXX - this returns FALSE if an error occurred, but it also
