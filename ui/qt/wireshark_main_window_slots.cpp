@@ -3349,10 +3349,138 @@ void WiresharkMainWindow::statCommandExpertInfo(const char *, void *)
 
 // Statistics Menu
 
-void WiresharkMainWindow::on_actionStatisticsFlowGraph_triggered()
+void WiresharkMainWindow::connectStatisticsMenuActions()
 {
-    SequenceDialog *sequence_dialog = new SequenceDialog(*this, capture_file_);
-    sequence_dialog->show();
+    connect(main_ui_->actionStatisticsCaptureFileProperties, &QAction::triggered, this, [=]() {
+        CaptureFilePropertiesDialog *capture_file_properties_dialog = new CaptureFilePropertiesDialog(*this, capture_file_);
+        connect(capture_file_properties_dialog, SIGNAL(captureCommentChanged()),
+                this, SLOT(updateForUnsavedChanges()));
+        capture_file_properties_dialog->show();
+    });
+
+    connect(main_ui_->actionStatisticsResolvedAddresses, &QAction::triggered, this, &WiresharkMainWindow::showResolvedAddressesDialog);
+
+    connect(main_ui_->actionStatisticsProtocolHierarchy, &QAction::triggered, this, [=]() {
+        ProtocolHierarchyDialog *phd = new ProtocolHierarchyDialog(*this, capture_file_);
+        connect(phd, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
+                this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
+        phd->show();
+    });
+
+    connect(main_ui_->actionStatisticsConversations, &QAction::triggered, this, &WiresharkMainWindow::showConversationsDialog);
+    connect(main_ui_->actionStatisticsEndpoints, &QAction::triggered, this, &WiresharkMainWindow::showEndpointsDialog);
+
+    connect(main_ui_->actionStatisticsPacketLengths, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("plen"); });
+
+    connect(main_ui_->actionStatisticsIOGraph, &QAction::triggered, this, [=]() { statCommandIOGraph(NULL, NULL); });
+
+    connect(main_ui_->actionStatisticsFlowGraph, &QAction::triggered, this, [=]() {
+        SequenceDialog *sequence_dialog = new SequenceDialog(*this, capture_file_);
+        sequence_dialog->show();
+    });
+
+    connect(main_ui_->actionStatisticsCollectd, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("collectd"); });
+    connect(main_ui_->actionStatisticsDNS, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("dns"); });
+    connect(main_ui_->actionStatisticsHART_IP, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("hart_ip"); });
+    connect(main_ui_->actionStatisticsHpfeeds, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("hpfeeds"); });
+    connect(main_ui_->actionStatisticsHTTP2, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("http2"); });
+    connect(main_ui_->actionStatisticsUdpMulticastStreams, &QAction::triggered, this, [=]() { statCommandMulticastStatistics(NULL, NULL); });
+
+    connect(main_ui_->actionStatistics29WestTopics_Advertisements_by_Topic, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_ads_topic");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Advertisements_by_Source, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_ads_source");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Advertisements_by_Transport, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_ads_transport");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Queries_by_Topic, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_queries_topic");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Queries_by_Receiver, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_queries_receiver");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Wildcard_Queries_by_Pattern, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_queries_pattern");
+    });
+
+    connect(main_ui_->actionStatistics29WestTopics_Wildcard_Queries_by_Receiver, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_topic_queries_pattern_receiver");
+    });
+
+    connect(main_ui_->actionStatistics29WestQueues_Advertisements_by_Queue, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_queue_ads_queue");
+    });
+
+    connect(main_ui_->actionStatistics29WestQueues_Advertisements_by_Source, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_queue_ads_source");
+    });
+
+    connect(main_ui_->actionStatistics29WestQueues_Queries_by_Queue, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_queue_queries_queue");
+    });
+
+    connect(main_ui_->actionStatistics29WestQueues_Queries_by_Receiver, &QAction::triggered, this, [=]() {
+        openStatisticsTreeDialog("lbmr_queue_queries_receiver");
+    });
+
+    connect(main_ui_->actionStatistics29WestUIM_Streams, &QAction::triggered, this, [=]() {
+        LBMStreamDialog *stream_dialog = new LBMStreamDialog(this, capture_file_.capFile());
+    //    connect(stream_dialog, SIGNAL(goToPacket(int)),
+    //            packet_list_, SLOT(goToPacket(int)));
+        connect(this, SIGNAL(setCaptureFile(capture_file*)),
+                stream_dialog, SLOT(setCaptureFile(capture_file*)));
+        stream_dialog->show();
+    });
+
+    connect(main_ui_->actionStatistics29WestLBTRM, &QAction::triggered, this, [=]() {
+        LBMLBTRMTransportDialog * lbtrm_dialog = new LBMLBTRMTransportDialog(this, capture_file_.capFile());
+        connect(lbtrm_dialog, SIGNAL(goToPacket(int)),
+                packet_list_, SLOT(goToPacket(int)));
+        connect(this, SIGNAL(setCaptureFile(capture_file*)),
+                lbtrm_dialog, SLOT(setCaptureFile(capture_file*)));
+        lbtrm_dialog->show();
+    });
+
+    connect(main_ui_->actionStatistics29WestLBTRU, &QAction::triggered, this, [=]() {
+        LBMLBTRUTransportDialog * lbtru_dialog = new LBMLBTRUTransportDialog(this, capture_file_.capFile());
+        connect(lbtru_dialog, SIGNAL(goToPacket(int)),
+                packet_list_, SLOT(goToPacket(int)));
+        connect(this, SIGNAL(setCaptureFile(capture_file*)),
+                lbtru_dialog, SLOT(setCaptureFile(capture_file*)));
+        lbtru_dialog->show();
+    });
+
+    connect(main_ui_->actionStatisticsTcpStreamStevens, &QAction::triggered, this, [=]() { openTcpStreamDialog(GRAPH_TSEQ_STEVENS); });
+    connect(main_ui_->actionStatisticsTcpStreamTcptrace, &QAction::triggered, this, [=]() { openTcpStreamDialog(GRAPH_TSEQ_TCPTRACE); });
+    connect(main_ui_->actionStatisticsTcpStreamThroughput, &QAction::triggered, this, [=]() { openTcpStreamDialog(GRAPH_THROUGHPUT); });
+    connect(main_ui_->actionStatisticsTcpStreamRoundTripTime, &QAction::triggered, this, [=]() { openTcpStreamDialog(GRAPH_RTT); });
+    connect(main_ui_->actionStatisticsTcpStreamWindowScaling, &QAction::triggered, this, [=]() { openTcpStreamDialog(GRAPH_WSCALE); });
+
+    connect(main_ui_->actionStatisticsANCP, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("ancp"); });
+
+    connect(main_ui_->actionStatisticsBACappInstanceId, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("bacapp_instanceid"); });
+    connect(main_ui_->actionStatisticsBACappIP, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("bacapp_ip"); });
+    connect(main_ui_->actionStatisticsBACappObjectId, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("bacapp_objectid"); });
+    connect(main_ui_->actionStatisticsBACappService, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("bacapp_service"); });
+
+    connect(main_ui_->actionStatisticsHTTPPacketCounter, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("http"); });
+    connect(main_ui_->actionStatisticsHTTPRequests, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("http_req"); });
+    connect(main_ui_->actionStatisticsHTTPLoadDistribution, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("http_srv"); });
+    connect(main_ui_->actionStatisticsHTTPRequestSequences, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("http_seq"); });
+
+    connect(main_ui_->actionStatisticsSametime, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("sametime"); });
+
+    connect(main_ui_->actionStatisticsSOMEIPmessages, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("someip_messages"); });
+    connect(main_ui_->actionStatisticsSOMEIPSDentries, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("someipsd_entries"); });
+
+    connect(main_ui_->actionStatisticsLTP, &QAction::triggered, this, [=]() { openStatisticsTreeDialog("ltp"); });
 }
 
 void WiresharkMainWindow::openTcpStreamDialog(int graph_type)
@@ -3367,31 +3495,6 @@ void WiresharkMainWindow::openTcpStreamDialog(int graph_type)
     }
 }
 
-void WiresharkMainWindow::on_actionStatisticsTcpStreamStevens_triggered()
-{
-    openTcpStreamDialog(GRAPH_TSEQ_STEVENS);
-}
-
-void WiresharkMainWindow::on_actionStatisticsTcpStreamTcptrace_triggered()
-{
-    openTcpStreamDialog(GRAPH_TSEQ_TCPTRACE);
-}
-
-void WiresharkMainWindow::on_actionStatisticsTcpStreamThroughput_triggered()
-{
-    openTcpStreamDialog(GRAPH_THROUGHPUT);
-}
-
-void WiresharkMainWindow::on_actionStatisticsTcpStreamRoundTripTime_triggered()
-{
-    openTcpStreamDialog(GRAPH_RTT);
-}
-
-void WiresharkMainWindow::on_actionStatisticsTcpStreamWindowScaling_triggered()
-{
-    openTcpStreamDialog(GRAPH_WSCALE);
-}
-
 // -z mcast,stat
 void WiresharkMainWindow::statCommandMulticastStatistics(const char *arg, void *)
 {
@@ -3401,191 +3504,12 @@ void WiresharkMainWindow::statCommandMulticastStatistics(const char *arg, void *
     mcast_stats_dlg->show();
 }
 
-void WiresharkMainWindow::on_actionStatisticsUdpMulticastStreams_triggered()
-{
-    statCommandMulticastStatistics(NULL, NULL);
-}
-
 void WiresharkMainWindow::openStatisticsTreeDialog(const gchar *abbr)
 {
     StatsTreeDialog *st_dialog = new StatsTreeDialog(*this, capture_file_, abbr);
 //    connect(st_dialog, SIGNAL(goToPacket(int)),
 //            packet_list_, SLOT(goToPacket(int)));
     st_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Advertisements_by_Topic_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_ads_topic");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Advertisements_by_Source_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_ads_source");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Advertisements_by_Transport_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_ads_transport");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Queries_by_Topic_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_queries_topic");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Queries_by_Receiver_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_queries_receiver");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Wildcard_Queries_by_Pattern_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_queries_pattern");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestTopics_Wildcard_Queries_by_Receiver_triggered()
-{
-    openStatisticsTreeDialog("lbmr_topic_queries_pattern_receiver");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestQueues_Advertisements_by_Queue_triggered()
-{
-    openStatisticsTreeDialog("lbmr_queue_ads_queue");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestQueues_Advertisements_by_Source_triggered()
-{
-    openStatisticsTreeDialog("lbmr_queue_ads_source");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestQueues_Queries_by_Queue_triggered()
-{
-    openStatisticsTreeDialog("lbmr_queue_queries_queue");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestQueues_Queries_by_Receiver_triggered()
-{
-    openStatisticsTreeDialog("lbmr_queue_queries_receiver");
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestUIM_Streams_triggered()
-{
-    LBMStreamDialog *stream_dialog = new LBMStreamDialog(this, capture_file_.capFile());
-//    connect(stream_dialog, SIGNAL(goToPacket(int)),
-//            packet_list_, SLOT(goToPacket(int)));
-    connect(this, SIGNAL(setCaptureFile(capture_file*)),
-            stream_dialog, SLOT(setCaptureFile(capture_file*)));
-    stream_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatistics29WestLBTRM_triggered()
-{
-    LBMLBTRMTransportDialog * lbtrm_dialog = new LBMLBTRMTransportDialog(this, capture_file_.capFile());
-    connect(lbtrm_dialog, SIGNAL(goToPacket(int)),
-            packet_list_, SLOT(goToPacket(int)));
-    connect(this, SIGNAL(setCaptureFile(capture_file*)),
-            lbtrm_dialog, SLOT(setCaptureFile(capture_file*)));
-    lbtrm_dialog->show();
-}
-void WiresharkMainWindow::on_actionStatistics29WestLBTRU_triggered()
-{
-    LBMLBTRUTransportDialog * lbtru_dialog = new LBMLBTRUTransportDialog(this, capture_file_.capFile());
-    connect(lbtru_dialog, SIGNAL(goToPacket(int)),
-            packet_list_, SLOT(goToPacket(int)));
-    connect(this, SIGNAL(setCaptureFile(capture_file*)),
-            lbtru_dialog, SLOT(setCaptureFile(capture_file*)));
-    lbtru_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatisticsANCP_triggered()
-{
-    openStatisticsTreeDialog("ancp");
-}
-
-
-void WiresharkMainWindow::on_actionStatisticsBACappInstanceId_triggered()
-{
-    openStatisticsTreeDialog("bacapp_instanceid");
-}
-
-void WiresharkMainWindow::on_actionStatisticsBACappIP_triggered()
-{
-    openStatisticsTreeDialog("bacapp_ip");
-}
-
-void WiresharkMainWindow::on_actionStatisticsBACappObjectId_triggered()
-{
-    openStatisticsTreeDialog("bacapp_objectid");
-}
-
-void WiresharkMainWindow::on_actionStatisticsBACappService_triggered()
-{
-    openStatisticsTreeDialog("bacapp_service");
-}
-
-void WiresharkMainWindow::on_actionStatisticsCollectd_triggered()
-{
-    openStatisticsTreeDialog("collectd");
-}
-
-void WiresharkMainWindow::on_actionStatisticsConversations_triggered()
-{
-    ConversationDialog *conv_dialog = new ConversationDialog(*this, capture_file_);
-    connect(conv_dialog, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
-        this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
-    connect(conv_dialog, SIGNAL(openFollowStreamDialog(int, guint, guint)),
-        this, SLOT(openFollowStreamDialog(int, guint, guint)));
-    connect(conv_dialog, SIGNAL(openTcpStreamGraph(int)),
-        this, SLOT(openTcpStreamDialog(int)));
-    conv_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatisticsEndpoints_triggered()
-{
-    EndpointDialog *endp_dialog = new EndpointDialog(*this, capture_file_);
-    connect(endp_dialog, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
-            this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
-    connect(endp_dialog, SIGNAL(openFollowStreamDialog(int)),
-            this, SLOT(openFollowStreamDialog(int)));
-    connect(endp_dialog, SIGNAL(openTcpStreamGraph(int)),
-            this, SLOT(openTcpStreamDialog(int)));
-    endp_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatisticsHART_IP_triggered()
-{
-    openStatisticsTreeDialog("hart_ip");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHpfeeds_triggered()
-{
-    openStatisticsTreeDialog("hpfeeds");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHTTPPacketCounter_triggered()
-{
-    openStatisticsTreeDialog("http");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHTTPRequests_triggered()
-{
-    openStatisticsTreeDialog("http_req");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHTTPLoadDistribution_triggered()
-{
-    openStatisticsTreeDialog("http_srv");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHTTPRequestSequences_triggered()
-{
-    openStatisticsTreeDialog("http_seq");
-}
-
-void WiresharkMainWindow::on_actionStatisticsPacketLengths_triggered()
-{
-    openStatisticsTreeDialog("plen");
 }
 
 // -z io,stat
@@ -3600,42 +3524,6 @@ void WiresharkMainWindow::statCommandIOGraph(const char *, void *)
     connect(iog_dialog, SIGNAL(goToPacket(int)), packet_list_, SLOT(goToPacket(int)));
     connect(this, SIGNAL(reloadFields()), iog_dialog, SLOT(reloadFields()));
     iog_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatisticsIOGraph_triggered()
-{
-    statCommandIOGraph(NULL, NULL);
-}
-
-void WiresharkMainWindow::on_actionStatisticsSametime_triggered()
-{
-    openStatisticsTreeDialog("sametime");
-}
-
-void WiresharkMainWindow::on_actionStatisticsDNS_triggered()
-{
-    openStatisticsTreeDialog("dns");
-}
-
-void WiresharkMainWindow::on_actionStatisticsHTTP2_triggered()
-{
-    openStatisticsTreeDialog("http2");
-
-}
-
-void WiresharkMainWindow::on_actionStatisticsSOMEIPmessages_triggered()
-{
-    openStatisticsTreeDialog("someip_messages");
-}
-
-void WiresharkMainWindow::on_actionStatisticsSOMEIPSDentries_triggered()
-{
-    openStatisticsTreeDialog("someipsd_entries");
-}
-
-void WiresharkMainWindow::on_actionStatisticsLTP_triggered()
-{
-    openStatisticsTreeDialog("ltp");
 }
 
 // Telephony Menu
@@ -4038,15 +3926,7 @@ void WiresharkMainWindow::on_goToLineEdit_returnPressed()
     on_goToGo_clicked();
 }
 
-void WiresharkMainWindow::on_actionStatisticsCaptureFileProperties_triggered()
-{
-    CaptureFilePropertiesDialog *capture_file_properties_dialog = new CaptureFilePropertiesDialog(*this, capture_file_);
-    connect(capture_file_properties_dialog, SIGNAL(captureCommentChanged()),
-            this, SLOT(updateForUnsavedChanges()));
-    capture_file_properties_dialog->show();
-}
-
-void WiresharkMainWindow::on_actionStatisticsResolvedAddresses_triggered()
+void WiresharkMainWindow::showResolvedAddressesDialog()
 {
     QString capFileName;
     wtap* wth = Q_NULLPTR;
@@ -4060,12 +3940,28 @@ void WiresharkMainWindow::on_actionStatisticsResolvedAddresses_triggered()
     resolved_addresses_dialog->show();
 }
 
-void WiresharkMainWindow::on_actionStatisticsProtocolHierarchy_triggered()
+void WiresharkMainWindow::showConversationsDialog()
 {
-    ProtocolHierarchyDialog *phd = new ProtocolHierarchyDialog(*this, capture_file_);
-    connect(phd, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
+    ConversationDialog *conv_dialog = new ConversationDialog(*this, capture_file_);
+    connect(conv_dialog, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
+        this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
+    connect(conv_dialog, SIGNAL(openFollowStreamDialog(int, guint, guint)),
+        this, SLOT(openFollowStreamDialog(int, guint, guint)));
+    connect(conv_dialog, SIGNAL(openTcpStreamGraph(int)),
+        this, SLOT(openTcpStreamDialog(int)));
+    conv_dialog->show();
+}
+
+void WiresharkMainWindow::showEndpointsDialog()
+{
+    EndpointDialog *endp_dialog = new EndpointDialog(*this, capture_file_);
+    connect(endp_dialog, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)),
             this, SIGNAL(filterAction(QString, FilterAction::Action, FilterAction::ActionType)));
-    phd->show();
+    connect(endp_dialog, SIGNAL(openFollowStreamDialog(int)),
+            this, SLOT(openFollowStreamDialog(int)));
+    connect(endp_dialog, SIGNAL(openTcpStreamGraph(int)),
+            this, SLOT(openTcpStreamDialog(int)));
+    endp_dialog->show();
 }
 
 void WiresharkMainWindow::externalMenuItem_triggered()
