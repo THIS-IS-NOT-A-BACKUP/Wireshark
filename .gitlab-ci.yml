@@ -572,6 +572,7 @@ Commit Check:
     - git status
     - bash ./tools/pre-commit "${CI_COMMIT_SHA}~$NUM_COMMITS"
     - tools/validate-commit.py
+    - python3 tools/checklicenses.py
 
 GCC Release Build:
   extends: .build-ubuntu
@@ -609,7 +610,6 @@ Clang + Code Checks:
   script:
     # build-ubuntu puts us in `build`.
     - cd ..
-    - python3 tools/checklicenses.py
     - mkdir cppcheck
     - ./tools/cppcheck/cppcheck.sh -l $NUM_COMMITS | tee cppcheck/cppcheck_report.txt
     - if [[ -s "cppcheck/cppcheck_report.txt" ]]; then ./tools/cppcheck/cppcheck.sh -l $NUM_COMMITS -x > cppcheck/cppcheck_report.xml ; fi
@@ -623,6 +623,10 @@ Clang + Code Checks:
     - ninja asn1
     - git diff --exit-code ${CI_COMMIT_SHA} ..
     - printf "\e[0Ksection_end:%s:asn1_section\r\e[0K" "$( date +%s)"
+    - printf "\e[0Ksection_start:%s:pidl_section[collapsed=true]\r\e[0KRegenerating PIDL dissectors" "$( date +%s)"
+    - ninja pidl-dissectors
+    - git diff --exit-code ${CI_COMMIT_SHA} ..
+    - printf "\e[0Ksection_end:%s:pidl_section\r\e[0K" "$( date +%s)"
     - mkdir ../html
     - script --command ninja --flush --quiet --return ../tmp_clang_report.txt
     - ansi2txt < ../tmp_clang_report.txt > ../clang_report.txt

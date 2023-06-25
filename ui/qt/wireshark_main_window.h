@@ -489,9 +489,9 @@ private slots:
     void checkForUpdates();
 #endif
 
-    void on_goToCancel_clicked();
-    void on_goToGo_clicked();
-    void on_goToLineEdit_returnPressed();
+    void goToCancelClicked();
+    void goToGoClicked();
+    void goToLineEditReturnPressed();
 
     void connectStatisticsMenuActions();
 
@@ -512,31 +512,15 @@ private slots:
     void openStatisticsTreeDialog(const gchar *abbr);
     void statCommandIOGraph(const char *, void *);
 
+    void connectTelephonyMenuActions();
+
     RtpStreamDialog *openTelephonyRtpStreamsDialog();
     RtpPlayerDialog *openTelephonyRtpPlayerDialog();
-    VoipCallsDialog *openTelephonyVoipCallsDialogVoip();
-    VoipCallsDialog *openTelephonyVoipCallsDialogSip();
     RtpAnalysisDialog *openTelephonyRtpAnalysisDialog();
-    void on_actionTelephonyVoipCalls_triggered();
-    void on_actionTelephonyGsmMapSummary_triggered();
     void statCommandLteMacStatistics(const char *arg, void *);
-    void on_actionTelephonyLteRlcStatistics_triggered();
     void statCommandLteRlcStatistics(const char *arg, void *);
-    void on_actionTelephonyLteMacStatistics_triggered();
-    void on_actionTelephonyLteRlcGraph_triggered();
-    void on_actionTelephonyIax2StreamAnalysis_triggered();
-    void on_actionTelephonyISUPMessages_triggered();
-    void on_actionTelephonyMtp3Summary_triggered();
-    void on_actionTelephonyOsmuxPacketCounter_triggered();
-    void on_actionTelephonyRtpStreams_triggered();
-    void on_actionTelephonyRtpStreamAnalysis_triggered();
-    void on_actionTelephonyRtpPlayer_triggered();
-    void on_actionTelephonyRTSPPacketCounter_triggered();
-    void on_actionTelephonySMPPOperations_triggered();
-    void on_actionTelephonyUCPMessages_triggered();
-    void on_actionTelephonyF1APMessages_triggered();
-    void on_actionTelephonyNGAPMessages_triggered();
-    void on_actionTelephonySipFlows_triggered();
+    void openRtpStreamAnalysisDialog();
+    void openRtpPlayerDialog();
 
     void on_actionBluetoothATT_Server_Attributes_triggered();
     void on_actionBluetoothDevices_triggered();
