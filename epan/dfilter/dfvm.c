@@ -261,8 +261,10 @@ value_type_tostr(dfvm_value_t *v, gboolean show_ftype)
 
 	switch (v->type) {
 		case HFINFO:
-		case RAW_HFINFO:
 			s = ftype_name(v->value.hfinfo->type);
+			break;
+		case RAW_HFINFO:
+			s = "FT_BYTES";
 			break;
 		case FVALUE:
 			s = fvalue_type_name(v->value.fvalue);
@@ -772,6 +774,34 @@ filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboole
 	return fvalues;
 }
 
+static GSList *
+read_tree_finfos(GSList *fvalues, proto_tree *tree,
+			header_field_info *hfinfo, drange_t *range, gboolean raw)
+{
+	GPtrArray	*finfos;
+	field_info	*finfo;
+	fvalue_t	*fv;
+
+	/* The caller should NOT free the GPtrArray. */
+	finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
+	if (finfos == NULL || g_ptr_array_len(finfos) == 0) {
+		return fvalues;
+	}
+	if (range) {
+		return filter_finfo_fvalues(fvalues, finfos, range, raw);
+	}
+
+	for (guint i = 0; i < finfos->len; i++) {
+		finfo = g_ptr_array_index(finfos, i);
+		if (raw)
+			fv = dfvm_get_raw_fvalue(finfo);
+		else
+			fv = finfo->value;
+		fvalues = g_slist_prepend(fvalues, fv);
+	}
+	return fvalues;
+}
+
 /* Reads a field from the proto_tree and loads the fvalues into a register,
  * if that field has not already been read. */
 static gboolean
@@ -779,11 +809,7 @@ read_tree(dfilter_t *df, proto_tree *tree,
 				dfvm_value_t *arg1, dfvm_value_t *arg2,
 				dfvm_value_t *arg3)
 {
-	GPtrArray	*finfos;
-	field_info	*finfo;
-	int		i, len;
 	GSList		*fvalues = NULL;
-	fvalue_t	*fv;
 	drange_t	*range = NULL;
 	gboolean	raw;
 
@@ -809,28 +835,7 @@ read_tree(dfilter_t *df, proto_tree *tree,
 	df->attempted_load[reg] = TRUE;
 
 	while (hfinfo) {
-		/* The caller should NOT free the GPtrArray. */
-		finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
-		if ((finfos == NULL) || (g_ptr_array_len(finfos) == 0)) {
-			hfinfo = hfinfo->same_name_next;
-			continue;
-		}
-
-		if (range) {
-			fvalues = filter_finfo_fvalues(fvalues, finfos, range, raw);
-		}
-		else {
-			len = finfos->len;
-			for (i = 0; i < len; i++) {
-				finfo = g_ptr_array_index(finfos, i);
-				if (raw)
-					fv = dfvm_get_raw_fvalue(finfo);
-				else
-					fv = finfo->value;
-				fvalues = g_slist_prepend(fvalues, fv);
-			}
-		}
-
+		fvalues = read_tree_finfos(fvalues, tree, hfinfo, range, raw);
 		hfinfo = hfinfo->same_name_next;
 	}
 
@@ -1227,7 +1232,7 @@ mk_length(dfilter_t *df, dfvm_value_t *from_arg, dfvm_value_t *to_arg)
 	while (from_list) {
 		old_fv = from_list->data;
 		new_fv = fvalue_new(FT_UINT32);
-		fvalue_set_uinteger(new_fv, fvalue_length(old_fv));
+		fvalue_set_uinteger(new_fv, (guint32)fvalue_length2(old_fv));
 		to_list = g_slist_prepend(to_list, new_fv);
 
 		from_list = g_slist_next(from_list);
@@ -1465,35 +1470,41 @@ stack_pop(dfilter_t *df, dfvm_value_t *arg1)
 }
 
 static gboolean
+check_exists_finfos(proto_tree *tree, header_field_info *hfinfo, drange_t *range)
+{
+	GPtrArray *finfos;
+	GSList *filter = NULL;
+	gboolean exists;
+
+	finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
+	if (finfos == NULL || g_ptr_array_len(finfos) == 0) {
+		return FALSE;
+	}
+	if (range == NULL) {
+		return TRUE;
+	}
+	filter = filter_finfo_fvalues(NULL, finfos, range, FALSE);
+	exists = filter != NULL;
+	g_slist_free(filter);
+	return exists;
+}
+
+static gboolean
 check_exists(proto_tree *tree, dfvm_value_t *arg1, dfvm_value_t *arg2)
 {
-	GPtrArray		*finfos;
 	header_field_info	*hfinfo;
 	drange_t		*range = NULL;
 	gboolean		exists;
-	GSList			*fvalues;
 
 	hfinfo = arg1->value.hfinfo;
 	if (arg2)
 		range = arg2->value.drange;
 
 	while (hfinfo) {
-		finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
-		if ((finfos == NULL) || (g_ptr_array_len(finfos) == 0)) {
-			hfinfo = hfinfo->same_name_next;
-			continue;
-		}
-		if (range == NULL) {
-			return TRUE;
-		}
-
-		fvalues = filter_finfo_fvalues(NULL, finfos, range, FALSE);
-		exists = (fvalues != NULL);
-		g_slist_free(fvalues);
+		exists = check_exists_finfos(tree, hfinfo, range);
 		if (exists) {
 			return TRUE;
 		}
-
 		hfinfo = hfinfo->same_name_next;
 	}
 

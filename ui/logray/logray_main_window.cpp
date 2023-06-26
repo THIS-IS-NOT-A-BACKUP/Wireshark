@@ -611,6 +611,7 @@ main_ui_->goToLineEdit->setValidator(goToLineQiv);
     connectCaptureMenuActions();
     connectAnalyzeMenuActions();
     connectStatisticsMenuActions();
+    connectHelpMenuActions();
 
     connect(packet_list_, SIGNAL(packetDissectionChanged()),
             this, SLOT(redissectPackets()));
@@ -2745,8 +2746,7 @@ void LograyMainWindow::externalMenuHelper(ext_menu_t * menu, QMenu  * subMenu, g
             itemAction = subMenu->addAction(item->name);
             itemAction->setData(QVariant::fromValue(static_cast<void *>(item)));
             itemAction->setText(item->label);
-            connect(itemAction, SIGNAL(triggered()),
-                    this, SLOT(externalMenuItem_triggered()));
+            connect(itemAction, &QAction::triggered, this, &LograyMainWindow::externalMenuItemTriggered);
         }
 
         /* Iterate Loop */
