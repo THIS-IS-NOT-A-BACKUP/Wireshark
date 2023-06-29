@@ -209,7 +209,7 @@ void print_cloudtrail_aws_profile_config(int arg_num, const char *display, const
 }
 
 void print_cloudtrail_aws_region_config(int arg_num, const char *display, const char *description) {
-    // aws ec2 describe-regions --all-regions --query "Regions[].{Name:RegionName}" --output text
+    // printf '        "%s",\n' $(aws ec2 describe-regions --all-regions --query "Regions[].{Name:RegionName}" --output text) | sort
     std::set<std::string> regions = {
         "af-south-1",
         "ap-east-1",
@@ -221,8 +221,10 @@ void print_cloudtrail_aws_region_config(int arg_num, const char *display, const 
         "ap-southeast-1",
         "ap-southeast-2",
         "ap-southeast-3",
+        "ap-southeast-4",
         "ca-central-1",
         "eu-central-1",
+        "eu-central-2",
         "eu-north-1",
         "eu-south-1",
         "eu-south-2",
@@ -724,9 +726,9 @@ static int show_config(const std::string &interface, const struct plugin_configu
     printf(
         "arg {number=%u}"
         "{call=--plugin-source}"
-        "{display=Plugin source}"
+        "{display=Log data URL}"
         "{type=string}"
-        "{tooltip=The plugin data source. This us usually a URL.}"
+        "{tooltip=The plugin data source. This is usually a URL.}"
         "{placeholder=Enter a source URL" UTF8_HORIZONTAL_ELLIPSIS "}"
         "{required=true}"
         "{group=Capture}\n",
