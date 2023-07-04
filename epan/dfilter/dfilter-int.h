@@ -22,13 +22,20 @@ typedef struct {
 	int proto_layer_num;
 } df_reference_t;
 
+typedef struct {
+	GPtrArray *array;
+} df_cell_t;
+
+typedef struct {
+	GPtrArray *ptr;
+	guint idx;
+} df_cell_iter_t;
+
 /* Passed back to user */
 struct epan_dfilter {
 	GPtrArray	*insns;
 	guint		num_registers;
-	GSList		**registers;
-	gboolean	*attempted_load;
-	GDestroyNotify	*free_registers;
+	df_cell_t	*registers;
 	int		*interesting_fields;
 	int		num_interesting_fields;
 	GPtrArray	*deprecated;
@@ -145,5 +152,38 @@ reference_new(const field_info *finfo, gboolean raw);
 
 void
 reference_free(df_reference_t *ref);
+
+void
+df_cell_append(df_cell_t *rp, fvalue_t *fv);
+
+GSList *
+df_cell_copy_list(df_cell_t *rp);
+
+size_t
+df_cell_size(const df_cell_t *rp);
+
+fvalue_t **
+df_cell_array(const df_cell_t *rp);
+
+bool
+df_cell_is_empty(const df_cell_t *rp);
+
+bool
+df_cell_is_null(const df_cell_t *rp);
+
+/* Pass TRUE to free the array contents when the cell is cleared. */
+void
+df_cell_init(df_cell_t *rp, gboolean free_seg);
+
+void
+df_cell_clear(df_cell_t *rp);
+
+/* Cell must not be cleared while iter is alive. */
+void
+df_cell_iter_init(df_cell_t *rp, df_cell_iter_t *iter);
+
+fvalue_t *
+df_cell_iter_next(df_cell_iter_t *iter);
+
 
 #endif

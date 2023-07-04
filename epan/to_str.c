@@ -168,6 +168,10 @@ abs_time_to_str_ex(wmem_allocator_t *scope, const nstime_t *abs_time, field_disp
 
     ws_assert(FIELD_DISPLAY_IS_ABSOLUTE_TIME(fmt));
 
+    if (fmt == ABSOLUTE_TIME_UNIX) {
+        return abs_time_to_unix_str(scope, abs_time);
+    }
+
     if (fmt == ABSOLUTE_TIME_NTP_UTC && abs_time->secs == 0 &&
                 (abs_time->nsecs == 0 || abs_time->nsecs == G_MAXINT)) {
         return wmem_strdup(scope, "NULL");
@@ -218,145 +222,6 @@ abs_time_secs_to_str_ex(wmem_allocator_t *scope, const time_t abs_time_secs, fie
     nstime_set_unset(&abs_time);
     abs_time.secs = abs_time_secs;
     return abs_time_to_str_ex(scope, &abs_time, fmt, flags);
-}
-
-void
-display_epoch_time(gchar *buf, int buflen, const time_t sec, gint32 frac,
-                    const to_str_time_res_t units)
-{
-    double elapsed_secs;
-
-    elapsed_secs = difftime(sec,(time_t)0);
-
-    /* This code copied from display_signed_time; keep it in case anyone
-       is looking at captures from before 1970 (???).
-       If the fractional part of the time stamp is negative,
-       print its absolute value and, if the seconds part isn't
-       (the seconds part should be zero in that case), stick
-       a "-" in front of the entire time stamp. */
-    if (frac < 0) {
-        frac = -frac;
-        if (elapsed_secs >= 0) {
-            if (buflen < 1) {
-                return;
-            }
-            buf[0] = '-';
-            buf++;
-            buflen--;
-        }
-    }
-    switch (units) {
-
-        case TO_STR_TIME_RES_T_SECS:
-            snprintf(buf, buflen, "%0.0f", elapsed_secs);
-            break;
-
-        case TO_STR_TIME_RES_T_DSECS:
-            snprintf(buf, buflen, "%0.0f.%01d", elapsed_secs, frac);
-            break;
-
-        case TO_STR_TIME_RES_T_CSECS:
-            snprintf(buf, buflen, "%0.0f.%02d", elapsed_secs, frac);
-            break;
-
-        case TO_STR_TIME_RES_T_MSECS:
-            snprintf(buf, buflen, "%0.0f.%03d", elapsed_secs, frac);
-            break;
-
-        case TO_STR_TIME_RES_T_USECS:
-            snprintf(buf, buflen, "%0.0f.%06d", elapsed_secs, frac);
-            break;
-
-        case TO_STR_TIME_RES_T_NSECS:
-            snprintf(buf, buflen, "%0.0f.%09d", elapsed_secs, frac);
-            break;
-    }
-}
-
-/*
- * Number of characters required by a 64-bit signed number.
- */
-#define CHARS_64_BIT_SIGNED	20	/* sign plus 19 digits */
-
-/*
- * Number of characters required by a fractional part, in nanoseconds */
-#define CHARS_NANOSECONDS	10	/* .000000001 */
-
-void
-display_signed_time(gchar *buf, int buflen, const gint64 sec, gint32 frac,
-                    const to_str_time_res_t units)
-{
-    /* this buffer is not NUL terminated */
-    gint8 num_buf[CHARS_64_BIT_SIGNED];
-    gint8 *num_end = &num_buf[CHARS_64_BIT_SIGNED];
-    gint8 *num_ptr;
-    int num_len;
-
-    if (buflen < 1)
-        return;
-
-    /* If the fractional part of the time stamp is negative,
-       print its absolute value and, if the seconds part isn't
-       (the seconds part should be zero in that case), stick
-       a "-" in front of the entire time stamp. */
-    if (frac < 0) {
-        frac = -frac;
-        if (sec >= 0) {
-            buf[0] = '-';
-            buf++;
-            buflen--;
-        }
-    }
-
-    num_ptr = int64_to_str_back(num_end, sec);
-
-    num_len = MIN((int) (num_end - num_ptr), buflen);
-    memcpy(buf, num_ptr, num_len);
-    buf += num_len;
-    buflen -= num_len;
-
-    switch (units) {
-        case TO_STR_TIME_RES_T_SECS:
-        default:
-            /* no fraction */
-            num_ptr = NULL;
-            break;
-
-        case TO_STR_TIME_RES_T_DSECS:
-            num_ptr = uint_to_str_back_len(num_end, frac, 1);
-            break;
-
-        case TO_STR_TIME_RES_T_CSECS:
-            num_ptr = uint_to_str_back_len(num_end, frac, 2);
-            break;
-
-        case TO_STR_TIME_RES_T_MSECS:
-            num_ptr = uint_to_str_back_len(num_end, frac, 3);
-            break;
-
-        case TO_STR_TIME_RES_T_USECS:
-            num_ptr = uint_to_str_back_len(num_end, frac, 6);
-            break;
-
-        case TO_STR_TIME_RES_T_NSECS:
-            num_ptr = uint_to_str_back_len(num_end, frac, 9);
-            break;
-    }
-
-    if (num_ptr != NULL)
-    {
-        *(--num_ptr) = '.';
-
-        num_len = MIN((int) (num_end - num_ptr), buflen);
-        memcpy(buf, num_ptr, num_len);
-        buf += num_len;
-        buflen -= num_len;
-    }
-
-    /* need to NUL terminate, we know that buffer had at least 1 byte */
-    if (buflen == 0)
-        buf--;
-    *buf = '\0';
 }
 
 #define	PLURALIZE(n)	(((n) > 1) ? "s" : "")
@@ -555,8 +420,17 @@ rel_time_to_str(wmem_allocator_t *scope, const nstime_t *rel_time)
     return wmem_strbuf_finalize(buf);
 }
 
+/*
+ * Number of characters required by a 64-bit signed number.
+ */
+#define CHARS_64_BIT_SIGNED	20	/* sign plus 19 digits */
+
+/*
+ * Number of characters required by a fractional part, in nanoseconds */
+#define CHARS_NANOSECONDS	10	/* .000000001 */
+
 /* Includes terminating '\0' */
-#define REL_TIME_SECS_LEN	(CHARS_64_BIT_SIGNED+CHARS_NANOSECONDS+1)
+#define NSTIME_SECS_LEN	(CHARS_64_BIT_SIGNED+CHARS_NANOSECONDS+1)
 
 /*
  * Display a relative time as seconds.
@@ -566,9 +440,21 @@ rel_time_to_secs_str(wmem_allocator_t *scope, const nstime_t *rel_time)
 {
     gchar *buf;
 
-    buf = (gchar *)wmem_alloc(scope, REL_TIME_SECS_LEN);
+    buf = (gchar *)wmem_alloc(scope, NSTIME_SECS_LEN);
 
-    display_signed_time(buf, REL_TIME_SECS_LEN, (gint64) rel_time->secs,
+    display_signed_time(buf, NSTIME_SECS_LEN, (gint64) rel_time->secs,
+                        rel_time->nsecs, TO_STR_TIME_RES_T_NSECS);
+    return buf;
+}
+
+gchar *
+abs_time_to_unix_str(wmem_allocator_t *scope, const nstime_t *rel_time)
+{
+    gchar *buf;
+
+    buf = (gchar *)wmem_alloc(scope, NSTIME_SECS_LEN);
+
+    display_epoch_time(buf, NSTIME_SECS_LEN, (gint64) rel_time->secs,
                         rel_time->nsecs, TO_STR_TIME_RES_T_NSECS);
     return buf;
 }

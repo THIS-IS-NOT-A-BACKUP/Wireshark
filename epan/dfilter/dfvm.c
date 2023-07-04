@@ -733,8 +733,8 @@ dfvm_get_raw_fvalue(const field_info *fi)
 	return fv;
 }
 
-static GSList *
-filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboolean raw)
+static size_t
+filter_finfo_fvalues(df_cell_t *rp, GPtrArray *finfos, drange_t *range, gboolean raw)
 {
 	int length; /* maximum proto layer number. The numbers are sequential. */
 	field_info *last_finfo, *finfo;
@@ -742,6 +742,7 @@ filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboole
 	int cookie = -1;
 	gboolean cookie_matches = false;
 	int layer;
+	size_t count = 0;
 
 	g_ptr_array_sort(finfos, compare_finfo_layer);
 	last_finfo = finfos->pdata[finfos->len - 1];
@@ -752,30 +753,36 @@ filter_finfo_fvalues(GSList *fvalues, GPtrArray *finfos, drange_t *range, gboole
 		layer = finfo->proto_layer_num;
 		if (cookie == layer) {
 			if (cookie_matches) {
-				if (raw)
-					fv = dfvm_get_raw_fvalue(finfo);
-				else
-					fv = finfo->value;
-				fvalues = g_slist_prepend(fvalues, fv);
+				if (rp != NULL) {
+					if (raw)
+						fv = dfvm_get_raw_fvalue(finfo);
+					else
+						fv = finfo->value;
+					df_cell_append(rp, fv);
+				}
+				count++;
 			}
 		}
 		else {
 			cookie = layer;
 			cookie_matches = drange_contains_layer(range, layer, length);
 			if (cookie_matches) {
-				if (raw)
-					fv = dfvm_get_raw_fvalue(finfo);
-				else
-					fv = finfo->value;
-				fvalues = g_slist_prepend(fvalues, fv);
+				if (rp != NULL) {
+					if (raw)
+						fv = dfvm_get_raw_fvalue(finfo);
+					else
+						fv = finfo->value;
+					df_cell_append(rp, fv);
+				}
+				count++;
 			}
 		}
 	}
-	return fvalues;
+	return count;
 }
 
-static GSList *
-read_tree_finfos(GSList *fvalues, proto_tree *tree,
+static gboolean
+read_tree_finfos(df_cell_t *rp, proto_tree *tree,
 			header_field_info *hfinfo, drange_t *range, gboolean raw)
 {
 	GPtrArray	*finfos;
@@ -785,10 +792,10 @@ read_tree_finfos(GSList *fvalues, proto_tree *tree,
 	/* The caller should NOT free the GPtrArray. */
 	finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
 	if (finfos == NULL || g_ptr_array_len(finfos) == 0) {
-		return fvalues;
+		return FALSE;
 	}
 	if (range) {
-		return filter_finfo_fvalues(fvalues, finfos, range, raw);
+		return filter_finfo_fvalues(rp, finfos, range, raw) > 0;
 	}
 
 	for (guint i = 0; i < finfos->len; i++) {
@@ -797,9 +804,9 @@ read_tree_finfos(GSList *fvalues, proto_tree *tree,
 			fv = dfvm_get_raw_fvalue(finfo);
 		else
 			fv = finfo->value;
-		fvalues = g_slist_prepend(fvalues, fv);
+		df_cell_append(rp, fv);
 	}
-	return fvalues;
+	return TRUE;
 }
 
 /* Reads a field from the proto_tree and loads the fvalues into a register,
@@ -809,9 +816,9 @@ read_tree(dfilter_t *df, proto_tree *tree,
 				dfvm_value_t *arg1, dfvm_value_t *arg2,
 				dfvm_value_t *arg3)
 {
-	GSList		*fvalues = NULL;
 	drange_t	*range = NULL;
 	gboolean	raw;
+	df_cell_t	*rp;
 
 	header_field_info *hfinfo = arg1->value.hfinfo;
 	raw = arg1->type == RAW_HFINFO;
@@ -822,49 +829,39 @@ read_tree(dfilter_t *df, proto_tree *tree,
 		range = arg3->value.drange;
 	}
 
+	rp = &df->registers[reg];
+
 	/* Already loaded in this run of the dfilter? */
-	if (df->attempted_load[reg]) {
-		if (df->registers[reg]) {
-			return TRUE;
-		}
-		else {
-			return FALSE;
-		}
+	if (!df_cell_is_null(rp)) {
+		return !df_cell_is_empty(rp);
 	}
 
-	df->attempted_load[reg] = TRUE;
-
-	while (hfinfo) {
-		fvalues = read_tree_finfos(fvalues, tree, hfinfo, range, raw);
-		hfinfo = hfinfo->same_name_next;
-	}
-
-	if (fvalues == NULL) {
-		return FALSE;
-	}
-
-	df->registers[reg] = fvalues;
 	if (raw) {
-		df->free_registers[reg] = (GDestroyNotify)fvalue_free;
+		df_cell_init(rp, TRUE);
 	}
 	else {
 		// These values are referenced only, do not try to free it later.
-		df->free_registers[reg] = NULL;
+		df_cell_init(rp, FALSE);
 	}
-	return TRUE;
+
+	while (hfinfo) {
+		read_tree_finfos(rp, tree, hfinfo, range, raw);
+		hfinfo = hfinfo->same_name_next;
+	}
+
+	return !df_cell_is_empty(rp);
 }
 
-static GSList *
-filter_refs_fvalues(GPtrArray *refs_array, drange_t *range)
+static void
+filter_refs_fvalues(df_cell_t *rp, GPtrArray *refs_array, drange_t *range)
 {
 	int length; /* maximum proto layer number. The numbers are sequential. */
 	df_reference_t *last_ref = NULL;
 	int cookie = -1;
 	gboolean cookie_matches = false;
-	GSList *fvalues = NULL;
 
 	if (!refs_array || refs_array->len == 0) {
-		return fvalues;
+		return;
 	}
 
 	/* refs array is sorted. */
@@ -876,30 +873,30 @@ filter_refs_fvalues(GPtrArray *refs_array, drange_t *range)
 		int layer = ref->proto_layer_num;
 
 		if (range == NULL) {
-			fvalues = g_slist_prepend(fvalues, ref->value);
+			df_cell_append(rp, ref->value);
 			continue;
 		}
 
 		if (cookie == layer) {
 			if (cookie_matches) {
-				fvalues = g_slist_prepend(fvalues, ref->value);
+				df_cell_append(rp, ref->value);
 			}
 		}
 		else {
 			cookie = layer;
 			cookie_matches = drange_contains_layer(range, layer, length);
 			if (cookie_matches) {
-				fvalues = g_slist_prepend(fvalues, ref->value);
+				df_cell_append(rp, ref->value);
 			}
 		}
 	}
-	return fvalues;
 }
 
 static gboolean
 read_reference(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2,
 				dfvm_value_t *arg3)
 {
+	df_cell_t *rp;
 	GPtrArray	*refs;
 	drange_t	*range = NULL;
 	gboolean	raw;
@@ -913,30 +910,21 @@ read_reference(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2,
 		range = arg3->value.drange;
 	}
 
+	rp = &df->registers[reg];
+
 	/* Already loaded in this run of the dfilter? */
-	if (df->attempted_load[reg]) {
-		if (df->registers[reg]) {
-			return TRUE;
-		}
-		else {
-			return FALSE;
-		}
+	if (!df_cell_is_null(rp)) {
+		return !df_cell_is_empty(rp);
 	}
 
-	df->attempted_load[reg] = TRUE;
-
-	if (raw)
-		refs = g_hash_table_lookup(df->raw_references, hfinfo);
-	else
-		refs = g_hash_table_lookup(df->references, hfinfo);
+	refs = g_hash_table_lookup(raw ? df->raw_references : df->references, hfinfo);
 	if (refs == NULL || refs->len == 0) {
-		df->registers[reg] = NULL;
 		return FALSE;
 	}
 
-	df->registers[reg] = filter_refs_fvalues(refs, range);
 	// These values are referenced only, do not try to free it later.
-	df->free_registers[reg] = NULL;
+	df_cell_init(rp, FALSE);
+	filter_refs_fvalues(rp, refs, range);
 	return TRUE;
 }
 
@@ -950,52 +938,44 @@ typedef ft_bool_t (*DFVMTestFunc)(const fvalue_t*);
 
 static gboolean
 cmp_test_internal(enum match_how how, DFVMCompareFunc match_func,
-					GSList *arg1, GSList *arg2)
+			const fvalue_t **fv_ptr1, size_t fv_count1,
+			const fvalue_t **fv_ptr2, size_t fv_count2)
 {
-	GSList *list1, *list2;
 	gboolean want_all = (how == MATCH_ALL);
 	gboolean want_any = (how == MATCH_ANY);
 	ft_bool_t have_match;
 
-	list1 = arg1;
-
-	while (list1) {
-		list2 = arg2;
-		while (list2) {
-			have_match = match_func(list1->data, list2->data);
+	for (size_t idx1 = 0; idx1 < fv_count1; idx1++) {
+		for (size_t idx2 = 0; idx2 < fv_count2; idx2++) {
+			have_match = match_func(fv_ptr1[idx1], fv_ptr2[idx2]);
 			if (want_all && have_match == FT_FALSE) {
 				return FALSE;
 			}
 			else if (want_any && have_match == FT_TRUE) {
 				return TRUE;
 			}
-			list2 = g_slist_next(list2);
 		}
-		list1 = g_slist_next(list1);
 	}
 	/* want_all || !want_any */
 	return want_all;
 }
 
 static gboolean
-cmp_test_unary(enum match_how how, DFVMTestFunc test_func, GSList *arg1)
+cmp_test_unary(enum match_how how, DFVMTestFunc test_func,
+			const fvalue_t **fv_ptr, size_t fv_count)
 {
-	GSList *list1;
 	gboolean want_all = (how == MATCH_ALL);
 	gboolean want_any = (how == MATCH_ANY);
 	ft_bool_t have_match;
 
-	list1 = arg1;
-
-	while (list1) {
-		have_match = test_func(list1->data);
+	for (size_t idx = 0; idx < fv_count; idx++) {
+		have_match = test_func(fv_ptr[idx]);
 		if (want_all && have_match == FT_FALSE) {
 			return FALSE;
 		}
 		else if (want_any && have_match == FT_TRUE) {
 			return TRUE;
 		}
-		list1 = g_slist_next(list1);
 	}
 	/* want_all || !want_any */
 	return want_all;
@@ -1005,8 +985,9 @@ static gboolean
 all_test_unary(dfilter_t *df, DFVMTestFunc func, dfvm_value_t *arg1)
 {
 	ws_assert(arg1->type == REGISTER);
-	GSList *list1 = df->registers[arg1->value.numeric];
-	return cmp_test_unary(MATCH_ALL, func, list1);
+	df_cell_t *rp = &df->registers[arg1->value.numeric];
+	return cmp_test_unary(MATCH_ALL, func,
+			(const fvalue_t **)df_cell_array(rp), df_cell_size(rp));
 }
 
 static gboolean
@@ -1014,33 +995,40 @@ cmp_test(dfilter_t *df, DFVMCompareFunc cmp,
 			dfvm_value_t *arg1, dfvm_value_t *arg2,
 			enum match_how how)
 {
-	GSList list1, list2, *l1, *l2;
+	df_cell_t *rp1 = &df->registers[arg1->value.numeric];
+	const fvalue_t **fv_ptr1;
+	size_t fv_count1;
 
 	if (arg1->type == REGISTER) {
-		l1 = df->registers[arg1->value.numeric];
+		fv_ptr1 = (const fvalue_t **)df_cell_array(rp1);
+		fv_count1 = df_cell_size(rp1);
 	}
 	else if (arg1->type == FVALUE) {
-		list1.data = arg1->value.fvalue;
-		list1.next = NULL;
-		l1 = &list1;
+		fv_ptr1 = (const fvalue_t **)&arg1->value.fvalue;
+		fv_count1 = 1;
 	}
 	else {
 		ws_assert_not_reached();
 	}
+
+	df_cell_t *rp2 = &df->registers[arg2->value.numeric];
+	const fvalue_t **fv_ptr2;
+	size_t fv_count2;
 
 	if (arg2->type == REGISTER) {
-		l2 = df->registers[arg2->value.numeric];
+		fv_ptr2 = (const fvalue_t **)df_cell_array(rp2);
+		fv_count2 = df_cell_size(rp2);
 	}
 	else if (arg2->type == FVALUE) {
-		list2.data = arg2->value.fvalue;
-		list2.next = NULL;
-		l2 = &list2;
+		fv_ptr2 = (const fvalue_t **)&arg2->value.fvalue;
+		fv_count2 = 1;
 	}
 	else {
 		ws_assert_not_reached();
 	}
 
-	return cmp_test_internal(how, cmp, l1, l2);
+	return cmp_test_internal(how, cmp,
+			fv_ptr1, fv_count1, fv_ptr2, fv_count2);
 }
 
 /* cmp(A) <=> cmp(a1) OR cmp(a2) OR cmp(a3) OR ... */
@@ -1062,14 +1050,15 @@ all_test(dfilter_t *df, DFVMCompareFunc cmp,
 static gboolean
 any_matches(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2)
 {
-	GSList *list1 = df->registers[arg1->value.numeric];
+	df_cell_t *rp = &df->registers[arg1->value.numeric];
 	ws_regex_t *re = arg2->value.pcre;
 
-	while (list1) {
-		if (fvalue_matches(list1->data, re) == FT_TRUE) {
+	const fvalue_t **fv_ptr = (const fvalue_t **)df_cell_array(rp);
+
+	for (size_t idx = 0; idx < df_cell_size(rp); idx++) {
+		if (fvalue_matches(fv_ptr[idx], re) == FT_TRUE) {
 			return TRUE;
 		}
-		list1 = g_slist_next(list1);
 	}
 	return FALSE;
 }
@@ -1077,40 +1066,43 @@ any_matches(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2)
 static gboolean
 all_matches(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2)
 {
-	GSList *list1 = df->registers[arg1->value.numeric];
+	df_cell_t *rp = &df->registers[arg1->value.numeric];
 	ws_regex_t *re = arg2->value.pcre;
 
-	while (list1) {
-		if (fvalue_matches(list1->data, re) == FT_FALSE) {
+	const fvalue_t **fv_ptr = (const fvalue_t **)df_cell_array(rp);
+
+	for (size_t idx = 0; idx < df_cell_size(rp); idx++) {
+		if (fvalue_matches(fv_ptr[idx], re) == FT_FALSE) {
 			return FALSE;
 		}
-		list1 = g_slist_next(list1);
 	}
 	return TRUE;
 }
 
 static gboolean
-any_in_range_internal(GSList *list1, fvalue_t *low, fvalue_t *high)
+any_in_range_internal(df_cell_t *rp, const fvalue_t *low, const fvalue_t *high)
 {
-	while (list1) {
-		if (fvalue_ge(list1->data, low) == FT_TRUE &&
-				fvalue_le(list1->data, high) == FT_TRUE) {
+	const fvalue_t **fv_ptr = (const fvalue_t **)df_cell_array(rp);
+
+	for (size_t idx = 0; idx < df_cell_size(rp); idx++) {
+		if (fvalue_ge(fv_ptr[idx], low) == FT_TRUE &&
+				fvalue_le(fv_ptr[idx], high) == FT_TRUE) {
 			return TRUE;
 		}
-		list1 = g_slist_next(list1);
 	}
 	return FALSE;
 }
 
 static gboolean
-all_in_range_internal(GSList *list1, fvalue_t *low, fvalue_t *high)
+all_in_range_internal(df_cell_t *rp, const fvalue_t *low, const fvalue_t *high)
 {
-	while (list1) {
-		if (fvalue_ge(list1->data, low) == FT_FALSE ||
-				fvalue_le(list1->data, high) == FT_FALSE) {
+	const fvalue_t **fv_ptr = (const fvalue_t **)df_cell_array(rp);
+
+	for (size_t idx = 0; idx < df_cell_size(rp); idx++) {
+		if (fvalue_ge(fv_ptr[idx], low) == FT_FALSE ||
+				fvalue_le(fv_ptr[idx], high) == FT_FALSE) {
 			return FALSE;
 		}
-		list1 = g_slist_next(list1);
 	}
 	return TRUE;
 }
@@ -1119,14 +1111,14 @@ static gboolean
 match_in_range(dfilter_t *df, enum match_how how, dfvm_value_t *arg1,
 				dfvm_value_t *arg_low, dfvm_value_t *arg_high)
 {
-	GSList *list1 = df->registers[arg1->value.numeric];
-	GSList *_low, *_high;
-	fvalue_t *low, *high;
+	df_cell_t *rp1 = &df->registers[arg1->value.numeric];
+	df_cell_t *rp_low, *rp_high;
+	const fvalue_t *low, *high;
 
 	if (arg_low->type == REGISTER) {
-		_low = df->registers[arg_low->value.numeric];
-		ws_assert(g_slist_length(_low) == 1);
-		low = _low->data;
+		rp_low = &df->registers[arg_low->value.numeric];
+		ws_assert(df_cell_size(rp_low) == 1);
+		low = *(const fvalue_t **)df_cell_array(rp_low);
 	}
 	else if (arg_low->type == FVALUE) {
 		low = arg_low->value.fvalue;
@@ -1134,10 +1126,11 @@ match_in_range(dfilter_t *df, enum match_how how, dfvm_value_t *arg1,
 	else {
 		ws_assert_not_reached();
 	}
+
 	if (arg_high->type == REGISTER) {
-		_high = df->registers[arg_high->value.numeric];
-		ws_assert(g_slist_length(_high) == 1);
-		high = _high->data;
+		rp_high = &df->registers[arg_high->value.numeric];
+		ws_assert(df_cell_size(rp_high) == 1);
+		high = *(const fvalue_t **)df_cell_array(rp_high);
 	}
 	else if (arg_high->type == FVALUE) {
 		high = arg_high->value.fvalue;
@@ -1147,9 +1140,9 @@ match_in_range(dfilter_t *df, enum match_how how, dfvm_value_t *arg1,
 	}
 
 	if (how == MATCH_ALL)
-		return all_in_range_internal(list1, low, high);
+		return all_in_range_internal(rp1, low, high);
 	else if (how == MATCH_ANY)
-		return any_in_range_internal(list1, low, high);
+		return any_in_range_internal(rp1, low, high);
 	else
 		ws_assert_not_reached();
 }
@@ -1173,20 +1166,8 @@ all_in_range(dfilter_t *df, dfvm_value_t *arg1,
 static void
 free_register_overhead(dfilter_t* df)
 {
-	guint i;
-
-	for (i = 0; i < df->num_registers; i++) {
-		df->attempted_load[i] = FALSE;
-		if (df->registers[i]) {
-			if (df->free_registers[i]) {
-				for (GSList *l = df->registers[i]; l != NULL; l = l->next) {
-					df->free_registers[i](l->data);
-				}
-				df->free_registers[i] = NULL;
-			}
-			g_slist_free(df->registers[i]);
-			df->registers[i] = NULL;
-		}
+	for (guint i = 0; i < df->num_registers; i++) {
+		df_cell_clear(&df->registers[i]);
 	}
 }
 
@@ -1197,49 +1178,45 @@ static void
 mk_slice(dfilter_t *df, dfvm_value_t *from_arg, dfvm_value_t *to_arg,
 						dfvm_value_t *drange_arg)
 {
-	GSList		*from_list, *to_list;
-	fvalue_t	*old_fv, *new_fv;
+	df_cell_t *from_rp, *to_rp;
+	df_cell_iter_t from_iter;
+	fvalue_t *old_fv;
+	fvalue_t *new_fv;
 
-	to_list = NULL;
-	from_list = df->registers[from_arg->value.numeric];
+	to_rp = &df->registers[to_arg->value.numeric];
+	df_cell_init(to_rp, TRUE);
+	from_rp = &df->registers[from_arg->value.numeric];
 	drange_t *drange = drange_arg->value.drange;
 
-	while (from_list) {
-		old_fv = from_list->data;
+	df_cell_iter_init(from_rp, &from_iter);
+	while ((old_fv = df_cell_iter_next(&from_iter)) != NULL) {
 		new_fv = fvalue_slice(old_fv, drange);
 		/* Assert here because semcheck.c should have
 		 * already caught the cases in which a slice
 		 * cannot be made. */
 		ws_assert(new_fv);
-		to_list = g_slist_prepend(to_list, new_fv);
-
-		from_list = g_slist_next(from_list);
+		df_cell_append(to_rp, new_fv);
 	}
-
-	df->registers[to_arg->value.numeric] = to_list;
-	df->free_registers[to_arg->value.numeric] = (GDestroyNotify)fvalue_free;
 }
 
 static void
 mk_length(dfilter_t *df, dfvm_value_t *from_arg, dfvm_value_t *to_arg)
 {
-	GSList		*from_list, *to_list;
-	fvalue_t	*old_fv, *new_fv;
+	df_cell_t *from_rp, *to_rp;
+	df_cell_iter_t from_iter;
+	fvalue_t *old_fv;
+	fvalue_t *new_fv;
 
-	to_list = NULL;
-	from_list = df->registers[from_arg->value.numeric];
+	to_rp = &df->registers[to_arg->value.numeric];
+	df_cell_init(to_rp, TRUE);
+	from_rp = &df->registers[from_arg->value.numeric];
 
-	while (from_list) {
-		old_fv = from_list->data;
+	df_cell_iter_init(from_rp, &from_iter);
+	while ((old_fv = df_cell_iter_next(&from_iter)) != NULL) {
 		new_fv = fvalue_new(FT_UINT32);
 		fvalue_set_uinteger(new_fv, (guint32)fvalue_length2(old_fv));
-		to_list = g_slist_prepend(to_list, new_fv);
-
-		from_list = g_slist_next(from_list);
+		df_cell_append(to_rp, new_fv);
 	}
-
-	df->registers[to_arg->value.numeric] = to_list;
-	df->free_registers[to_arg->value.numeric] = (GDestroyNotify)fvalue_free;
 }
 
 static gboolean
@@ -1247,24 +1224,23 @@ call_function(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *arg2,
 							dfvm_value_t *arg3)
 {
 	df_func_def_t *funcdef;
-	GSList *retval = NULL;
 	gboolean accum;
-	guint32 reg_return, arg_count;
+	df_cell_t *rp_return;
+	guint32 arg_count;
+
 
 	funcdef = arg1->value.funcdef;
-	reg_return = arg2->value.numeric;
+	rp_return = &df->registers[arg2->value.numeric];
 	arg_count = arg3->value.numeric;
 
-	accum = funcdef->function(df->function_stack, arg_count, &retval);
+	// Functions create a new value, so own it.
+	df_cell_init(rp_return, TRUE);
 
-	/* Write return registers. */
-	df->registers[reg_return] = retval;
-	// functions create a new value, so own it.
-	df->free_registers[reg_return] = (GDestroyNotify)fvalue_free;
+	accum = funcdef->function(df->function_stack, arg_count, rp_return);
 	return accum;
 }
 
-static void debug_op_error(fvalue_t *v1, fvalue_t *v2, const char *op, const char *msg)
+static void debug_op_error(const fvalue_t *v1, const fvalue_t *v2, const char *op, const char *msg)
 {
 	char *s1 = fvalue_to_debug_repr(NULL, v1);
 	char *s2 = fvalue_to_debug_repr(NULL, v2);
@@ -1303,134 +1279,122 @@ typedef fvalue_t* (*DFVMBinaryFunc)(const fvalue_t*, const fvalue_t*, char **);
 
 static void
 mk_binary_internal(DFVMBinaryFunc func,
-			GSList *arg1, GSList *arg2, GSList **retval)
+			const fvalue_t **fv_ptr1, size_t fv_count1,
+			const fvalue_t **fv_ptr2, size_t fv_count2,
+			df_cell_t *retval)
 {
-	GSList *list1, *list2;
-	GSList *to_list = NULL;
-	fvalue_t *val1, *val2;
 	fvalue_t *result;
 	char *err_msg = NULL;
 
-	list1 = arg1;
-	while (list1) {
-		list2 = arg2;
-		while (list2) {
-			val1 = list1->data;
-			val2 = list2->data;
-			result = func(val1, val2, &err_msg);
+	for (size_t i = 0; i < fv_count1; i++) {
+		for (size_t j = 0; j < fv_count2; j++) {
+			result = func(fv_ptr1[i], fv_ptr2[j], &err_msg);
 			if (result == NULL) {
-				debug_op_error(val1, val2, "&", err_msg);
+				debug_op_error(fv_ptr1[i], fv_ptr2[i], "&", err_msg);
 				g_free(err_msg);
 				err_msg = NULL;
 			}
 			else {
-				to_list = g_slist_prepend(to_list, result);
+				df_cell_append(retval, result);
 			}
-			list2 = g_slist_next(list2);
 		}
-		list1 = g_slist_next(list1);
 	}
-	*retval = to_list;
 }
 
 static void
 mk_binary(dfilter_t *df, DFVMBinaryFunc func,
 		dfvm_value_t *arg1, dfvm_value_t *arg2, dfvm_value_t *to_arg)
 {
-	GSList ls1, ls2;
-	GSList *list1, *list2;
-	GSList *result = NULL;
+	df_cell_t *rp1, *rp2, *to_rp;
+	const fvalue_t **fv_ptr1, **fv_ptr2;
+	size_t fv_count1, fv_count2;
 
 	if (arg1->type == REGISTER) {
-		list1 = df->registers[arg1->value.numeric];
+		rp1 = &df->registers[arg1->value.numeric];
+		fv_ptr1 = (const fvalue_t **)df_cell_array(rp1);
+		fv_count1 = df_cell_size(rp1);
 	}
 	else if (arg1->type == FVALUE) {
-		ls1.data = arg1->value.fvalue;
-		ls1.next = NULL;
-		list1 = &ls1;
+		fv_ptr1 = (const fvalue_t **)&arg1->value.fvalue;
+		fv_count1 = 1;
 	}
 	else {
 		ws_assert_not_reached();
 	}
 
 	if (arg2->type == REGISTER) {
-		list2 = df->registers[arg2->value.numeric];
+		rp2 = &df->registers[arg2->value.numeric];
+		fv_ptr2 = (const fvalue_t **)df_cell_array(rp2);
+		fv_count2 = df_cell_size(rp2);
 	}
 	else if (arg2->type == FVALUE) {
-		ls2.data = arg2->value.fvalue;
-		ls2.next = NULL;
-		list2 = &ls2;
+		fv_ptr2 = (const fvalue_t **)&arg2->value.fvalue;
+		fv_count2 = 1;
 	}
 	else {
 		ws_assert_not_reached();
 	}
 
-	mk_binary_internal(func, list1, list2, &result);
-	//debug_register(result, to_arg->value.numeric);
+	to_rp = &df->registers[to_arg->value.numeric];
+	df_cell_init(to_rp, TRUE);
 
-	df->registers[to_arg->value.numeric] = result;
-	df->free_registers[to_arg->value.numeric] = (GDestroyNotify)fvalue_free;
+	mk_binary_internal(func, fv_ptr1, fv_count1, fv_ptr2, fv_count2, to_rp);
+	//debug_register(result, to_arg->value.numeric);
 }
 
 static void
-mk_minus_internal(GSList *arg1, GSList **retval)
+mk_minus_internal(const fvalue_t **fv_ptr, size_t fv_count, df_cell_t *retval)
 {
-	GSList *list1;
-	GSList *to_list = NULL;
-	fvalue_t *val1;
 	fvalue_t *result;
 	char *err_msg = NULL;
 
-	list1 = arg1;
-	while (list1) {
-		val1 = list1->data;
-		result = fvalue_unary_minus(val1, &err_msg);
+	for (size_t i = 0; i < fv_count; i++) {
+		result = fvalue_unary_minus(fv_ptr[i], &err_msg);
 		if (result == NULL) {
 			ws_noisy("unary_minus: %s", err_msg);
 			g_free(err_msg);
 			err_msg = NULL;
 		}
 		else {
-			to_list = g_slist_prepend(to_list, result);
+			df_cell_append(retval, result);
 		}
-		list1 = g_slist_next(list1);
 	}
-	*retval = to_list;
 }
 
 static void
 mk_minus(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *to_arg)
 {
-	GSList ls1;
-	GSList *list1;
-	GSList *result = NULL;
+	df_cell_t *rp1, *to_rp;
+	const fvalue_t **fv_ptr1;
+	size_t fv_count1;
 
 	if (arg1->type == REGISTER) {
-		list1 = df->registers[arg1->value.numeric];
+		rp1 = &df->registers[arg1->value.numeric];
+		fv_ptr1 = (const fvalue_t **)df_cell_array(rp1);
+		fv_count1 = df_cell_size(rp1);
 	}
 	else if (arg1->type == FVALUE) {
-		ls1.data = arg1->value.fvalue;
-		ls1.next = NULL;
-		list1 = &ls1;
+		fv_ptr1 = (const fvalue_t **)&arg1->value.fvalue;
+		fv_count1 = 1;
 	}
 	else {
 		ws_assert_not_reached();
 	}
 
-	mk_minus_internal(list1, &result);
+	to_rp = &df->registers[to_arg->value.numeric];
+	df_cell_init(to_rp, TRUE);
 
-	df->registers[to_arg->value.numeric] = result;
-	df->free_registers[to_arg->value.numeric] = (GDestroyNotify)fvalue_free;
+	mk_minus_internal(fv_ptr1, fv_count1, to_rp);
 }
 
 static void
 put_fvalue(dfilter_t *df, dfvm_value_t *arg1, dfvm_value_t *to_arg)
 {
 	fvalue_t *fv = arg1->value.fvalue;
-	df->registers[to_arg->value.numeric] = g_slist_append(NULL, fv);
-
+	df_cell_t *to_rp = &df->registers[to_arg->value.numeric];
+	df_cell_append(to_rp, fv);
 	/* Memory is owned by the dfvm_value_t. */
-	df->free_registers[to_arg->value.numeric] = NULL;
+	df_cell_init(to_rp, FALSE);
 }
 
 static void
@@ -1442,7 +1406,7 @@ stack_push(dfilter_t *df, dfvm_value_t *arg1)
 		arg = g_slist_prepend(NULL, arg1->value.fvalue);
 	}
 	else if (arg1->type == REGISTER) {
-		arg = g_slist_copy(df->registers[arg1->value.numeric]);
+		arg = df_cell_copy_list(&df->registers[arg1->value.numeric]);
 	}
 	else {
 		ws_assert_not_reached();
@@ -1473,8 +1437,6 @@ static gboolean
 check_exists_finfos(proto_tree *tree, header_field_info *hfinfo, drange_t *range)
 {
 	GPtrArray *finfos;
-	GSList *filter = NULL;
-	gboolean exists;
 
 	finfos = proto_get_finfo_ptr_array(tree, hfinfo->id);
 	if (finfos == NULL || g_ptr_array_len(finfos) == 0) {
@@ -1483,10 +1445,7 @@ check_exists_finfos(proto_tree *tree, header_field_info *hfinfo, drange_t *range
 	if (range == NULL) {
 		return TRUE;
 	}
-	filter = filter_finfo_fvalues(NULL, finfos, range, FALSE);
-	exists = filter != NULL;
-	g_slist_free(filter);
-	return exists;
+	return filter_finfo_fvalues(NULL, finfos, range, FALSE) > 0;
 }
 
 static gboolean
@@ -1494,15 +1453,13 @@ check_exists(proto_tree *tree, dfvm_value_t *arg1, dfvm_value_t *arg2)
 {
 	header_field_info	*hfinfo;
 	drange_t		*range = NULL;
-	gboolean		exists;
 
 	hfinfo = arg1->value.hfinfo;
 	if (arg2)
 		range = arg2->value.drange;
 
 	while (hfinfo) {
-		exists = check_exists_finfos(tree, hfinfo, range);
-		if (exists) {
+		if (check_exists_finfos(tree, hfinfo, range)) {
 			return TRUE;
 		}
 		hfinfo = hfinfo->same_name_next;
