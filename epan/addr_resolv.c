@@ -23,7 +23,7 @@
 #include <wsutil/strtoi.h>
 #include <wsutil/ws_assert.h>
 
-#include "global_enterprise_entries.h"
+#include "enterprises.h"
 
 /*
  * Win32 doesn't have SIGALRM (and it's the OS where name lookup calls
@@ -106,7 +106,7 @@
 #define ENAME_SERVICES  "services"
 #define ENAME_VLANS     "vlans"
 #define ENAME_SS7PCS    "ss7pcs"
-#define ENAME_ENTERPRISES "enterprises.tsv"
+#define ENAME_ENTERPRISES "enterprises"
 
 #define HASHETHSIZE      2048
 #define HASHHOSTSIZE     2048
