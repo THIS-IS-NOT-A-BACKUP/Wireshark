@@ -8,15 +8,7 @@
 '''Update the "manuf" file.
 
 Make-manuf creates a file containing ethernet OUIs and their company
-IDs. It merges the databases at IEEE with entries in our template file.
-Our file in turn contains entries from
-http://www.cavebear.com/archive/cavebear/Ethernet/Ethernet.txt along
-with our own.
-
-The script reads the comments at the top of "manuf.tmpl" and writes them
-to "manuf".  It then joins the manufacturer listing in "manuf.tmpl" with
-the listing in "oui.txt", "iab.txt", etc, with the entries in
-"manuf.tmpl" taking precedence.
+IDs from the databases at IEEE.
 '''
 
 import csv
@@ -47,82 +39,106 @@ def open_url(url):
     str in Python 3 and bytes in Python 2 in order to be compatibile with
     csv.reader.
     '''
-    req_headers = { 'User-Agent': 'Wireshark make-manuf' }
-    try:
-        req = urllib.request.Request(url, headers=req_headers)
-        response = urllib.request.urlopen(req)
-        body = response.read().decode('UTF-8', 'replace')
-    except Exception:
-        exit_msg('Error opening ' + url)
 
-    return (body, dict(response.info()))
+    if len(sys.argv) > 1:
+        url_path = os.path.join(sys.argv[1], url[1])
+        url_fd = open(url_path)
+        body = url_fd.read()
+        url_fd.close()
+    else:
+        url_path = '/'.join(url)
+
+        req_headers = { 'User-Agent': 'Wireshark make-manuf' }
+        try:
+            req = urllib.request.Request(url_path, headers=req_headers)
+            response = urllib.request.urlopen(req)
+            body = response.read().decode('UTF-8', 'replace')
+        except Exception:
+            exit_msg('Error opening ' + url_path)
+
+    return body
 
 # These are applied after punctuation has been removed.
 # More examples at https://en.wikipedia.org/wiki/Incorporation_(business)
 general_terms = '|'.join([
-    'a +s', # A/S and A.S. but not "As" as in "Connect As".
-    'ab', # Also follows "Oy", which is covered below.
-    'ag',
-    'b ?v',
-    'closed joint stock company',
-    'co',
-    'company',
-    'corp',
-    'corporation',
-    'de c ?v', # Follows "S.A.", which is covered separately below.
-    'gmbh',
-    'holding',
-    'inc',
-    'incorporated',
-    'jsc',
-    'kg',
-    'k k', # "K.K." as in "kabushiki kaisha", but not "K+K" as in "K+K Messtechnik".
-    'limited',
-    'llc',
-    'ltd',
-    'n ?v',
-    'oao',
-    'of',
-    'open joint stock company',
-    'ooo',
-    'oü',
-    'oy',
-    'oyj',
-    'plc',
-    'pty',
-    'pvt',
-    's ?a ?r ?l',
-    's ?a',
-    's ?p ?a',
-    'sp ?k',
-    's ?r ?l',
-    'systems',
-    'the',
-    'zao',
-    'z ?o ?o'
+    ' a +s\\b', # A/S and A.S. but not "As" as in "Connect As".
+    ' ab\\b', # Also follows "Oy", which is covered below.
+    ' ag\\b',
+    ' b ?v\\b',
+    ' closed joint stock company\\b',
+    ' co\\b',
+    ' company\\b',
+    ' corp\\b',
+    ' corporation\\b',
+    ' corporate\\b',
+    ' de c ?v\\b', # Follows "S.A.", which is covered separately below.
+    ' gmbh\\b',
+    ' holding\\b',
+    ' inc\\b',
+    ' incorporated\\b',
+    ' jsc\\b',
+    ' kg\\b',
+    ' k k\\b', # "K.K." as in "kabushiki kaisha", but not "K+K" as in "K+K Messtechnik".
+    ' limited\\b',
+    ' llc\\b',
+    ' ltd\\b',
+    ' n ?v\\b',
+    ' oao\\b',
+    ' of\\b',
+    ' open joint stock company\\b',
+    ' ooo\\b',
+    ' oü\\b',
+    ' oy\\b',
+    ' oyj\\b',
+    ' plc\\b',
+    ' pty\\b',
+    ' pvt\\b',
+    ' s ?a ?r ?l\\b',
+    ' s ?a\\b',
+    ' s ?p ?a\\b',
+    ' sp ?k\\b',
+    ' s ?r ?l\\b',
+    ' systems\\b',
+    '\\bthe\\b',
+    ' zao\\b',
+    ' z ?o ?o\\b'
     ])
+
+# Chinese company names tend to start with the location, skip it (non-exhaustive list).
+skip_start = [
+    'shengzen',
+    'shenzhen',
+    'beijing',
+    'shanghai',
+    'wuhan',
+    'hangzhou',
+    'guangxi',
+]
+
 
 def shorten(manuf):
     '''Convert a long manufacturer name to abbreviated and short names'''
     # Normalize whitespace.
     manuf = ' '.join(manuf.split())
     orig_manuf = manuf
-    # Add exactly one space on each end.
-    # XXX This appears to be for the re.sub below.
-    manuf = ' {} '.format(manuf)
     # Convert all caps to title case
     if manuf.isupper():
         manuf = manuf.title()
     # Remove any punctuation
     # XXX Use string.punctuation? Note that it includes '-' and '*'.
-    manuf = re.sub(r"[\"',./:()]", ' ', manuf)
+    manuf = re.sub(r"[\"',./:()+-]", ' ', manuf)
     # & isn't needed when Standalone
     manuf = manuf.replace(" & ", " ")
     # Remove business types and other general terms ("the", "inc", "plc", etc.)
-    plain_manuf = re.sub(r'\W(' + general_terms + ')(?= )', '', manuf, flags=re.IGNORECASE)
+    plain_manuf = re.sub(general_terms, '', manuf, flags=re.IGNORECASE)
     # ...but make sure we don't remove everything.
     if not all(s == ' ' for s in plain_manuf):
         manuf = plain_manuf
+
+    split = manuf.split()
+    if len(split) > 1 and split[0].lower() in skip_start:
+        manuf = ' '.join(split[1:])
+
     # Remove all spaces
     manuf = re.sub(r'\s+', '', manuf)
 
@@ -130,33 +146,30 @@ def shorten(manuf):
         sys.stderr.write('Manufacturer "{}" shortened to nothing.\n'.format(orig_manuf))
         sys.exit(1)
 
-    # Truncate names to a reasonable length, say, 8 characters. If
+    # Truncate names to a reasonable length, say, 12 characters. If
     # the string contains UTF-8, this may be substantially more than
-    # 8 bytes. It might also be less than 8 visible characters. Plain
+    # 12 bytes. It might also be less than 12 visible characters. Plain
     # Python slices Unicode strings by code point, which is better
     # than raw bytes but not as good as grapheme clusters. PyICU
     # supports grapheme clusters. https://bugs.python.org/issue30717
     #
-    # In our case plain Python truncates 'Savroni̇k Elektroni̇k'
-    # to 'Savroni̇', which is 7 visible characters, 8 code points,
-    # and 9 bytes.
 
     # Truncate by code points
-    trunc_len = 8
+    trunc_len = 12
 
     if have_icu:
         # Truncate by grapheme clusters
         bi_ci = icu.BreakIterator.createCharacterInstance(icu.Locale('en_US'))
         bi_ci.setText(manuf)
         bounds = list(bi_ci)
-        bounds = bounds[0:8]
+        bounds = bounds[0:trunc_len]
         trunc_len = bounds[-1]
 
     manuf = manuf[:trunc_len]
 
     if manuf.lower() == orig_manuf.lower():
         # Original manufacturer name was short and simple.
-        return manuf
+        return [manuf, None]
 
     mixed_manuf = orig_manuf
     # At least one entry has whitespace in front of a period.
@@ -165,7 +178,7 @@ def shorten(manuf):
     if mixed_manuf.upper() == mixed_manuf:
         mixed_manuf = mixed_manuf.title()
 
-    return '{}\t{}'.format(manuf, mixed_manuf)
+    return [manuf, mixed_manuf]
 
 def prefix_to_oui(prefix):
     pfx_len = len(prefix) * 8 / 2
@@ -181,49 +194,22 @@ def prefix_to_oui(prefix):
 
 def main():
     this_dir = os.path.dirname(__file__)
-    template_path = os.path.join(this_dir, '..', 'manuf.tmpl')
     manuf_path = os.path.join(this_dir, '..', 'manuf')
-    header_l = []
-    in_header = True
 
     ieee_d = {
-        'OUI':   { 'url': "https://standards-oui.ieee.org/oui/oui.csv", 'min_entries': 1000 },
-        'CID':   { 'url': "https://standards-oui.ieee.org/cid/cid.csv", 'min_entries': 75 },
-        'IAB':   { 'url': "https://standards-oui.ieee.org/iab/iab.csv", 'min_entries': 1000 },
-        'OUI28': { 'url': "https://standards-oui.ieee.org/oui28/mam.csv", 'min_entries': 1000 },
-        'OUI36': { 'url': "https://standards-oui.ieee.org/oui36/oui36.csv", 'min_entries': 1000 },
+        'OUI':   { 'url': ["https://standards-oui.ieee.org/oui/", "oui.csv"], 'min_entries': 1000 },
+        'CID':   { 'url': ["https://standards-oui.ieee.org/cid/", "cid.csv"], 'min_entries': 75 },
+        'IAB':   { 'url': ["https://standards-oui.ieee.org/iab/", "iab.csv"], 'min_entries': 1000 },
+        'OUI28': { 'url': ["https://standards-oui.ieee.org/oui28/", "mam.csv"], 'min_entries': 1000 },
+        'OUI36': { 'url': ["https://standards-oui.ieee.org/oui36/", "oui36.csv"], 'min_entries': 1000 },
     }
     oui_d = {}
-    hp = "[0-9a-fA-F]{2}"
-    manuf_re = re.compile(r'^({}:{}:{})\s+(\S.*)$'.format(hp, hp, hp))
 
     min_total = 35000; # 35830 as of 2018-09-05
-    tmpl_added  = 0
     total_added = 0
 
-    # Write out the header and populate the OUI list with our entries.
-
-    try:
-        tmpl_fd = io.open(template_path, 'r', encoding='UTF-8')
-    except Exception:
-        exit_msg("Couldn't open template file for reading ({}) ".format(template_path))
-    for tmpl_line in tmpl_fd:
-        tmpl_line = tmpl_line.strip()
-        m = manuf_re.match(tmpl_line)
-        if not m and in_header:
-            header_l.append(tmpl_line)
-        elif m:
-            in_header = False
-            oui = m.group(1).upper()
-            oui_d[oui] = m.group(2)
-            tmpl_added += 1
-    tmpl_fd.close()
-
-    total_added += tmpl_added
-
     # Add IEEE entries from each of their databases
-    ieee_db_l = list(ieee_d.keys())
-    ieee_db_l.sort()
+    ieee_db_l = ['OUI', 'OUI28', 'OUI36', 'CID', 'IAB']
 
     for db in ieee_db_l:
         db_url = ieee_d[db]['url']
@@ -231,10 +217,8 @@ def main():
         ieee_d[db]['added'] = 0
         ieee_d[db]['total'] = 0
         print('Merging {} data from {}'.format(db, db_url))
-        (body, response_d) = open_url(db_url)
+        body = open_url(db_url)
         ieee_csv = csv.reader(body.splitlines())
-        ieee_d[db]['last-modified'] = response_d['Last-Modified']
-        ieee_d[db]['length'] = response_d['Content-Length']
 
         # Pop the title row.
         next(ieee_csv)
@@ -247,14 +231,6 @@ def main():
             manuf = html.unescape(manuf)
             if oui in oui_d:
                 action = 'Skipping'
-                try:
-                    manuf_stripped = re.findall('[a-z]+', manuf.lower())
-                    tmpl_manuf_stripped = re.findall('[a-z]+', oui_d[oui].split('\t')[-1].strip().lower())
-                    if manuf_stripped == tmpl_manuf_stripped:
-                        action = 'Skipping duplicate'
-                except IndexError:
-                    pass
-
                 print('{} - {} IEEE "{}" in favor of "{}"'.format(oui, action, manuf, oui_d[oui]))
                 ieee_d[db]['skipped'] += 1
             else:
@@ -277,26 +253,65 @@ def main():
         exit_msg("Couldn't open manuf file for reading ({}) ".format(manuf_path))
 
     manuf_fd.write("# This file was generated by running ./tools/make-manuf.py.\n")
-    manuf_fd.write("# Don't change it directly, change manuf.tmpl instead.\n#\n")
-    manuf_fd.write('\n'.join(header_l))
+    manuf_fd.write(
+'''#
+# /etc/manuf - Ethernet vendor codes, and well-known MAC addresses
+#
+# Laurent Deniel <laurent.deniel [AT] free.fr>
+#
+# Wireshark - Network traffic analyzer
+# By Gerald Combs <gerald [AT] wireshark.org>
+# Copyright 1998 Gerald Combs
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# The data below has been assembled from the following sources:
+#
+# The IEEE public OUI listings available from:
+# <http://standards-oui.ieee.org/oui/oui.csv>
+# <http://standards-oui.ieee.org/cid/cid.csv>
+# <http://standards-oui.ieee.org/iab/iab.csv>
+# <http://standards-oui.ieee.org/oui28/mam.csv>
+# <http://standards-oui.ieee.org/oui36/oui36.csv>
+#
+# This file is in the same format as ethers(4) except that vendor names
+# are truncated to eight characters when used with Wireshark, and
+# that well-known MAC addresses need not have a full 6 octets and may
+# have a netmask following them specifying how many bits of the address
+# are relevant (the other bits are wildcards).  Also, either ":", "-",
+# or "." can be used to separate the octets.
+#
+# You can get the latest version of this file from
+# https://gitlab.com/wireshark/wireshark/-/raw/master/manuf
+
+''')
 
     for db in ieee_db_l:
         manuf_fd.write(
             '''\
-# {url}:
-#   Content-Length: {length}
-#   Last-Modified: {last-modified}
 
 '''.format( **ieee_d[db]))
 
     oui_l = list(oui_d.keys())
     oui_l.sort()
     for oui in oui_l:
-        manuf_fd.write('{}\t{}\n'.format(oui, oui_d[oui]))
+        manuf = oui_d[oui]
+        line = oui
+        sep_len = (24 - len(line)) // 8
+        if sep_len <= 0:
+            sep_len = 1
+        line += '\t' * sep_len + manuf[0]
+        if manuf[1]:
+            if len(manuf[0]) < 8:
+                sep_len = 2
+            else:
+                sep_len = 1
+            line += '\t' * sep_len + manuf[1]
+        line += '\n'
+        manuf_fd.write(line)
 
     manuf_fd.close()
 
-    print('{:<20}: {}'.format('Original entries', tmpl_added))
     for db in ieee_d:
         print('{:<20}: {}'.format('IEEE ' + db + ' added', ieee_d[db]['added']))
     print('{:<20}: {}'.format('Total added', total_added))
