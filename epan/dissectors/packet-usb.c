@@ -1445,7 +1445,26 @@ static const value_string darwin_usb_status_vals[] = {
     {0xe00002da, "kIOReturnNoChannels"},
     {0xe00002db, "kIOReturnNoSpace"},
 
+    {0xe00002dd, "kIOReturnPortExists"},
+    {0xe00002de, "kIOReturnCannotWire"},
+    {0xe00002df, "kIOReturnNoInterrupt"},
+    {0xe00002e0, "kIOReturnNoFrames"},
+    {0xe00002e1, "kIOReturnMessageTooLarge"},
+    {0xe00002e2, "kIOReturnNotPermitted"},
+    {0xe00002e3, "kIOReturnNoPower"},
+    {0xe00002e4, "kIOReturnNoMedia"},
+    {0xe00002e5, "kIOReturnUnformattedMedia"},
+    {0xe00002e6, "kIOReturnUnsupportedMode"},
+    {0xe00002e7, "kIOReturnUnderrun"},
+    {0xe00002e8, "kIOReturnOverrun"},
+    {0xe00002e9, "kIOReturnDeviceError"},
+    {0xe00002ea, "kIOReturnNoCompletion"},
     {0xe00002eb, "kIOReturnAborted"},
+    {0xe00002ec, "kIOReturnNoBandwidth"},
+    {0xe00002ed, "kIOReturnNotResponding"},
+    {0xe00002ee, "kIOReturnIsoTooOld"},
+    {0xe00002ef, "kIOReturnIsoTooNew"},
+    {0xe00002f0, "kIOReturnNotFound"},
     {0, NULL}
 };
 
@@ -4976,7 +4995,7 @@ dissect_darwin_usb_iso_transfer(packet_info *pinfo _U_, proto_tree *tree, usb_he
         }
 
         iso_desc_ti = proto_tree_add_protocol_format(tree, proto_usb, tvb, offset,
-                20, "Frame %u [%s]", i, val_to_str_ext(status, &usb_darwin_status_vals_ext, "Error %d"));
+                20, "Frame %u", i);
 
         iso_desc_tree = proto_item_add_subtree(iso_desc_ti, ett_usb_isodesc);
 
@@ -4986,7 +5005,9 @@ dissect_darwin_usb_iso_transfer(packet_info *pinfo _U_, proto_tree *tree, usb_he
 
         if (usb_conv_info->is_request == FALSE) {
             proto_tree_add_item(iso_desc_tree, hf_usb_darwin_iso_timestamp, tvb, offset + 20, 8, ENC_LITTLE_ENDIAN);
-            proto_tree_add_item(iso_desc_tree, hf_usb_darwin_iso_status, tvb, offset + 8, 4, ENC_LITTLE_ENDIAN);
+            proto_tree_add_item_ret_uint(iso_desc_tree, hf_usb_darwin_iso_status, tvb, offset + 8, 4, ENC_LITTLE_ENDIAN, &status);
+
+            proto_item_append_text(iso_desc_ti, " [%s]", val_to_str_ext(status, &usb_darwin_status_vals_ext, "Error %d"));
 
             /* Data */
             if (frame_length > len) {
