@@ -183,6 +183,39 @@ typedef LONG (WINAPI * RtlGetVersionProc) (OSVERSIONINFOEX *);
 #define STATUS_SUCCESS 0
 #endif
 #include <stdlib.h>
+
+/*
+ * Determine whether it's 32-bit or 64-bit Windows based on the
+ * instruction set; this only tests for the instruction sets
+ * that we currently support for Windows, it doesn't bother with MIPS,
+ * PowerPC, Alpha, or IA-64, nor does it bother wieth 32-bit ARM.
+ */
+static void
+add_os_bitsize(GString *str, SYSTEM_INFO *system_info)
+{
+	switch (system_info->wProcessorArchitecture) {
+	case PROCESSOR_ARCHITECTURE_AMD64:
+#ifdef PROCESSOR_ARCHITECTURE_ARM64
+	case PROCESSOR_ARCHITECTURE_ARM64:
+#endif
+		g_string_append(str, "64-bit ");
+		break;
+	case PROCESSOR_ARCHITECTURE_INTEL:
+		g_string_append(str, "32-bit ");
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * Test whether the OS an "NT Workstation" version, meaning "not server".
+ */
+static gboolean
+is_nt_workstation(OSVERSIONINFOEX *win_version_info)
+{
+	return win_version_info->wProductType == VER_NT_WORKSTATION;
+}
 #endif // _WIN32
 
 /*
@@ -230,8 +263,33 @@ DIAG_ON(cast-function-type)
 
 	SYSTEM_INFO system_info;
 	memset(&system_info, '\0', sizeof system_info);
-	/* Look for and use the GetNativeSystemInfo() function to get the correct processor architecture
-	 * even when running 32-bit Wireshark in WOW64 (x86 emulation on 64-bit Windows) */
+	/*
+	 * Look for and use the GetNativeSystemInfo() function to get the
+	 * correct processor architecture even when running 32-bit Wireshark
+	 * in WOW64 (x86 emulation on 64-bit Windows).
+	 *
+	 * However, the documentation for GetNativeSystemInfo() says
+	 *
+	 *   If the function is called from an x86 or x64 application
+	 *   running on a 64-bit system that does not have an Intel64
+	 *   or x64 processor (such as ARM64), it will return information
+	 *   as if the system is x86 only if x86 emulation is supported
+	 *   (or x64 if x64 emulation is also supported).
+	 *
+	 * so it appears that it will *not* return the correct processor
+	 * architecture if running x86-64 Wireshark on ARM64 with
+	 * x86-64 emulation - it will presumably say "x86-64", not "ARM64".
+	 *
+	 * So we use it to say "32-bit" or "64-bit", but we don't use
+	 * it to say "N-bit x86" or "N-bit ARM".
+	 *
+	 * It Would Be Nice if there were some way to report that
+	 * Wireshark is running in emulation on an ARM64 system;
+	 * that might be important if, for example, a user is
+	 * reporting a capture problem, as there currently isn't
+	 * a version of Npcap that can support x86-64 programs on
+	 * an ARM64 system.
+	 */
 	GetNativeSystemInfo(&system_info);
 
 	switch (win_version_info.dwPlatformId) {
@@ -242,7 +300,18 @@ DIAG_ON(cast-function-type)
 		break;
 
 	case VER_PLATFORM_WIN32_WINDOWS:
-		/* Windows OT */
+		/*
+		 * Windows OT.
+		 *
+		 *   https://nsis-dev.github.io/NSIS-Forums/html/t-128527.html
+		 *
+		 * claims that
+		 *
+		 *   HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion
+		 *
+		 * has a key ProductName, at least in Windows M3, the
+		 * value of that key appears to be an OS product name.
+		 */
 		switch (win_version_info.dwMajorVersion) {
 
 		case 4:
@@ -276,17 +345,55 @@ DIAG_ON(cast-function-type)
 		break;
 
 	case VER_PLATFORM_WIN32_NT:
-		/* Windows NT */
+		/*
+		 * Windows NT.
+		 *
+		 *   https://stackoverflow.com/a/19778234/16139739
+		 *
+		 * claims that
+		 *
+		 *   HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion
+		 *
+		 * has a key ProductName that is "present for Windows XP
+		 * and aboeve[sic]".  The value of that key gives a
+		 * "product name"...
+		 *
+		 * ...at least until Windows 11, which it insists is
+		 * Windows 10.  So we don't bother with it.  (It may
+		 * indicate whether it's Home or Pro or..., but that's
+		 * not worth the effort of fixing the "Windows 11 is
+		 * Windows 10" nonsense.)
+		 *
+		 *   https://patents.google.com/patent/EP1517235A2/en
+		 *
+		 * is a Microsoft patent that mentions the
+		 * BrandingFormatString() routine, and seems to suggest
+		 * that it dates back to at least Windows XP.
+		 *
+		 *   https://dennisbabkin.com/blog/?t=how-to-tell-the-real-version-of-windows-your-app-is-running-on
+		 *
+		 * says that routine is in an undocumented winbrand.dll DLL,
+		 * but is used by Microsoft's own code to put the OS
+		 * product name into messages.  It, unlike ProductName,
+		 * appears to make a distinction between Windows 10 and
+		 * Windows 11, and, when handed the string "%WINDOWS_LONG%",
+		 * gives the same edition decoration that I suspect
+		 * ProductName does.
+		 */
 		switch (win_version_info.dwMajorVersion) {
 
 		case 3:
 		case 4:
+			/* NT 3.x and 4.x. */
 			g_string_append_printf(str, "Windows NT %lu.%lu",
 			    win_version_info.dwMajorVersion, win_version_info.dwMinorVersion);
 			break;
 
 		case 5:
-			/* 3 cheers for Microsoft marketing! */
+			/*
+			 * W2K, WXP, and their server versions.
+			 * 3 cheers for Microsoft marketing!
+			 */
 			switch (win_version_info.dwMinorVersion) {
 
 			case 0:
@@ -298,7 +405,7 @@ DIAG_ON(cast-function-type)
 				break;
 
 			case 2:
-				if ((win_version_info.wProductType == VER_NT_WORKSTATION) &&
+				if (is_nt_workstation(&win_version_info) &&
 				    (system_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64)) {
 					g_string_append_printf(str, "Windows XP Professional x64 Edition");
 				} else {
@@ -316,30 +423,22 @@ DIAG_ON(cast-function-type)
 			break;
 
 		case 6: {
-			gboolean is_nt_workstation;
-
-			if (system_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64)
-				g_string_append(str, "64-bit ");
-			else if (system_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL)
-				g_string_append(str, "32-bit ");
-#ifndef VER_NT_WORKSTATION
-#define VER_NT_WORKSTATION 0x01
-			is_nt_workstation = ((win_version_info.wReserved[1] & 0xff) == VER_NT_WORKSTATION);
-#else
-			is_nt_workstation = (win_version_info.wProductType == VER_NT_WORKSTATION);
-#endif
+			/*
+			 * Vista, W7, W8, W8.1, and their server versions.
+			 */
+			add_os_bitsize(str, &system_info);
 			switch (win_version_info.dwMinorVersion) {
 			case 0:
-				g_string_append_printf(str, is_nt_workstation ? "Windows Vista" : "Windows Server 2008");
+				g_string_append_printf(str, is_nt_workstation(&win_version_info) ? "Windows Vista" : "Windows Server 2008");
 				break;
 			case 1:
-				g_string_append_printf(str, is_nt_workstation ? "Windows 7" : "Windows Server 2008 R2");
+				g_string_append_printf(str, is_nt_workstation(&win_version_info) ? "Windows 7" : "Windows Server 2008 R2");
 				break;
 			case 2:
-				g_string_append_printf(str, is_nt_workstation ? "Windows 8" : "Windows Server 2012");
+				g_string_append_printf(str, is_nt_workstation(&win_version_info) ? "Windows 8" : "Windows Server 2012");
 				break;
 			case 3:
-				g_string_append_printf(str, is_nt_workstation ? "Windows 8.1" : "Windows Server 2012 R2");
+				g_string_append_printf(str, is_nt_workstation(&win_version_info) ? "Windows 8.1" : "Windows Server 2012 R2");
 				break;
 			default:
 				g_string_append_printf(str, "Windows NT, unknown version %lu.%lu",
@@ -350,26 +449,27 @@ DIAG_ON(cast-function-type)
 		}  /* case 6 */
 
 		case 10: {
-			gboolean is_nt_workstation;
+			/*
+			 * W10, W11, and their server versions.
+			 */
                         TCHAR ReleaseId[10];
                         DWORD ridSize = _countof(ReleaseId);
 
-			if (system_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64)
-				g_string_append(str, "64-bit ");
-			else if (system_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL)
-				g_string_append(str, "32-bit ");
-			is_nt_workstation = (win_version_info.wProductType == VER_NT_WORKSTATION);
+			add_os_bitsize(str, &system_info);
 			switch (win_version_info.dwMinorVersion) {
 			case 0:
 				/* List of BuildNumber from https://en.wikipedia.org/wiki/List_of_Microsoft_Windows_versions
 				 * and https://docs.microsoft.com/en-us/windows/release-health/windows11-release-information */
-				if (is_nt_workstation) {
-					if (win_version_info.dwBuildNumber >= 10240 && win_version_info.dwBuildNumber < 22000){
-						g_string_append_printf(str, "Windows 10");
-					} else if (win_version_info.dwBuildNumber == 22000) {
-						g_string_append_printf(str, "Windows 11");
-					} else {
+				if (is_nt_workstation(&win_version_info)) {
+					if (win_version_info.dwBuildNumber < 10240) {
+						/* XXX - W10 builds before 10240? */
 						g_string_append_printf(str, "Windows");
+					} else if (win_version_info.dwBuildNumber < 22000){
+						/* W10 builds sstart at 10240 and end before 22000 */
+						g_string_append_printf(str, "Windows 10");
+					} else {
+						/* Builds 22000 and later are W11 (until there's W12...). */
+						g_string_append_printf(str, "Windows 11");
 					}
 				} else {
 					switch (win_version_info.dwBuildNumber) {
@@ -387,6 +487,88 @@ DIAG_ON(cast-function-type)
 						break;
 					}
 				}
+
+				/*
+				 * Windows 10 and 11 have had multiple
+				 * releases, with different build numbers.
+				 *
+				 * The build number *could* be used to
+				 * determine the release string, but
+				 * that would require a table of releases
+				 * and strings, and that would have to
+				 * get updated whenever a new release
+				 * comes out, and that seems to happen
+				 * twice a year these days.
+				 *
+				 * The good news is that, under
+				 *
+				 *   HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion
+				 *
+				 * there are two keys, DisplayVersion and
+				 * ReleaseId.  If DisplayVersion is present,
+				 * it's a string that gives the release
+				 * string; if not, ReleaseId gives the
+				 * release string.
+				 *
+				 * The DisplayVersion value is currently
+				 * of the form YYHN, where YY is the
+				 * last two digits of the year, H stands
+				 * for "half", and N is the half of the
+				 * year in which it came out.
+				 *
+				 * The ReleaseId is just a numeric string
+				 * and for all the YYHN releases, it's
+				 * stuck at the same value.
+				 *
+				 * Note further that
+				 *
+				 *   https://github.com/nvaccess/nvda/blob/master/source/winVersion.py
+				 *
+				 * has a comment claiming that
+				 *
+				 *   From Version 1511 (build 10586), release
+				 *   Id/display version comes from Windows
+				 *   Registry.
+				 *   However there are builds with no release
+				 *   name (Version 1507/10240) or releases
+				 *   with different builds.
+				 *   Look these up first before asking
+				 *   Windows Registry.
+				 *
+				 * "Look these up first" means "look them
+				 * up in a table that goes from
+				 *
+				 *   10240: Windows 10 1507
+				 *
+				 * to
+				 *
+				 *   22621: Windows 11 22H2
+				 *
+				 * and also includes
+				 *
+				 *   20348: Windows Server 2022
+				 *
+				 * I'm not sure why any Windows 10 builds
+				 * after 10240 are in the table; what does
+				 * "releases with different builds" mean?
+				 * does it mean that those particular
+				 * builds have bogus ReleaseId or
+				 * DisplayVersion values?  Those builds
+				 * appear to be official release builds
+				 * for W10/W11, according to the table
+				 * in
+				 *
+				 *   https://en.wikipedia.org/wiki/Windows_NT
+				 *
+				 * so, if those are all necessary, why
+				 * should ReleaseId or DisplayVersion be
+				 * trusted at all?
+				 *
+				 * As for the Windows Server 2022 entry,
+				 * is that just becuase that script doesn't
+				 * bother checking for "workstation" vs.
+				 * "server"?
+				 */
 				if (RegGetValue(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
 				                L"DisplayVersion", RRF_RT_REG_SZ, NULL, &ReleaseId, &ridSize) == ERROR_SUCCESS) {
 					g_string_append_printf(str, " (%s)", utf_16to8(ReleaseId));
