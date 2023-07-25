@@ -46,6 +46,7 @@ struct epan_dfilter {
 	char		*syntax_tree_str;
 	/* Used to pass arguments to functions. List of Lists (list of registers). */
 	GSList		*function_stack;
+	GSList		*set_stack;
 };
 
 typedef struct {
@@ -158,6 +159,8 @@ df_cell_append(df_cell_t *rp, fvalue_t *fv);
 
 GPtrArray *
 df_cell_ref(df_cell_t *rp);
+
+#define df_cell_ptr(rp) ((rp)->array)
 
 size_t
 df_cell_size(const df_cell_t *rp);

@@ -139,6 +139,7 @@ dfilter_new(GPtrArray *deprecated)
 	df = g_new0(dfilter_t, 1);
 	df->insns = NULL;
 	df->function_stack = NULL;
+	df->set_stack = NULL;
 	df->warnings = NULL;
 	if (deprecated)
 		df->deprecated = g_ptr_array_ref(deprecated);
@@ -181,6 +182,11 @@ dfilter_free(dfilter_t *df)
 	if (df->function_stack != NULL) {
 		ws_critical("Function stack list should be NULL");
 		g_slist_free(df->function_stack);
+	}
+
+	if (df->set_stack != NULL) {
+		ws_critical("Set stack list should be NULL");
+		g_slist_free(df->set_stack);
 	}
 
 	if (df->warnings)
@@ -702,6 +708,23 @@ dfilter_interested_in_proto(const dfilter_t *df, int proto_id)
 		}
 	}
 	return FALSE;
+}
+
+gboolean
+dfilter_requires_columns(const dfilter_t *df)
+{
+	if (df == NULL) {
+		return FALSE;
+	}
+
+	/* XXX: Could cache this like packet_cache_proto_handles */
+	static int proto_cols = -1;
+	if (proto_cols == -1) {
+		proto_cols = proto_get_id_by_filter_name("_ws.col");
+	}
+	ws_assert(proto_cols != -1);
+
+	return dfilter_interested_in_proto(df, proto_cols);
 }
 
 GPtrArray *
