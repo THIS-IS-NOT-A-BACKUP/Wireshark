@@ -49,7 +49,7 @@ size_t global_dccp_services_table_count(void)
     return G_N_ELEMENTS(global_dccp_services_table);
 }
 
-const char *
+ws_services_entry_t *
 global_services_lookup(uint16_t value, ws_services_proto_t proto)
 {
     ws_services_entry_t *list1 = NULL, *list2 = NULL;
@@ -84,16 +84,46 @@ global_services_lookup(uint16_t value, ws_services_proto_t proto)
     if (list1) {
         found = bsearch(&value, list1, list1_size, sizeof(ws_services_entry_t), compare_entry);
         if (found) {
-            return found->name;
+            return found;
         }
     }
 
     if (list2) {
         found = bsearch(&value, list2, list2_size, sizeof(ws_services_entry_t), compare_entry);
         if (found) {
-            return found->name;
+            return found;
         }
     }
 
     return NULL;
+}
+
+void
+global_services_dump(FILE *fp)
+{
+    ws_services_entry_t *ptr;
+
+    /* Brute-force approach... */
+    for (uint16_t num = 0; num <= _services_max_port && num < UINT16_MAX; num++) {
+        /* TCP */
+        ptr = global_services_lookup(num, ws_tcp);
+        if (ptr != NULL) {
+            fprintf(fp, "%s\t%"PRIu16"\ttcp\t%s\n", ptr->name, num, ptr->description);
+        }
+        /* UDP */
+        ptr = global_services_lookup(num, ws_udp);
+        if (ptr != NULL) {
+            fprintf(fp, "%s\t%"PRIu16"\tudp\t%s\n", ptr->name, num, ptr->description);
+        }
+        /* SCTP */
+        ptr = global_services_lookup(num, ws_sctp);
+        if (ptr != NULL) {
+            fprintf(fp, "%s\t%"PRIu16"\tsctp\t%s\n", ptr->name, num, ptr->description);
+        }
+        /* DCCP */
+        ptr = global_services_lookup(num, ws_dccp);
+        if (ptr != NULL) {
+            fprintf(fp, "%s\t%"PRIu16"\tdccp\t%s\n", ptr->name, num, ptr->description);
+        }
+    }
 }
