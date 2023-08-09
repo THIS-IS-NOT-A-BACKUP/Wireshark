@@ -44,6 +44,12 @@ See the xref:tshark.html#decode_as[tshark](1) manual page for more examples.
 --
 // end::decode_as[]
 
+--disable-all-protocols::
++
+--
+Disable dissection of all protocols.
+--
+
 --disable-protocol <proto_name>[,<proto_name>,...]::
 +
 --
@@ -131,6 +137,12 @@ performed synchronously. For live captures, which are always in single-pass
 mode, this makes it more difficult for dissection to keep up with a busy
 network, possibly leading to dropped packets.
 // end::tshark[]
+--
+
+--only-protocols <protocols>::
++
+--
+Only enable dissection of these protocols, comma separated. Disable everything else.
 --
 
 -t  (a|ad|adoy|d|dd|e|r|u|ud|udoy)[.[N]]|.[N]::
