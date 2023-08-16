@@ -1364,7 +1364,9 @@ if(FETCH_lua)
 	# Download and build lua
 	include(${CMAKE_SOURCE_DIR}/cmake/external/lua52/Lua52.cmake)
 else()
-	ws_find_package(LUA ENABLE_LUA HAVE_LUA "5.1")
+	set(LUA_FIND_VERSIONS 5.2 CACHE STRING "Valid Lua versions")
+	set_property(CACHE LUA_FIND_VERSIONS PROPERTY STRINGS 5.2 5.1 ANY)
+	ws_find_package(Lua ENABLE_LUA HAVE_LUA)
 endif()
 
 ws_find_package(NL ENABLE_NETLINK HAVE_LIBNL)
@@ -2026,6 +2028,7 @@ set(TSHARK_TAP_SRC
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-srt.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-stats_tree.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-sv.c
+	${CMAKE_SOURCE_DIR}/ui/cli/tap-voip.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-wspstat.c
 	${CUSTOM_TSHARK_TAP_SRC}
 
@@ -2383,7 +2386,6 @@ endif()
 if(LUA_FOUND AND ENABLE_LUA)
 	set(_lua_files
 		"${CMAKE_SOURCE_DIR}/epan/wslua/init.lua"
-		"${CMAKE_SOURCE_DIR}/epan/wslua/console.lua"
 		"${CMAKE_SOURCE_DIR}/epan/wslua/browser_sslkeylog.lua"
 	)
 	foreach(_lua_file ${_lua_files})
@@ -3064,6 +3066,7 @@ if(BUILD_sharkd)
 		# $<TARGET_OBJECTS:cli_main> and has real_main().
 		#
 		$<TARGET_OBJECTS:shark_common>
+		ui/cli/simple_dialog.c
 		sharkd.c
 		sharkd_daemon.c
 		sharkd_session.c
