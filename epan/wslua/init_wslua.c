@@ -1118,6 +1118,49 @@ wslua_add_introspection(void)
     }
 }
 
+static void wslua_add_deprecated(void)
+{
+    /* For backward compatibility. */
+    lua_getglobal(L, "wtap_encaps");
+    lua_setglobal(L, "wtap");
+
+    /*
+     * Generate the wtap_filetypes items for file types, for backwards
+     * compatibility.
+     * We no longer have WTAP_FILE_TYPE_SUBTYPE_ #defines;
+     * built-in file types are registered the same way that
+     * plugin file types are registered.
+     *
+     * New code should use wtap_name_to_file_type_subtype to
+     * look up file types by name.
+     */
+    wslua_init_wtap_filetypes(L);
+
+    /* Old / deprecated menu groups. These shoudn't be used in new code. */
+    lua_getglobal(L, "MENU_PACKET_ANALYZE_UNSORTED");
+    lua_setglobal(L, "MENU_ANALYZE_UNSORTED");
+    lua_getglobal(L, "MENU_ANALYZE_CONVERSATION_FILTER");
+    lua_setglobal(L, "MENU_ANALYZE_CONVERSATION");
+    lua_getglobal(L, "MENU_STAT_CONVERSATION_LIST");
+    lua_setglobal(L, "MENU_STAT_CONVERSATION");
+    lua_getglobal(L, "MENU_STAT_ENDPOINT_LIST");
+    lua_setglobal(L, "MENU_STAT_ENDPOINT");
+    lua_getglobal(L, "MENU_STAT_RESPONSE_TIME");
+    lua_setglobal(L, "MENU_STAT_RESPONSE");
+    lua_getglobal(L, "MENU_PACKET_STAT_UNSORTED");
+    lua_setglobal(L, "MENU_STAT_UNSORTED");
+
+    /* deprecated function names */
+    lua_getglobal(L, "Dir");
+    lua_getfield(L, -1, "global_config_path");
+    lua_setglobal(L, "datafile_path");
+    lua_getfield(L, -1, "personal_config_path");
+    lua_setglobal(L, "persconffile_path");
+    lua_pop(L, 1);
+}
+
+static int wslua_console_print(lua_State *_L);
+
 static const char *lua_error_msg(int code)
 {
     switch (code) {
@@ -1142,10 +1185,26 @@ static int lua_funnel_console_eval(const char *console_input,
                                         char **error_hint,
                                         void *callback_data _U_)
 {
-    ws_noisy("Console input: %s", console_input);
     int lcode;
 
-    lcode = luaL_loadstring(L, console_input);
+    const int curr_top = lua_gettop(L);
+
+    // If it starts with an equals sign replace it with "return"
+    char *codestr;
+    while (g_ascii_isspace(*console_input))
+        console_input++;
+    if (*console_input == '=')
+        codestr = ws_strdup_printf("return %s", console_input+1);
+    else
+        codestr = (char *)console_input; /* Violate const safety to avoid a strdup() */
+
+    ws_noisy("Console input: %s", codestr);
+    lcode = luaL_loadstring(L, codestr);
+    /* Free only if we called strdup(). */
+    if (codestr != console_input)
+        g_free(codestr);
+    codestr = NULL;
+
     if (lcode != LUA_OK) {
         ws_debug("luaL_loadstring(): %s (%d)", lua_error_msg(lcode), lcode);
         if (error_hint) {
@@ -1165,6 +1224,24 @@ static int lua_funnel_console_eval(const char *console_input,
             *error_ptr = g_strdup(lua_tostring(L, -1));
         }
         return 1;
+    }
+
+    // If we have values returned print them all
+    if (lua_gettop(L) > curr_top) {  /* any arguments? */
+        lua_pushcfunction(L, wslua_console_print);
+        lua_insert(L, curr_top+1);
+        lcode = lua_pcall(L, lua_gettop(L)-curr_top-1, 0, 0);
+        if (lcode != LUA_OK) {
+            /* Error printing result */
+            if (error_hint)
+                *error_hint = ws_strdup_printf("error printing return values: %s", lua_error_msg(lcode));
+            return 1;
+        }
+    }
+
+    // Maintain stack discipline
+    if (lua_gettop(L) != curr_top) {
+        ws_critical("Expected stack top == %d, have %d", curr_top, lua_gettop(L));
     }
 
     ws_noisy("Success");
@@ -1257,6 +1334,47 @@ static void lua_funnel_console_close(void *callback_data _U_)
     wslua_gui_print_func_ptr = NULL;
     wslua_gui_print_data_ptr = NULL;
     wslua_lua_print_func_ref = LUA_NOREF;
+}
+
+static int wslua_file_exists(lua_State *_L)
+{
+    const char *path = luaL_checkstring(_L, 1);
+    lua_pushboolean(_L, g_file_test(path, G_FILE_TEST_EXISTS));
+    return 1;
+}
+
+static int wslua_lua_typeof(lua_State *_L)
+{
+    const char *classname = wslua_typeof(_L, 1);
+    lua_pushstring(_L, classname);
+    return 1;
+}
+
+/* Other useful constants */
+void wslua_add_useful_constants(void)
+{
+    const funnel_ops_t *ops = funnel_get_funnel_ops();
+    char *path;
+
+    WSLUA_REG_GLOBAL_BOOL(L,"GUI_ENABLED",ops && ops->new_dialog);
+
+    /* DATA_DIR has a trailing directory separator. */
+    path = get_datafile_path("");
+    lua_pushfstring(L, "%s"G_DIR_SEPARATOR_S, path);
+    g_free(path);
+    lua_setglobal(L, "DATA_DIR");
+
+    /* USER_DIR has a trailing directory separator. */
+    path = get_persconffile_path("", FALSE);
+    lua_pushfstring(L, "%s"G_DIR_SEPARATOR_S, path);
+    g_free(path);
+    lua_setglobal(L, "USER_DIR");
+
+    lua_pushcfunction(L, wslua_file_exists);
+    lua_setglobal(L, "file_exists");
+
+    lua_pushcfunction(L, wslua_lua_typeof);
+    lua_setglobal(L, "typeof");
 }
 
 void wslua_init(register_cb cb, gpointer client_data) {
@@ -1452,7 +1570,16 @@ void wslua_init(register_cb cb, gpointer client_data) {
     /* see dissect_lua() for notes */
     WSLUA_REG_GLOBAL_NUMBER(L,"DESEGMENT_ONE_MORE_SEGMENT",DESEGMENT_ONE_MORE_SEGMENT);
 
+    /* the possible values for Pinfo's p2p_dir attribute */
+    WSLUA_REG_GLOBAL_NUMBER(L,"P2P_DIR_UNKNOWN",-1);
+    WSLUA_REG_GLOBAL_NUMBER(L,"P2P_DIR_SENT",0);
+    WSLUA_REG_GLOBAL_NUMBER(L,"P2P_DIR_RECV",1);
+
     wslua_add_introspection();
+
+    wslua_add_useful_constants();
+
+    wslua_add_deprecated();
 
     // Register Lua's console menu (in the GUI)
     if (first_time) {
