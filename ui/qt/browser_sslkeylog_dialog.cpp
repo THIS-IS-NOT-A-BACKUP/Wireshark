@@ -37,6 +37,9 @@ SSLKeylogDialog::SSLKeylogDialog(QWidget &parent) :
     QPushButton *save_button = ui->buttonBox->addButton(tr("Save"), QDialogButtonBox::ApplyRole);
     connect(save_button, &QPushButton::clicked, this, &SSLKeylogDialog::on_saveActivated);
 
+    QPushButton *reset_button = ui->buttonBox->button(QDialogButtonBox::Reset);
+    connect(reset_button, &QPushButton::clicked, this, &SSLKeylogDialog::on_resetActivated);
+
     connect(ui->keylogPushButton, &QPushButton::clicked, this, &SSLKeylogDialog::on_browseKeylogPath);
     connect(ui->browserPushbutton, &QPushButton::clicked, this, &SSLKeylogDialog::on_browseBrowserPath);
 
@@ -100,7 +103,6 @@ void SSLKeylogDialog::on_launchActivated()
     browserProcess.setProcessEnvironment(env);
     bool ok = browserProcess.startDetached();
     if (ok) {
-        accept();
         return;
     }
 
@@ -111,17 +113,35 @@ void SSLKeylogDialog::on_launchActivated()
         report_failure("Error lauching browser");
 }
 
+// Restore user preferences
+void SSLKeylogDialog::on_resetActivated()
+{
+    QString keylog_path;
+    QString browser_path;
+
+    if (pref_tls_keylog_) {
+        keylog_path = prefs_get_string_value(pref_tls_keylog_, pref_current);
+        ui->keylogLineEdit->setText(keylog_path);
+    }
+    browser_path = prefs_get_string_value(pref_browser_path_, pref_current);
+    ui->browserLineEdit->setText(browser_path);
+}
+
 void SSLKeylogDialog::on_browseKeylogPath()
 {
     QString caption = mainApp->windowTitleString(tr("TLS Keylog"));
     QString file_name = WiresharkFileDialog::getSaveFileName(this, caption,
                             mainApp->lastOpenDir().path());
-    ui->keylogLineEdit->setText(file_name);
+    if (!file_name.isEmpty()) {
+        ui->keylogLineEdit->setText(file_name);
+    }
 }
 
 void SSLKeylogDialog::on_browseBrowserPath()
 {
     QString caption = mainApp->windowTitleString(tr("Web Browser"));
     QString file_name = WiresharkFileDialog::getOpenFileName(this, caption);
-    ui->browserLineEdit->setText(file_name);
+    if (!file_name.isEmpty()) {
+        ui->browserLineEdit->setText(file_name);
+    }
 }
