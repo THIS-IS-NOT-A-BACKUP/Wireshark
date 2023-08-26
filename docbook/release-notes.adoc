@@ -135,7 +135,7 @@ The following features are new (or have been significantly updated) since versio
   rules, Wireshark read filters, and the -Y, -R, and -e options to tshark,
   the "Apply as Filter" GUI option, etc.
 
-  ** The filter field names are prefixed by "_ws.col", followed by a lowercase
+  ** The filter field names are prefixed by "\_ws.col", followed by a lowercase
      version of the COL_ name found in epan/column-utils.h, e.g. "_ws.col.info"
      or "_ws.col.protocol"
 
@@ -257,6 +257,7 @@ UDP Tracker Protocol for BitTorrent (BT-Tracker)
 Video Protocol 9 (VP9)
 Windows Delivery Optimization (MS-DO)
 Zabbix Protocol (Zabbix)
+Aruba UBT Protocol
 --
 
 === Updated Protocol Support
