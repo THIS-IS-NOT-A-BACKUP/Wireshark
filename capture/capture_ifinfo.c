@@ -94,13 +94,12 @@ capture_interface_list(int *err, char **err_str, void (*update_cb)(void))
         *err_str = NULL;
     }
 
-    /* Try to get our interface list */
+    /* Try to get the local interface list */
     ret = sync_interface_list_open(&data, &primary_msg, &secondary_msg, update_cb);
     if (ret != 0) {
         /* Add the extcap interfaces that can exist, even if no native interfaces have been found */
         ws_info("Loading External Capture Interface List ...");
-        if_list = append_extcap_interface_list(if_list, err_str);
-        /* err_str is ignored, as the error for the interface loading list will take precedence */
+        if_list = append_extcap_interface_list(if_list);
         if ( g_list_length(if_list) == 0 ) {
 
             ws_info("Capture Interface List failed. Error %d, %s (%s)",
@@ -176,6 +175,7 @@ capture_interface_list(int *err, char **err_str, void (*update_cb)(void))
     g_strfreev(raw_list);
 
 #ifdef HAVE_PCAP_REMOTE
+    /* Add the remote interface list */
     if (remote_interface_list && g_list_length(remote_interface_list) > 0) {
         if_list = append_remote_list(if_list);
     }
@@ -183,7 +183,7 @@ capture_interface_list(int *err, char **err_str, void (*update_cb)(void))
 
     /* Add the extcap interfaces after the native and remote interfaces */
     ws_info("Loading External Capture Interface List ...");
-    if_list = append_extcap_interface_list(if_list, err_str);
+    if_list = append_extcap_interface_list(if_list);
 
     return if_list;
 }
