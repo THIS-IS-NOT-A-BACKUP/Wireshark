@@ -19,7 +19,6 @@
 #include <wsutil/wslog.h>
 #include <wsutil/inet_addr.h>
 #include <wsutil/pint.h>
-#include <wsutil/ws_return.h>
 #include <wsutil/time_util.h>
 
 /*
@@ -178,7 +177,7 @@ bytes_to_hexstr(char *out, const guint8 *ad, size_t len)
 {
 	size_t i;
 
-	ws_return_val_if_null(ad, NULL);
+	ws_return_val_if(!ad, NULL);
 
 	for (i = 0; i < len; i++)
 		out = byte_to_hex(out, ad[i]);
@@ -198,7 +197,7 @@ bytes_to_hexstr_punct(char *out, const guint8 *ad, size_t len, char punct)
 {
 	size_t i;
 
-	ws_return_val_if_null(ad, NULL);
+	ws_return_val_if(!ad, NULL);
 
 	out = byte_to_hex(out, ad[0]);
 	for (i = 1; i < len; i++) {
@@ -225,8 +224,8 @@ bytes_to_str_punct_maxlen(wmem_allocator_t *scope,
 	char *buf_ptr;
 	int truncated = 0;
 
-	ws_return_str_if_null(scope, src);
-	ws_return_str_if_zero(scope, src_size);
+	ws_return_str_if(!src, scope);
+	ws_return_str_if(!src_size, scope);
 
 	if (!punct)
 		return bytes_to_str_maxlen(scope, src, src_size, max_bytes_len);
@@ -264,8 +263,8 @@ bytes_to_str_maxlen(wmem_allocator_t *scope,
 	char *buf_ptr;
 	int truncated = 0;
 
-	ws_return_str_if_null(scope, src);
-	ws_return_str_if_zero(scope, src_size);
+	ws_return_str_if(!src, scope);
+	ws_return_str_if(!src_size, scope);
 
 	if (max_bytes_len == 0 || max_bytes_len > src_size) {
 		max_bytes_len = src_size;
