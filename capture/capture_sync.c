@@ -696,6 +696,13 @@ sync_pipe_start(capture_options *capture_opts, GPtrArray *capture_comments,
             argv = sync_pipe_add_arg(argv, &argc, sring_num_files);
         }
 
+        if (capture_opts->print_file_names) {
+            char *print_name = g_strdup_printf("printname:%s", capture_opts->print_name_to);
+            argv = sync_pipe_add_arg(argv, &argc, "-b");
+            argv = sync_pipe_add_arg(argv, &argc, print_name);
+            g_free(print_name);
+        }
+
         if (capture_opts->has_nametimenum) {
             char nametimenum[ARGV_NUMBER_LEN];
             argv = sync_pipe_add_arg(argv, &argc, "-b");
