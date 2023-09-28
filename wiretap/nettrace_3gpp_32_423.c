@@ -66,6 +66,7 @@ static const guchar c_sai_req[] = "gsm_map.v3.arg.opcode";
 static const guchar c_sai_rsp[] = "gsm_map.v3.res.opcode";
 static const guchar c_nas_eps[] = "nas-eps_plain";
 
+
 #define RINGBUFFER_START_SIZE G_MAXINT
 #define RINGBUFFER_CHUNK_SIZE 1024
 
@@ -126,6 +127,22 @@ nettrace_parse_address(char* curr_pos, char* next_pos, gboolean is_src_addr, exp
 	guint32 ip4_addr;
 	char *ptr; //for strtol function
 
+	static GRegex* aregex = NULL; //For IPv4 or IPv6 address
+	static GRegex* pregex = NULL; //For Port
+	static GRegex* tregex = NULL; //For Transport
+
+	 if (aregex == NULL)
+		//First time will compile regex
+		aregex = g_regex_new ("^.*address\\s*=*\\s*\\[?((?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})|(?:[0-9a-f:]{,39}))", G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0, NULL);
+
+	 if (pregex == NULL)
+		//First time will compile regex
+		pregex = g_regex_new ("^.*port\\s*=*\\s*(\\d{1,5})", G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0, NULL);
+
+	 if (tregex == NULL)
+		//First time will compile regex
+		tregex = g_regex_new ("^.*transport\\s*=*\\s*(\\w{3,4})", G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0, NULL);
+
 	/* curr_pos pointing to first char of address */
 
 	/* Excample from one trace, unsure if it's generic...
@@ -135,9 +152,9 @@ nettrace_parse_address(char* curr_pos, char* next_pos, gboolean is_src_addr, exp
 	 *  Address=198.142.204.199,Port=2123
 	 */
 
-	char **addressMatches = g_regex_split_simple("address\\s*=*\\s*\\[?((?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})|(?:[0-9a-f:]*))", curr_pos, G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0);
-	char **portMatches = g_regex_split_simple("port\\s*=*\\s*(\\d*)", curr_pos, G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0);
-	char **transportMatches = g_regex_split_simple("transport\\s*=*\\s*(\\w*)", curr_pos, G_REGEX_CASELESS | G_REGEX_FIRSTLINE, 0);
+	char **addressMatches = g_regex_split(aregex, curr_pos,  0);
+	char **portMatches = g_regex_split(pregex, curr_pos,  0);
+	char **transportMatches = g_regex_split(tregex, curr_pos,  0);
 
 
 	if (addressMatches[1] != NULL && addressMatches[2] != NULL) {
@@ -145,12 +162,18 @@ nettrace_parse_address(char* curr_pos, char* next_pos, gboolean is_src_addr, exp
 	}
 	if (portMatches[1] != NULL && portMatches[2] != NULL) {
 		port = (guint) strtol(portMatches[1], &ptr, 10);
-		//port = atoi(portMatches[1]);
 	}
 	if (transportMatches[1] != NULL && transportMatches[2] != NULL) {
 		(void) g_strlcpy(transp_str, transportMatches[1], strlen(transportMatches[1])+1);
 	}
 
+	g_free(addressMatches);
+	g_free(portMatches);
+	g_free(transportMatches);
+
+	g_regex_unref(aregex);
+	g_regex_unref(pregex);
+	g_regex_unref(tregex);
 
 	if (ws_inet_pton6(ip_addr_str, &ip6_addr)) {
 		if (is_src_addr) {

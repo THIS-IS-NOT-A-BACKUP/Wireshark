@@ -27,7 +27,7 @@ typedef enum {
 	INTEGER,
 	DRANGE,
 	FUNCTION_DEF,
-	PCRE
+	PCRE,
 } dfvm_value_type_t;
 
 typedef struct {
@@ -35,7 +35,7 @@ typedef struct {
 
 	union {
 		GPtrArray		*fvalue_p; /* Always has length == 1 */
-		uint32_t			numeric;
+		uint32_t		numeric;
 		drange_t		*drange;
 		header_field_info	*hfinfo;
 		df_func_def_t		*funcdef;
@@ -85,6 +85,7 @@ typedef enum {
 	DFVM_SET_CLEAR,
 	DFVM_SLICE,
 	DFVM_LENGTH,
+	DFVM_VALUE_STRING,
 	DFVM_BITWISE_AND,
 	DFVM_UNARY_MINUS,
 	DFVM_ADD,

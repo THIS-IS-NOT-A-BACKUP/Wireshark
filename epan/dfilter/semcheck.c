@@ -58,9 +58,31 @@ check_relation(dfwork_t *dfw, stnode_op_t st_op,
 static void
 semcheck(dfwork_t *dfw, stnode_t *st_node);
 
-static fvalue_t *
-mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *s,
-				df_loc_t loc);
+enum mk_result {
+	MK_ERROR,
+	MK_OK_BOOLEAN,
+	MK_OK_NUMBER,
+	MK_OK_STRING,
+};
+
+static enum mk_result
+mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *s, stnode_t *st);
+
+static inline bool
+op_is_equality(stnode_op_t op)
+{
+	switch (op) {
+		case STNODE_OP_ALL_EQ:
+		case STNODE_OP_ANY_EQ:
+		case STNODE_OP_ALL_NE:
+		case STNODE_OP_ANY_NE:
+		case STNODE_OP_IN:
+		case STNODE_OP_NOT_IN:
+			return true;
+		default:
+			return false;
+	}
+}
 
 /* Compares to ftenum_t's and decides if they're
  * compatible or not (if they're the same basic type) */
@@ -165,95 +187,102 @@ compatible_ftypes(ftenum_t a, ftenum_t b)
 		}					\
 	} while (0)
 
-/* Gets an fvalue from a string, and sets the error message on failure. */
-WS_RETNONNULL
-fvalue_t*
+/* Transforms a syntax node into a value and sets the error message on failure. */
+bool
 dfilter_fvalue_from_literal(dfwork_t *dfw, ftenum_t ftype, stnode_t *st,
 		bool allow_partial_value, header_field_info *hfinfo_value_string)
 {
 	fvalue_t *fv;
 	const char *s = stnode_data(st);
 	char *error_message = NULL;
+	enum mk_result res;
 
 	fv = fvalue_from_literal(ftype, s, allow_partial_value, &error_message);
+	if (fv != NULL) {
+		g_free(error_message); // error_message is expected to be null
+		stnode_replace(st, STTYPE_FVALUE, fv);
+		return false;
+	}
 	SET_ERROR(dfw, error_message);
 
-	if (fv == NULL && hfinfo_value_string) {
+	if (hfinfo_value_string) {
 		/* check value_string */
-		fv = mk_fvalue_from_val_string(dfw, hfinfo_value_string, s, stnode_location(st));
+		res = mk_fvalue_from_val_string(dfw, hfinfo_value_string, s, st);
 		/*
 		 * Ignore previous errors if this can be mapped
 		 * to an item from value_string.
 		 */
-		if (fv) {
+		if (res != MK_ERROR) {
 			df_error_free(&dfw->error);
 			add_compile_warning(dfw, "Interpreting the symbol \u2039%s\u203A as a %s value string. "
 					"Writing value strings without double quotes is deprecated. "
-					"Please use \"%s\" instead",
-					s, ftype_pretty_name(hfinfo_value_string->type), s);
+					"Please use \u2039\"%s\"\u203A instead",
+					stnode_token(st), ftype_pretty_name(hfinfo_value_string->type), stnode_token(st));
+			return res == MK_OK_STRING;
 		}
 	}
-	if (fv == NULL) {
-		dfw_set_error_location(dfw, stnode_location(st));
-		FAIL_HERE(dfw);
-	}
 
-	return fv;
+	// Failure
+	dfw_set_error_location(dfw, stnode_location(st));
+	FAIL_HERE(dfw);
+	ws_assert_not_reached();
 }
 
-/* Gets an fvalue from a string, and sets the error message on failure. */
-WS_RETNONNULL
-fvalue_t *
+/* Transforms a syntax node into a value and sets the error message on failure. */
+bool
 dfilter_fvalue_from_string(dfwork_t *dfw, ftenum_t ftype, stnode_t *st,
 		header_field_info *hfinfo_value_string)
 {
 	fvalue_t *fv;
 	const GString *gs = stnode_string(st);
 	char *error_message = NULL;
+	enum mk_result res;
 
 	fv = fvalue_from_string(ftype, gs->str, gs->len, &error_message);
+	if (fv != NULL) {
+		g_free(error_message); // error_message is expected to be null
+		stnode_replace(st, STTYPE_FVALUE, fv);
+		return false;
+	}
 	SET_ERROR(dfw, error_message);
 
-	if (fv == NULL && hfinfo_value_string) {
-		fv = mk_fvalue_from_val_string(dfw, hfinfo_value_string, gs->str, stnode_location(st));
+	if (hfinfo_value_string) {
+		res = mk_fvalue_from_val_string(dfw, hfinfo_value_string, gs->str, st);
 		/*
 		 * Ignore previous errors if this can be mapped
 		 * to an item from value_string.
 		 */
-		if (fv) {
+		if (res != MK_ERROR) {
 			df_error_free(&dfw->error);
+			return res == MK_OK_STRING;
 		}
 	}
-	if (fv == NULL) {
-		dfw_set_error_location(dfw, stnode_location(st));
-		FAIL_HERE(dfw);
+
+	// Failure
+	dfw_set_error_location(dfw, stnode_location(st));
+	FAIL_HERE(dfw);
+	ws_assert_not_reached();
+}
+
+void
+dfilter_fvalue_from_charconst(dfwork_t *dfw, ftenum_t ftype, stnode_t *st)
+{
+	fvalue_t *fv;
+	unsigned long *nump = stnode_data(st);
+	char *error_message = NULL;
+
+	fv = fvalue_from_charconst(ftype, *nump, &error_message);
+	if (fv != NULL) {
+		g_free(error_message); // error_message is expected to be null
+		stnode_replace(st, STTYPE_FVALUE, fv);
+		return;
 	}
+	SET_ERROR(dfw, error_message);
 
-	return fv;
-}
-
-/* Creates a FT_UINT32 fvalue with a given value. */
-static fvalue_t*
-mk_uint32_fvalue(uint32_t val)
-{
-	fvalue_t *fv;
-
-	fv = fvalue_new(FT_UINT32);
-	fvalue_set_uinteger(fv, val);
-
-	return fv;
-}
-
-/* Creates a FT_UINT64 fvalue with a given value. */
-static fvalue_t*
-mk_uint64_fvalue(uint64_t val)
-{
-	fvalue_t *fv;
-
-	fv = fvalue_new(FT_UINT64);
-	fvalue_set_uinteger64(fv, val);
-
-	return fv;
+	// Failure
+	dfw_set_error_location(dfw, stnode_location(st));
+	FAIL_HERE(dfw);
+	ws_assert_not_reached();
 }
 
 /* Creates a FT_BOOLEAN fvalue with a given value. */
@@ -268,12 +297,33 @@ mk_boolean_fvalue(bool val)
 	return fv;
 }
 
+/* Creates a FT_STRING fvalue with a given value. */
+static fvalue_t*
+mk_string_fvalue(const char *str)
+{
+	fvalue_t *fv = fvalue_new(FT_STRING);
+	fvalue_set_string(fv, str);
+	return fv;
+}
+
+/* Creates a FT_UINT64 fvalue with a given value. */
+static fvalue_t*
+mk_uint64_fvalue(uint64_t val)
+{
+	fvalue_t *fv = fvalue_new(FT_UINT64);
+	fvalue_set_uinteger64(fv, val);
+	return fv;
+}
+
 /* Try to make an fvalue from a string using a value_string or true_false_string.
  * This works only for ftypes that are integers. Returns the created fvalue_t*
- * or NULL if impossible. */
-static fvalue_t*
-mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *s,
-				df_loc_t loc)
+ * or NULL if impossible.
+ * If the mapping number<->string is unique convert the string to a number
+ * by inverting the value string function.
+ * Otherwise we compile it as a string and map the field value at runtime
+ * to a string for the comparison. */
+static enum mk_result
+mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *s, stnode_t *st)
 {
 	/* Early return? */
 	switch(hfinfo->type) {
@@ -305,7 +355,7 @@ mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *
 		case FT_REL_OID:
 		case FT_SYSTEM_ID:
 		case FT_FRAMENUM: /* hfinfo->strings contains ft_framenum_type_t, not strings */
-			return NULL;
+			return MK_ERROR;
 
 		case FT_BOOLEAN:
 		case FT_CHAR:
@@ -333,9 +383,9 @@ mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *
 
 	/* Do val_strings exist? */
 	if (!hfinfo->strings) {
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "%s cannot accept strings as values.",
+		dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "%s cannot accept strings as values.",
 				hfinfo->abbrev);
-		return NULL;
+		return MK_ERROR;
 	}
 
 	/* Reset the error message, since *something* interesting will happen,
@@ -343,59 +393,129 @@ mk_fvalue_from_val_string(dfwork_t *dfw, header_field_info *hfinfo, const char *
 	 * I happen to have now. */
 	df_error_free(&dfw->error);
 
+	fvalue_t *fv;
+	uint64_t val = 0, val_max = 0;
+	size_t count = 0;
+
 	if (hfinfo->type == FT_BOOLEAN) {
 		const true_false_string	*tf = (const true_false_string *)hfinfo->strings;
 
 		if (g_ascii_strcasecmp(s, tf->true_string) == 0) {
-			return mk_boolean_fvalue(true);
+			fv = mk_boolean_fvalue(true);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_BOOLEAN;
 		}
 		if (g_ascii_strcasecmp(s, tf->false_string) == 0) {
-			return mk_boolean_fvalue(false);
+			fv = mk_boolean_fvalue(false);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_BOOLEAN;
 		}
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "\"%s\" cannot be found among the possible values for %s.",
+		dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "\"%s\" cannot be found among the possible values for %s.",
 								s, hfinfo->abbrev);
 	}
 	else if (hfinfo->display & BASE_RANGE_STRING) {
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "\"%s\" cannot accept [range] strings as values.",
-				hfinfo->abbrev);
+		const range_string *vals = (const range_string *)hfinfo->strings;
+
+		while (vals->strptr != NULL && count <= 1) {
+			if (g_ascii_strcasecmp(s, vals->strptr) == 0) {
+				val = vals->value_min;
+				val_max = vals->value_max;
+				count++;
+			}
+			vals++;
+		}
+		if (count > 1) {
+			// More than one match, use a string.
+			fv = mk_string_fvalue(s);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_STRING;
+		}
+		else if (count == 1) {
+			// If the range has a single value use an integer.
+			// Otherwise use a string.
+			if (val == val_max) {
+				fv = mk_uint64_fvalue(val);
+				stnode_replace(st, STTYPE_FVALUE, fv);
+				return MK_OK_NUMBER;
+			}
+			else {
+				fv = mk_string_fvalue(s);
+				stnode_replace(st, STTYPE_FVALUE, fv);
+				return MK_OK_STRING;
+			}
+		}
+		else {
+			dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "\"%s\" cannot be found among the possible values for %s.",
+					s, hfinfo->abbrev);
+		}
 	}
 	else if (hfinfo->display & BASE_VAL64_STRING) {
 		const val64_string *vals = (const val64_string *)hfinfo->strings;
 
-		while (vals->strptr != NULL) {
+		while (vals->strptr != NULL && count <= 1) {
 			if (g_ascii_strcasecmp(s, vals->strptr) == 0) {
-				return mk_uint64_fvalue(vals->value);
+				val = vals->value;
+				count++;
 			}
 			vals++;
 		}
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "\"%s\" cannot be found among the possible values for %s.",
-				s, hfinfo->abbrev);
+		if (count > 1) {
+			// More than one match, use a string.
+			fv = mk_string_fvalue(s);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_STRING;
+		}
+		else if (count == 1) {
+			// Only one match, convert string to number.
+			fv = mk_uint64_fvalue(val);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_NUMBER;
+		}
+		else {
+			dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "\"%s\" cannot be found among the possible values for %s.",
+					s, hfinfo->abbrev);
+		}
 	}
 	else if (hfinfo->display == BASE_CUSTOM) {
-		/*  If a user wants to match against a custom string, we would
-		 *  somehow have to have the integer value here to pass it in
-		 *  to the custom-display function.  But we don't have an
-		 *  integer, we have the string they're trying to match.
-		 *  -><-
-		 */
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "\"%s\" cannot accept [custom] strings as values.",
-				hfinfo->abbrev);
+		/*  We don't have a string catalog to compare to so just assume
+		 * the provided string is a valid custom representation. */
+		if (FT_IS_INTEGER(hfinfo->type)) {
+			fv = mk_string_fvalue(s);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_STRING;
+		}
+		dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "%s must be an integer.", hfinfo->abbrev);
 	}
 	else {
 		const value_string *vals = (const value_string *)hfinfo->strings;
 		if (hfinfo->display & BASE_EXT_STRING)
 			vals = VALUE_STRING_EXT_VS_P((const value_string_ext *) vals);
 
-		while (vals->strptr != NULL) {
+		while (vals->strptr != NULL && count <= 1) {
 			if (g_ascii_strcasecmp(s, vals->strptr) == 0) {
-				return mk_uint32_fvalue(vals->value);
+				val = vals->value;
+				count++;
 			}
 			vals++;
 		}
-		dfilter_fail(dfw, DF_ERROR_GENERIC, loc, "\"%s\" cannot be found among the possible values for %s.",
-				s, hfinfo->abbrev);
+		if (count > 1) {
+			// More than one match, use a string.
+			fv = mk_string_fvalue(s);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_STRING;
+		}
+		else if (count == 1) {
+			// Only one match, convert string to number.
+			fv = mk_uint64_fvalue(val);
+			stnode_replace(st, STTYPE_FVALUE, fv);
+			return MK_OK_NUMBER;
+		}
+		else {
+			dfilter_fail(dfw, DF_ERROR_GENERIC, stnode_location(st), "\"%s\" cannot be found among the possible values for %s.",
+					s, hfinfo->abbrev);
+		}
 	}
-	return NULL;
+	return MK_ERROR;
 }
 
 static bool
@@ -579,29 +699,10 @@ check_function(dfwork_t *dfw, stnode_t *st_node, ftenum_t lhs_ftype)
 					stnode_location(st_node));
 }
 
-WS_RETNONNULL
-fvalue_t *
-dfilter_fvalue_from_charconst(dfwork_t *dfw, ftenum_t ftype, stnode_t *st)
-{
-	fvalue_t *fvalue;
-	unsigned long *nump = stnode_data(st);
-	char *error_message = NULL;
-
-	fvalue = fvalue_from_charconst(ftype, *nump, &error_message);
-	SET_ERROR(dfw, error_message);
-
-	if (fvalue == NULL) {
-		dfw_set_error_location(dfw, stnode_location(st));
-		FAIL_HERE(dfw);
-	}
-
-	return fvalue;
-}
-
 /* If the LHS of a relation test is a FIELD, run some checks
  * and possibly some modifications of syntax tree nodes. */
 static void
-check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op _U_,
+check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op,
 		FtypeCanFunc can_func, bool allow_partial_value,
 		stnode_t *st_node,
 		stnode_t *st_arg1, stnode_t *st_arg2)
@@ -609,7 +710,7 @@ check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op _U_,
 	sttype_id_t		type2;
 	header_field_info	*hfinfo1;
 	ftenum_t		ftype1, ftype2;
-	fvalue_t		*fvalue;
+	bool			mk_val_string = false;
 
 	LOG_NODE(st_node);
 
@@ -619,11 +720,17 @@ check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op _U_,
 	hfinfo1 = sttype_field_hfinfo(st_arg1);
 	ftype1 = sttype_field_ftenum(st_arg1);
 	if (!can_func(ftype1)) {
-		FAIL(dfw, st_arg1, "%s (type=%s) cannot participate in %s comparison.",
-				hfinfo1->abbrev, ftype_pretty_name(ftype1),
-				stnode_todisplay(st_node));
+		if (st_op == STNODE_OP_MATCHES && hfinfo1->strings != NULL) {
+			sttype_field_set_value_string(st_arg1, true);
+		}
+		else {
+			FAIL(dfw, st_arg1, "%s (type=%s) cannot participate in %s comparison.",
+					hfinfo1->abbrev, ftype_pretty_name(ftype1),
+					stnode_todisplay(st_node));
+		}
 	}
 
+	ftype1 = sttype_field_ftenum(st_arg1);
 	type2 = stnode_type_id(st_arg2);
 
 	if (IS_FIELD_ENTITY(type2)) {
@@ -653,16 +760,25 @@ check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op _U_,
 		}
 
 		if (type2 == STTYPE_STRING) {
-			fvalue = dfilter_fvalue_from_string(dfw, ftype1, st_arg2, hfinfo1);
+			mk_val_string = dfilter_fvalue_from_string(dfw, ftype1, st_arg2, hfinfo1);
 		}
 		else {
-			fvalue = dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, hfinfo1);
+			mk_val_string = dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, hfinfo1);
 		}
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		if (mk_val_string) {
+			sttype_field_set_value_string(st_arg1, true);
+			// Value strings can only be ordered if they are numerical.
+			// Don't try to order them lexicographically, that's not
+			// what users expect.
+			if (!op_is_equality(st_op)) {
+				FAIL(dfw, st_arg2, "Cannot use order comparisons with \"%s\" "
+					"because the value string cannot be uniquely converted to an integer.",
+					stnode_todisplay(st_arg2));
+			}
+		}
 	}
 	else if (type2 == STTYPE_CHARCONST) {
-		fvalue = dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
 	}
 	else if (type2 == STTYPE_SLICE) {
 		ftype2 = check_slice(dfw, st_arg2, ftype1);
@@ -723,7 +839,7 @@ check_relation_LHS_FIELD(dfwork_t *dfw, stnode_op_t st_op _U_,
 }
 
 static void
-check_relation_LHS_FVALUE(dfwork_t *dfw, stnode_op_t st_op _U_,
+check_relation_LHS_FVALUE(dfwork_t *dfw, stnode_op_t st_op,
 		FtypeCanFunc can_func, bool allow_partial_value,
 		stnode_t *st_node,
 		stnode_t *st_arg1, stnode_t *st_arg2)
@@ -731,7 +847,7 @@ check_relation_LHS_FVALUE(dfwork_t *dfw, stnode_op_t st_op _U_,
 	sttype_id_t		type1, type2;
 	header_field_info	*hfinfo2 = NULL;
 	ftenum_t		ftype2;
-	fvalue_t		*fvalue;
+	bool			mk_val_string = false;
 
 	LOG_NODE(st_node);
 
@@ -785,18 +901,28 @@ check_relation_LHS_FVALUE(dfwork_t *dfw, stnode_op_t st_op _U_,
 
 	type1 = stnode_type_id(st_arg1);
 	if (type1 == STTYPE_STRING) {
-		fvalue = dfilter_fvalue_from_string(dfw, ftype2, st_arg1, hfinfo2);
+		mk_val_string = dfilter_fvalue_from_string(dfw, ftype2, st_arg1, hfinfo2);
 	}
 	else if (type1 == STTYPE_LITERAL) {
-		fvalue = dfilter_fvalue_from_literal(dfw, ftype2, st_arg1, allow_partial_value, hfinfo2);
+		mk_val_string = dfilter_fvalue_from_literal(dfw, ftype2, st_arg1, allow_partial_value, hfinfo2);
 	}
 	else if (type1 == STTYPE_CHARCONST) {
-		fvalue = dfilter_fvalue_from_charconst(dfw, ftype2, st_arg1);
+		dfilter_fvalue_from_charconst(dfw, ftype2, st_arg1);
 	}
 	else {
 		ws_assert_not_reached();
 	}
-	stnode_replace(st_arg1, STTYPE_FVALUE, fvalue);
+	if (mk_val_string) {
+		sttype_field_set_value_string(st_arg2, true);
+		// Value strings can only be ordered if they are numerical.
+		// Don't try to order them lexicographically, that's not
+		// what users expect.
+		if (!op_is_equality(st_op)) {
+			FAIL(dfw, st_arg1, "Cannot use order comparisons with \"%s\" "
+				"because the value string cannot be uniquely converted to an integer.",
+				stnode_todisplay(st_arg1));
+		}
+	}
 }
 
 static void
@@ -808,7 +934,6 @@ check_relation_LHS_SLICE(dfwork_t *dfw, stnode_op_t st_op _U_,
 {
 	sttype_id_t		type2;
 	ftenum_t		ftype1, ftype2;
-	fvalue_t		*fvalue;
 
 	LOG_NODE(st_node);
 
@@ -838,16 +963,13 @@ check_relation_LHS_SLICE(dfwork_t *dfw, stnode_op_t st_op _U_,
 		}
 	}
 	else if (type2 == STTYPE_STRING) {
-		fvalue = dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
 	}
 	else if (type2 == STTYPE_LITERAL) {
-		fvalue = dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
 	}
 	else if (type2 == STTYPE_CHARCONST) {
-		fvalue = dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
 	}
 	else if (type2 == STTYPE_SLICE) {
 		ftype2 = check_slice(dfw, st_arg2, ftype1);
@@ -905,7 +1027,6 @@ check_relation_LHS_FUNCTION(dfwork_t *dfw, stnode_op_t st_op _U_,
 {
 	sttype_id_t		type2;
 	ftenum_t		ftype1, ftype2;
-	fvalue_t		*fvalue;
 
 	LOG_NODE(st_node);
 
@@ -939,16 +1060,13 @@ check_relation_LHS_FUNCTION(dfwork_t *dfw, stnode_op_t st_op _U_,
 		}
 	}
 	else if (type2 == STTYPE_STRING) {
-		fvalue = dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
 	}
 	else if (type2 == STTYPE_LITERAL) {
-		fvalue = dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
 	}
 	else if (type2 == STTYPE_CHARCONST) {
-		fvalue = dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
 	}
 	else if (type2 == STTYPE_SLICE) {
 		ftype2 = check_slice(dfw, st_arg2, ftype1);
@@ -1016,7 +1134,6 @@ check_relation_LHS_ARITHMETIC(dfwork_t *dfw, stnode_op_t st_op _U_,
 {
 	sttype_id_t		type2;
 	ftenum_t		ftype1, ftype2;
-	fvalue_t		*fvalue;
 
 	LOG_NODE(st_node);
 
@@ -1048,16 +1165,13 @@ check_relation_LHS_ARITHMETIC(dfwork_t *dfw, stnode_op_t st_op _U_,
 		}
 	}
 	else if (type2 == STTYPE_STRING) {
-		fvalue = dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_string(dfw, ftype1, st_arg2, NULL);
 	}
 	else if (type2 == STTYPE_LITERAL) {
-		fvalue = dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_literal(dfw, ftype1, st_arg2, allow_partial_value, NULL);
 	}
 	else if (type2 == STTYPE_CHARCONST) {
-		fvalue = dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
-		stnode_replace(st_arg2, STTYPE_FVALUE, fvalue);
+		dfilter_fvalue_from_charconst(dfw, ftype1, st_arg2);
 	}
 	else if (type2 == STTYPE_SLICE) {
 		ftype2 = check_slice(dfw, st_arg2, ftype1);
@@ -1490,9 +1604,8 @@ check_arithmetic(dfwork_t *dfw, stnode_t *st_node, ftenum_t lhs_ftype)
 	switch (type) {
 		case STTYPE_LITERAL:
 			if (lhs_ftype != FT_NONE) {
-				fvalue_t *fvalue = dfilter_fvalue_from_literal(dfw, lhs_ftype, st_node, false, NULL);
-				stnode_replace(st_node, STTYPE_FVALUE, fvalue);
-				ftype = fvalue_type_ftenum(fvalue);
+				dfilter_fvalue_from_literal(dfw, lhs_ftype, st_node, false, NULL);
+				ftype = sttype_pointer_ftenum(st_node);
 			}
 			else {
 				ftype = FT_NONE;
