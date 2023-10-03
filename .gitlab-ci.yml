@@ -492,7 +492,7 @@ macOS Arm Package:
     - wireshark-macos-arm-package
   retry: 1
   script:
-    - export CMAKE_PREFIX_PATH=/usr/local/Qt-6.2.4
+    - export CMAKE_PREFIX_PATH=/usr/local/Qt-6.5.3
     - export PATH="$PATH:$HOME/bin"
     - tools/make-version.py --set-release .
     - mkdir build
@@ -519,7 +519,7 @@ macOS Arm Package:
     - DMG_SHA256=$( shasum --algorithm 256 Wireshark?[1-9]*.dmg | awk '{print $1}' )
     - TSHARK_VERSION=$( ./tshark --version | head -n 1 | sed -e 's/.*(v//' -e 's/)\.*$//' -e 's/-0-g.*//' )
     - printf '[DEFAULT]\nsparkle_signature = %s\ndmg_sha256 = %s\n' "$SPARKLE_SIGNATURE" "$DMG_SHA256" > release-info-${TSHARK_VERSION}-macos-arm64.ini
-    - if [[ -n "$S3_DESTINATION_RELEASE" ]] && [[ $TSHARK_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ; then aws s3 cp release-info-${TSHARK_VERSION}-macos-arm64.ini "$S3_DESTINATION_RELEASE/" ; fi
+    - if [[ -n "$S3_DESTINATION_RELEASE" ]] ; then aws s3 cp release-info-${TSHARK_VERSION}-macos-arm64.ini "$S3_DESTINATION_RELEASE/" ; fi
     - cd ..
     - ninja test-programs
     - python3 -m pytest
@@ -537,13 +537,13 @@ macOS Intel Package:
     - wireshark-macos-intel-package
   retry: 1
   script:
-    - export CMAKE_PREFIX_PATH=/usr/local/Qt-6.2.4
+    - export CMAKE_PREFIX_PATH=/usr/local/Qt-6.5.3
     - export PATH="$PATH:$HOME/bin"
     - tools/make-version.py --set-release .
     - mkdir build
     - cd build
     - printf "\e[0Ksection_start:%s:cmake_section[collapsed=true]\r\e[0KRunning CMake" "$( date +%s)"
-    - cmake -DENABLE_CCACHE=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=10.14 -DTEST_EXTRA_ARGS=--enable-release -G Ninja ..
+    - cmake -DENABLE_CCACHE=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DTEST_EXTRA_ARGS=--enable-release -G Ninja ..
     - printf "\e[0Ksection_end:%s:cmake_section\r\e[0K" "$( date +%s)"
     - ninja
     - codesign-prep
@@ -564,7 +564,7 @@ macOS Intel Package:
     - DMG_SHA256=$( shasum --algorithm 256 Wireshark?[1-9]*.dmg | awk '{print $1}' )
     - TSHARK_VERSION=$( ./tshark --version | head -n 1 | sed -e 's/.*(v//' -e 's/)\.*$//' -e 's/-0-g.*//' )
     - printf '[DEFAULT]\nsparkle_signature = %s\ndmg_sha256 = %s\n' "$SPARKLE_SIGNATURE" "$DMG_SHA256" > release-info-${TSHARK_VERSION}-macos-intel64.ini
-    - if [[ -n "$S3_DESTINATION_RELEASE" ]] && [[ $TSHARK_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ; then aws s3 cp release-info-${TSHARK_VERSION}-macos-intel64.ini "$S3_DESTINATION_RELEASE/" ; fi
+    - if [[ -n "$S3_DESTINATION_RELEASE" ]] ; then aws s3 cp release-info-${TSHARK_VERSION}-macos-intel64.ini "$S3_DESTINATION_RELEASE/" ; fi
     - cd ..
     - ninja test-programs
     - python3 -m pytest
@@ -750,7 +750,13 @@ Windows Build:
 
 Windows Qt5 Build:
   extends: .build-windows
-  rules: !reference [.if-w-w-only-merge-request]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_URL =~ /.*gitlab.com\/wireshark\/wireshark/'
+      changes:
+        - "ui/**/*"
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
   tags:
     - wireshark-windows-merge-req
   needs: [ 'Commit Check' ]
