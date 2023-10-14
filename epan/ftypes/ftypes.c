@@ -198,7 +198,7 @@ ftype_can_eq(enum ftenum ftype)
 	ftype_t	*ft;
 
 	FTYPE_LOOKUP(ftype, ft);
-	return ft->cmp_order != NULL;
+	return ft->compare != NULL;
 }
 
 bool
@@ -207,7 +207,7 @@ ftype_can_cmp(enum ftenum ftype)
 	ftype_t	*ft;
 
 	FTYPE_LOOKUP(ftype, ft);
-	return ft->cmp_order != NULL;
+	return ft->compare != NULL;
 }
 
 bool
@@ -279,7 +279,7 @@ ftype_can_contains(enum ftenum ftype)
 	ftype_t	*ft;
 
 	FTYPE_LOOKUP(ftype, ft);
-	return ft->cmp_contains ? true : false;
+	return ft->contains ? true : false;
 }
 
 bool
@@ -288,7 +288,7 @@ ftype_can_matches(enum ftenum ftype)
 	ftype_t	*ft;
 
 	FTYPE_LOOKUP(ftype, ft);
-	return ft->cmp_matches ? true : false;
+	return ft->matches ? true : false;
 }
 
 bool
@@ -881,7 +881,7 @@ fvalue_set_floating(fvalue_t *fv, double value)
 }
 
 void
-fvalue_set_ipv6(fvalue_t *fv, const ws_in6_addr *value)
+fvalue_set_ipv6(fvalue_t *fv,  const ipv6_addr_and_prefix *value)
 {
 	ws_assert(fv->ftype->ftype == FT_IPv6);
 	ws_assert(fv->ftype->set_value.set_value_ipv6);
@@ -1022,7 +1022,7 @@ fvalue_get_floating(fvalue_t *fv)
 	return fv->ftype->get_value.get_value_floating(fv);
 }
 
-WS_DLL_PUBLIC const ws_in6_addr *
+WS_DLL_PUBLIC const ipv6_addr_and_prefix *
 fvalue_get_ipv6(fvalue_t *fv)
 {
 	ws_assert(fv->ftype->ftype == FT_IPv6);
@@ -1036,8 +1036,8 @@ fvalue_eq(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp == 0 ? FT_TRUE : FT_FALSE;
@@ -1049,8 +1049,8 @@ fvalue_ne(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp != 0 ? FT_TRUE : FT_FALSE;
@@ -1062,8 +1062,8 @@ fvalue_gt(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp > 0 ? FT_TRUE : FT_FALSE;
@@ -1075,8 +1075,8 @@ fvalue_ge(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp >= 0 ? FT_TRUE : FT_FALSE;
@@ -1088,8 +1088,8 @@ fvalue_lt(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp < 0 ? FT_TRUE : FT_FALSE;
@@ -1101,8 +1101,8 @@ fvalue_le(const fvalue_t *a, const fvalue_t *b)
 	int cmp;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_order);
-	res = a->ftype->cmp_order(a, b, &cmp);
+	ws_assert(a->ftype->compare);
+	res = a->ftype->compare(a, b, &cmp);
 	if (res != FT_OK)
 		return -res;
 	return cmp <= 0 ? FT_TRUE : FT_FALSE;
@@ -1114,8 +1114,8 @@ fvalue_contains(const fvalue_t *a, const fvalue_t *b)
 	bool yes;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_contains);
-	res = a->ftype->cmp_contains(a, b, &yes);
+	ws_assert(a->ftype->contains);
+	res = a->ftype->contains(a, b, &yes);
 	if (res != FT_OK)
 		return -res;
 	return yes ? FT_TRUE : FT_FALSE;
@@ -1127,8 +1127,8 @@ fvalue_matches(const fvalue_t *a, const ws_regex_t *re)
 	bool yes;
 	enum ft_result res;
 
-	ws_assert(a->ftype->cmp_matches);
-	res = a->ftype->cmp_matches(a, re, &yes);
+	ws_assert(a->ftype->matches);
+	res = a->ftype->matches(a, re, &yes);
 	if (res != FT_OK)
 		return -res;
 	return yes ? FT_TRUE : FT_FALSE;

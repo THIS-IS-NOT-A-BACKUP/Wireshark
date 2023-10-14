@@ -14,10 +14,6 @@ set -e -u -o pipefail
 eval "$(brew shellenv)"
 
 HOMEBREW_NO_AUTO_UPDATE=${HOMEBREW_NO_AUTO_UPDATE:-}
-# Update to last brew release
-if [ -z "$HOMEBREW_NO_AUTO_UPDATE" ] ; then
-    brew update
-fi
 
 function print_usage() {
     printf "\\nUtility to setup a macOS system for Wireshark Development using Homebrew.\\n"
@@ -46,8 +42,10 @@ function install_formulae() {
 }
 
 INSTALL_OPTIONAL=0
+INSTALL_DOC_DEPS=0
 INSTALL_DMG_DEPS=0
 INSTALL_SPARKLE_DEPS=0
+INSTALL_TEST_DEPS=0
 OPTIONS=()
 for arg; do
     case $arg in
@@ -58,16 +56,24 @@ for arg; do
         --install-optional)
             INSTALL_OPTIONAL=1
             ;;
+        --install-doc-deps)
+            INSTALL_DOC_DEPS=1
+            ;;
         --install-dmg-deps)
             INSTALL_DMG_DEPS=1
             ;;
         --install-sparkle-deps)
             INSTALL_SPARKLE_DEPS=1
             ;;
+        --install-test-deps)
+            INSTALL_TEST_DEPS=1
+            ;;
         --install-all)
             INSTALL_OPTIONAL=1
+            INSTALL_DOC_DEPS=1
             INSTALL_DMG_DEPS=1
             INSTALL_SPARKLE_DEPS=1
+            INSTALL_TEST_DEPS=1
             ;;
         *)
             OPTIONS+=("$arg")
@@ -110,11 +116,21 @@ ADDITIONAL_LIST=(
     zstd
 )
 
+DOC_DEPS_LIST=(
+    asciidoctor
+    docbook
+    docbook-xsl
+)
+
 ACTUAL_LIST=( "${BUILD_LIST[@]}" "${REQUIRED_LIST[@]}" )
 
 # Now arrange for optional support libraries
 if [ $INSTALL_OPTIONAL -ne 0 ] ; then
     ACTUAL_LIST+=( "${ADDITIONAL_LIST[@]}" )
+fi
+
+if [ $INSTALL_DOC_DEPS -ne 0 ] ; then
+    ACTUAL_LIST+=( "${DOC_DEPS_LIST[@]}" )
 fi
 
 if (( ${#OPTIONS[@]} != 0 )); then
@@ -123,16 +139,16 @@ fi
 
 install_formulae "${ACTUAL_LIST[@]}"
 
-# Install python modules
-pip3 install pytest pytest-xdist
-
 if [ $INSTALL_DMG_DEPS -ne 0 ] ; then
     pip3 install dmgbuild
-    pip3 install biplist
 fi
 
 if [ $INSTALL_SPARKLE_DEPS -ne 0 ] ; then
     brew cask install sparkle
+fi
+
+if [ $INSTALL_TEST_DEPS -ne 0 ] ; then
+    pip3 install pytest pytest-xdist
 fi
 
 # Uncomment to add PNG compression utilities used by compress-pngs:
