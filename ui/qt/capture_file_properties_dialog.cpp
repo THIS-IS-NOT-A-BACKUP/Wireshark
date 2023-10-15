@@ -264,13 +264,14 @@ QString CaptureFilePropertiesDialog::summaryToHtml()
         // If we have more than one section, add headers for each section.
         if (wtap_file_get_num_shbs(cap_file_.capFile()->provider.wth) > 1)
             out << section_tmpl_.arg(QString(tr("Section %1"))
-                                     .arg(section_number));
+                                     .arg(section_number + 1));
+
+        wtap_block_t shb_inf = wtap_file_get_shb(cap_file_.capFile()->provider.wth, section_number);
 
         // Capture Section
         out << section_tmpl_.arg(tr("Capture"));
         out << table_begin;
 
-        wtap_block_t shb_inf = wtap_file_get_shb(cap_file_.capFile()->provider.wth, section_number);
         char *str;
 
         if (shb_inf != nullptr) {
@@ -325,6 +326,8 @@ QString CaptureFilePropertiesDialog::summaryToHtml()
                 << table_row_end;
         }
 
+        // XXX: The mapping of interfaces to different SHBs isn't
+        // handled correctly here or elsewhere
         for (guint i = 0; i < summary.ifaces->len; i++) {
             iface_summary_info iface;
             iface = g_array_index(summary.ifaces, iface_summary_info, i);
@@ -366,7 +369,36 @@ QString CaptureFilePropertiesDialog::summaryToHtml()
         if (summary.ifaces->len > 0) {
             out << table_end;
         }
+
+        unsigned num_comments = wtap_block_count_option(shb_inf, OPT_COMMENT);
+        if (num_comments > 0) {
+            out << section_tmpl_.arg(tr("Comments"));
+            char *shb_comment;
+            for (unsigned i = 0; i < num_comments; i++) {
+                if (wtap_block_get_nth_string_option_value(shb_inf, OPT_COMMENT, i,
+                                                           &shb_comment) == WTAP_OPTTYPE_SUCCESS) {
+                    QString section_comment = shb_comment;
+                    QString section_comment_html;
+                    if (num_comments > 1) {
+                        out << tr("Comment %1: ").arg(i+1);
+                    }
+
+                    QString comment_escaped = html_escape(section_comment).replace('\n', "<br>");
+                    out << para_tmpl_.arg(comment_escaped);
+                }
+            }
+        }
     }
+
+    // Done with the interfaces
+    for (guint i = 0; i < summary.ifaces->len; i++) {
+        iface_summary_info iface;
+        iface = g_array_index(summary.ifaces, iface_summary_info, i);
+
+        g_free(iface.descr);
+        g_free(iface.name);
+    }
+    g_array_free(summary.ifaces, TRUE);
 
     // Statistics Section
     out << section_tmpl_.arg(tr("Statistics"));
@@ -532,25 +564,6 @@ void CaptureFilePropertiesDialog::fillDetails()
     QString summary = summaryToHtml();
     cursor.insertHtml(summary);
     cursor.insertBlock(); // Work around rendering oddity.
-
-    // XXX - this just shows the first comment in the first section;
-    // add support for multiple sections with multiple comments.
-    wtap_block_t shb = wtap_file_get_shb(cap_file_.capFile()->provider.wth, 0);
-    char *shb_comment;
-    if (wtap_block_get_nth_string_option_value(shb, OPT_COMMENT, 0,
-                                               &shb_comment) == WTAP_OPTTYPE_SUCCESS) {
-        QString section_comment = shb_comment;
-        QString section_comment_html;
-
-        if (!section_comment.isEmpty()) {
-            QString comment_escaped = html_escape(section_comment).replace('\n', "<br>");
-            section_comment_html += section_tmpl_.arg(QString(tr("Section Comment")));
-            section_comment_html += para_tmpl_.arg(comment_escaped);
-
-            cursor.insertBlock();
-            cursor.insertHtml(section_comment_html);
-        }
-    }
 
     if (cap_file_.capFile()->packet_comment_count > 0) {
         cursor.insertBlock();
