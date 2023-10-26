@@ -22,6 +22,8 @@ It is used for troubleshooting, analysis, development and education.
 Improved display filter support for value strings (optional string
 representations for numeric fields).
 
+Display filter functions can be implemented as runtime-loadable C plugins.
+
 //=== Bug Fixes
 
 //The following bugs have been fixed:
@@ -102,8 +104,10 @@ Too many other protocol updates have been made to list them all here.
 
 //_Non-empty section placeholder._
 
-//=== Major API Changes
+=== Major API Changes
 
+* Plugins should provide a `plugin_describe()` function that returns an ORed
+  list of flags consisting of the plugin types used (declared in wsutil/plugins.h).
 
 == Getting Wireshark
 
