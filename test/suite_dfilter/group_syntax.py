@@ -343,6 +343,26 @@ class TestDfilterFieldReference:
         # select frame 1, expect 1 frames out of 2.
         checkDFilterCountWithSelectedFrame(dfilter, 1, 1)
 
+    def test_ref_3(self, checkDFilterCountWithSelectedFrame):
+        dfilter = 'frame.number < $frame.number'
+        # select frame 2, expect 1 frames out of 2.
+        checkDFilterCountWithSelectedFrame(dfilter, 1, 2)
+
+    def test_ref_4(self, checkDFilterCountWithSelectedFrame):
+        dfilter = 'ip.src#3 == $ip.src#4'
+        # select frame 1, expect 1 frames out of 2.
+        checkDFilterCountWithSelectedFrame(dfilter, 1, 1)
+
+    def test_ref_5(self, checkDFilterCountWithSelectedFrame):
+        dfilter = 'frame[52-54] == ${@ip.src}[0-2]'
+        # select frame 1, expect 1 frames out of 2.
+        checkDFilterCountWithSelectedFrame(dfilter, 1, 1)
+
+    def test_ref_6(self, checkDFilterCountWithSelectedFrame):
+        dfilter = 'frame[52-54] == $@ip.src[0-2]'
+        # select frame 1, expect 1 frames out of 2.
+        checkDFilterCountWithSelectedFrame(dfilter, 1, 1)
+
 class TestDfilterLayer:
     trace_file = "ipoipoip.pcap"
 

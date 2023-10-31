@@ -25,13 +25,13 @@
 #include <epan/packet.h>
 #include <epan/strutil.h>
 #include <epan/addr_resolv.h>
-#include <epan/ipv6.h>
 #include <epan/expert.h>
 #include <epan/asn1.h>
 #include <epan/proto_data.h>
 #include <epan/oids.h>
 #include <epan/secrets.h>
 
+#include <wsutil/inet_cidr.h>
 #include <wsutil/filesystem.h>
 #include <wsutil/file_util.h>
 #include <wsutil/str_util.h>
@@ -2414,6 +2414,7 @@ const val64_string quic_transport_parameter_id[] = {
     { SSL_HND_QUIC_TP_MIN_ACK_DELAY_DRAFT05, "min_ack_delay (draft-05)" },
     { SSL_HND_QUIC_TP_MIN_ACK_DELAY, "min_ack_delay" },
     { SSL_HND_QUIC_TP_ENABLE_MULTIPATH_DRAFT04, "enable_multipath (draft-04)" },
+    { SSL_HND_QUIC_TP_ENABLE_MULTIPATH_DRAFT05, "enable_multipath (draft-05)" },
     { SSL_HND_QUIC_TP_ENABLE_MULTIPATH, "enable_multipath" },
     { 0, NULL }
 };
@@ -8409,6 +8410,10 @@ ssl_dissect_hnd_hello_ext_quic_transport_parameters(ssl_common_dissect_t *hf, tv
                     offset += 4;
                 }
             break;
+            case SSL_HND_QUIC_TP_GREASE_QUIC_BIT:
+                /* No Payload */
+                quic_add_grease_quic_bit(pinfo);
+            break;
             case SSL_HND_QUIC_TP_FACEBOOK_PARTIAL_RELIABILITY:
                 proto_tree_add_item_ret_varint(parameter_tree, hf->hf.hs_ext_quictp_parameter_facebook_partial_reliability,
                                                tvb, offset, -1, ENC_VARINT_QUIC, &value, &len);
@@ -8422,6 +8427,7 @@ ssl_dissect_hnd_hello_ext_quic_transport_parameters(ssl_common_dissect_t *hf, tv
                 }
                 offset += parameter_length;
             break;
+            case SSL_HND_QUIC_TP_ENABLE_MULTIPATH_DRAFT05:
             case SSL_HND_QUIC_TP_ENABLE_MULTIPATH:
                 /* No Payload */
                 quic_add_multipath(pinfo);

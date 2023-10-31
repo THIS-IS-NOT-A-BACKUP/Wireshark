@@ -425,6 +425,8 @@ struct quic_info_data {
     bool            server_loss_bits_send : 1; /**< The server wants to send loss bits info */
     bool            client_multipath : 1; /**< The client supports multipath */
     bool            server_multipath : 1; /**< The server supports multipath */
+    bool            client_grease_quic_bit : 1; /**< The client supports greasing the Fixed (QUIC) bit */
+    bool            server_grease_quic_bit : 1; /**< The server supports greasing the Fixed (QUIC) bit */
     int             hash_algo;      /**< Libgcrypt hash algorithm for key derivation. */
     int             cipher_algo;    /**< Cipher algorithm for packet number and packet encryption. */
     int             cipher_mode;    /**< Cipher mode for packet encryption. */
@@ -703,7 +705,9 @@ static const value_string quic_v2_long_packet_type_vals[] = {
 #define FT_ACK_MP                   0x15228c00
 #define FT_ACK_MP_ECN               0x15228c01
 #define FT_PATH_ABANDON             0x15228c05
-#define FT_PATH_STATUS              0x15228c06
+#define FT_PATH_STATUS              0x15228c06 /* multipath-draft-05 */
+#define FT_PATH_STANDBY             0x15228c07 /* multipath-draft-06 */
+#define FT_PATH_AVAILABLE           0x15228c08 /* multipath-draft-06 */
 #define FT_TIME_STAMP               0x02F5
 
 static const range_string quic_frame_type_vals[] = {
@@ -746,7 +750,9 @@ static const range_string quic_frame_type_vals[] = {
     { 0xbaba06, 0xbaba06, "PATH_STATUS" }, /* multipath-draft-04 */
     { 0x15228c00, 0x15228c01, "ACK_MP" }, /* >= multipath-draft-05 */
     { 0x15228c05, 0x15228c05, "PATH_ABANDON" }, /* >= multipath-draft-05 */
-    { 0x15228c06, 0x15228c06, "PATH_STATUS" }, /* >= multipath-draft-05 */
+    { 0x15228c06, 0x15228c06, "PATH_STATUS" }, /* = multipath-draft-05 */
+    { 0x15228c07, 0x15228c07, "PATH_STANDBY" }, /* >= multipath-draft-06 */
+    { 0x15228c08, 0x15228c08, "PATH_AVAILABLE" }, /* >= multipath-draft-06 */
     { 0,    0,        NULL },
 };
 
@@ -2856,7 +2862,9 @@ dissect_quic_frame_type(tvbuff_t *tvb, packet_info *pinfo, proto_tree *quic_tree
         }
         break;
         case FT_PATH_STATUS_DRAFT04:
-        case FT_PATH_STATUS:{
+        case FT_PATH_STATUS:
+        case FT_PATH_STANDBY:
+        case FT_PATH_AVAILABLE:{
             gint32 length;
 
             col_append_fstr(pinfo->cinfo, COL_INFO, ", PS");
@@ -2866,8 +2874,10 @@ dissect_quic_frame_type(tvbuff_t *tvb, packet_info *pinfo, proto_tree *quic_tree
             proto_tree_add_item_ret_varint(ft_tree, hf_quic_mp_ps_path_status_sequence_number, tvb, offset, -1, ENC_VARINT_QUIC, NULL, &length);
             offset += (guint32)length;
 
-            proto_tree_add_item_ret_varint(ft_tree, hf_quic_mp_ps_path_status, tvb, offset, -1, ENC_VARINT_QUIC, NULL, &length);
-            offset += (guint32)length;
+            if (frame_type == FT_PATH_STATUS || frame_type == FT_PATH_STATUS_DRAFT04) {
+                proto_tree_add_item_ret_varint(ft_tree, hf_quic_mp_ps_path_status, tvb, offset, -1, ENC_VARINT_QUIC, NULL, &length);
+                offset += (guint32)length;
+            }
         }
         break;
         default:
@@ -3657,6 +3667,23 @@ quic_add_multipath(packet_info *pinfo)
     }
 }
 
+void
+quic_add_grease_quic_bit(packet_info *pinfo)
+{
+    quic_datagram *dgram_info;
+    quic_info_data_t *conn;
+
+    dgram_info = (quic_datagram *)p_get_proto_data(wmem_file_scope(), pinfo, proto_quic, 0);
+    if (dgram_info && dgram_info->conn) {
+        conn = dgram_info->conn;
+        if (dgram_info->from_server) {
+            conn->server_grease_quic_bit = TRUE;
+        } else {
+            conn->client_grease_quic_bit = TRUE;
+        }
+    }
+}
+
 static quic_info_data_t *
 quic_find_stateless_reset_token(packet_info *pinfo, tvbuff_t *tvb, gboolean *from_server)
 {
@@ -3998,11 +4025,31 @@ dissect_quic_long_header(tvbuff_t *tvb, packet_info *pinfo, proto_tree *quic_tre
     offset = dissect_quic_long_header_common(tvb, pinfo, quic_tree, offset, quic_packet, &dcid, &scid);
 
     if (long_packet_type == QUIC_LPT_INITIAL) {
-        proto_tree_add_item_ret_varint(quic_tree, hf_quic_token_length, tvb, offset, -1, ENC_VARINT_QUIC, &token_length, &len_token_length);
+        ti = proto_tree_add_item_ret_varint(quic_tree, hf_quic_token_length, tvb, offset, -1, ENC_VARINT_QUIC, &token_length, &len_token_length);
         offset += len_token_length;
 
         if (token_length) {
             proto_tree_add_item(quic_tree, hf_quic_token, tvb, offset, (guint32)token_length, ENC_NA);
+            /* RFC 9287: "A client MAY also set the QUIC Bit to 0 in Initial,
+             * Handshake, or 0-RTT packets that are sent prior to receiving
+             * transport parameters from the server. However, a client MUST
+             * NOT set the QUIC Bit to 0 unless the Initial packets it sends
+             * include a token provided by the server in a NEW_TOKEN frame,
+             * received less than 604800 seconds (7 days) prior on a
+             * connection where the server also included the grease_quic_bit
+             * transport parameter."
+             */
+            if (from_server) {
+                expert_add_info_format(pinfo, ti, &ei_quic_protocol_violation,
+                            "Initial packets sent by the server must set the Token Length field to 0");
+            } else {
+                /* The client [may] know that the server supports greasing the
+                 * QUIC bit, and perhaps will do so. (We can't really test if
+                 * this token came less than 7 days ago from a server that
+                 * supports it, so we'll assume it might be to be safe.)
+                 */
+                conn->server_grease_quic_bit = true;
+            }
             offset += (guint)token_length;
         }
     }
@@ -4355,6 +4402,9 @@ check_dcid_on_coalesced_packet(tvbuff_t *tvb, const quic_datagram *dgram_info,
     guint offset = 0;
     guint8 first_byte, dcid_len;
     quic_cid_t dcid = {.len=0};
+    quic_info_data_t *conn = dgram_info->conn;
+    gboolean from_server = dgram_info->from_server;
+    bool grease_quic_bit;
 
     first_byte = tvb_get_guint8(tvb, offset);
     offset++;
@@ -4367,8 +4417,6 @@ check_dcid_on_coalesced_packet(tvbuff_t *tvb, const quic_datagram *dgram_info,
             tvb_memcpy(tvb, dcid.cid, offset, dcid.len);
         }
     } else {
-        quic_info_data_t *conn = dgram_info->conn;
-        gboolean from_server = dgram_info->from_server;
         if (conn) {
             dcid.len = from_server ? conn->client_cids.data.len : conn->server_cids.data.len;
             if (dcid.len) {
@@ -4381,11 +4429,21 @@ check_dcid_on_coalesced_packet(tvbuff_t *tvb, const quic_datagram *dgram_info,
         }
     }
 
+    if (conn) {
+        grease_quic_bit = from_server ? conn->client_grease_quic_bit : conn->server_grease_quic_bit;
+    } else {
+        /* Assume we're allowed to grease the Fixed bit if no connection. */
+        grease_quic_bit = true;
+    }
+
     if (is_first_packet) {
         *first_packet_dcid = dcid;
         return TRUE; /* Nothing to check */
     }
 
+    if (!grease_quic_bit && (first_byte & 0x40) == 0) {
+        return false;
+    }
     return quic_connection_equal(&dcid, first_packet_dcid);
 }
 
