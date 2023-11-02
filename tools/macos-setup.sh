@@ -19,7 +19,7 @@ shopt -s extglob
 DARWIN_MAJOR_VERSION=`uname -r | sed 's/\([0-9]*\).*/\1/'`
 
 #
-# The minimum supported version of Qt is 5.10, so the minimum supported version
+# The minimum supported version of Qt is 5.11, so the minimum supported version
 # of macOS is OS X 10.11 (El Capitan), aka Darwin 15.0.
 #
 if [[ $DARWIN_MAJOR_VERSION -lt 15 ]]; then
@@ -169,7 +169,7 @@ fi
 # features present in all three versions)
 LUA_VERSION=5.2.4
 SNAPPY_VERSION=1.1.10
-ZSTD_VERSION=1.4.5
+ZSTD_VERSION=1.5.5
 LIBXML2_VERSION=2.11.5
 LZ4_VERSION=1.9.4
 SBC_VERSION=2.0
@@ -1120,7 +1120,11 @@ EOF
                 # supports it, and I'm too lazy to add a dot-dot
                 # version check.
                 #
-                CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" $MESON _build || exit 1
+                # Disable tests to work around
+                #
+                #    https://gitlab.gnome.org/GNOME/glib/-/issues/2902
+                #
+                CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" $MESON -Dtests=false _build || exit 1
                 ninja $MAKE_BUILD_OPTS -C _build || exit 1
                 $DO_NINJA_INSTALL || exit 1
                 ;;
@@ -1238,11 +1242,11 @@ install_qt() {
         5)
             case $QT_MINOR_VERSION in
 
-            0|1|2|3|4|5|6|7|8|9)
+            0|1|2|3|4|5|6|7|8|9|10)
                 echo "Qt $QT_VERSION" is too old 1>&2
                 ;;
 
-            10|11|12|13|14)
+            11|12|13|14)
                 QT_VOLUME=qt-opensource-mac-x64-$QT_VERSION
                 ;;
             *)
@@ -1297,12 +1301,8 @@ uninstall_qt() {
             5*)
                 case $installed_qt_minor_version in
 
-                0|1|2|3|4|5)
+                0|1|2|3|4|5|6|7|8)
                     echo "Qt $installed_qt_version" is too old 1>&2
-                    ;;
-
-                6|7|8)
-                    installed_qt_volume=qt-opensource-mac-x64-clang-$installed_qt_version.dmg
                     ;;
 
                 9|10|11|12|13|14)
