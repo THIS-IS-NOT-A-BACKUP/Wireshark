@@ -39,8 +39,7 @@ AddressEditorFrame::AddressEditorFrame(QWidget *parent) :
 {
     ui->setupUi(this);
     ui->addressComboBox->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-
-    ui->nameLineEdit->setStyleSheet(lineEditStyleSheet());
+    updateStyleSheet();
 
 #ifdef Q_OS_MAC
     foreach (QWidget *w, findChildren<QWidget *>()) {
@@ -164,6 +163,12 @@ void AddressEditorFrame::editAddresses(CaptureFile &cf, int column)
     }
     ui->nameLineEdit->setFocus();
     updateWidgets();
+}
+
+void AddressEditorFrame::updateStyleSheet()
+{
+    ui->addressComboBox->setStyleSheet(QString());
+    ui->nameLineEdit->setStyleSheet(lineEditStyleSheet());
 }
 
 void AddressEditorFrame::showEvent(QShowEvent *event)
