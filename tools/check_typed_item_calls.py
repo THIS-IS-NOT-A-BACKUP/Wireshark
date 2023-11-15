@@ -507,8 +507,21 @@ def is_ignored_consecutive_filter(filter):
         re.compile(r'pn_io.error_code2'),
         re.compile(r'gryphon.ldf.schedsize'),
         re.compile(r'wimaxmacphy.burst_opt_mimo_matrix_indicator'),
-        re.compile(r'alcap.pvbwt.bitrate.fw'),
-        re.compile(r'alcap.pvbwt.bitrate.bw')
+        re.compile(r'alcap.*bwt.*.[b|f]w'),
+        re.compile(r'ccsds.packet_type'),
+        re.compile(r'iso15765.flow_control.stmin'),
+        re.compile(r'msdo.PieceSize'),
+        re.compile(r'opa.clasportinfo.redirect.reserved'),
+        re.compile(r'p_mul.unused'),
+        re.compile(r'btle.control.phys.le_[1|2]m_phy'),
+        re.compile(r'opa.pm.dataportcounters.reserved'),
+        re.compile(r'opa.switchinfo.switchcapabilitymask.reserved'),
+        re.compile(r'nvme-rdma.read_from_host_resp'),
+        re.compile(r'nvme-rdma.write_to_host_req'),
+        re.compile(r'netlink-route.ifla_linkstats.rx_errors.fifo_errs'),
+        re.compile(r'mtp3mg.japan_spare'),
+        re.compile(r'ixveriwave.errors.ip_checksum_error'),
+        re.compile(r'ansi_a_bsmap.cm2.scm.bc_entry.opmode[0|1]')
     ]
 
     for patt in ignore_patterns:
