@@ -251,6 +251,7 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
 {
     proto_tree *sub_tree;
     proto_item *sub_item;
+    guint32 length;
     guint32 cdb_length;
     guint8 data_in;
     guint32 data_transfer_length;
@@ -271,18 +272,28 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
     }
 
     rsvd_conv_data->task = NULL;
+    rsvd_conv_data->task = (rsvd_task_data_t *)wmem_map_lookup(rsvd_conv_data->tasks, (const void *)&request_id);
     if (!pinfo->fd->visited) {
-        guint64 *key_copy = wmem_new(wmem_file_scope(), guint64);
+        if (rsvd_conv_data->task == NULL) {
+            guint64 *key_copy = wmem_new(wmem_file_scope(), guint64);
 
-        *key_copy = request_id;
-        rsvd_conv_data->task = wmem_new(wmem_file_scope(), rsvd_task_data_t);
-        rsvd_conv_data->task->request_frame=pinfo->num;
-        rsvd_conv_data->task->response_frame=0;
-        rsvd_conv_data->task->itlq = NULL;
-        wmem_map_insert(rsvd_conv_data->tasks, (const void *)key_copy,
-                        rsvd_conv_data->task);
-    } else {
-        rsvd_conv_data->task = (rsvd_task_data_t *)wmem_map_lookup(rsvd_conv_data->tasks, (const void *)&request_id);
+            *key_copy = request_id;
+            rsvd_conv_data->task = wmem_new0(wmem_file_scope(), rsvd_task_data_t);
+            rsvd_conv_data->task->itlq = wmem_new0(wmem_file_scope(),
+                                                  itlq_nexus_t);
+            rsvd_conv_data->task->itlq->lun = 0xffff;
+            rsvd_conv_data->task->itlq->scsi_opcode = 0xffff;
+            rsvd_conv_data->task->itlq->fc_time = pinfo->abs_ts;
+            wmem_map_insert(rsvd_conv_data->tasks, (const void *)key_copy,
+                            rsvd_conv_data->task);
+        }
+        if (request) {
+            rsvd_conv_data->task->request_frame = pinfo->num;
+            rsvd_conv_data->task->itlq->first_exchange_frame = pinfo->num;
+        } else {
+            rsvd_conv_data->task->response_frame = pinfo->num;
+            rsvd_conv_data->task->itlq->last_exchange_frame = pinfo->num;
+        }
     }
 
     sub_tree = proto_tree_add_subtree_format(parent_tree, tvb, offset, len, ett_svhdx_tunnel_scsi_request, &sub_item, "SVHDX_TUNNEL_SCSI_%s", (request ? "REQUEST" : "RESPONSE"));
@@ -304,6 +315,11 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
         offset++;
 
         /* SensInfoExLength */
+        /* You'll notice that there is no SenseDataEx field in the request.
+         * This field is pointless and ignored. In some versions Microsoft
+         * said that this field MUST be set to zero; recent versions say
+         * that it SHOULD be set to 20 (which is the size of the CDBBuffer
+         * plus Reserved3.) */
         proto_tree_add_item(sub_tree, hf_svhdx_tunnel_scsi_sense_info_ex_length, tvb, offset, 1, ENC_LITTLE_ENDIAN);
         offset++;
 
@@ -358,22 +374,6 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
         /*
          * Now the SCSI Request
          */
-        if (rsvd_conv_data->task && !rsvd_conv_data->task->itlq) {
-            rsvd_conv_data->task->itlq = wmem_new(wmem_file_scope(),
-                                                  itlq_nexus_t);
-            rsvd_conv_data->task->itlq->first_exchange_frame = pinfo->num;
-            rsvd_conv_data->task->itlq->last_exchange_frame = 0;
-            rsvd_conv_data->task->itlq->lun = 0xffff;
-            rsvd_conv_data->task->itlq->scsi_opcode = 0xffff;
-            rsvd_conv_data->task->itlq->task_flags = 0;
-            rsvd_conv_data->task->itlq->data_length = 0;
-            rsvd_conv_data->task->itlq->bidir_data_length = 0;
-            rsvd_conv_data->task->itlq->flags = 0;
-            rsvd_conv_data->task->itlq->alloc_len = 0;
-            rsvd_conv_data->task->itlq->fc_time = pinfo->abs_ts;
-            rsvd_conv_data->task->itlq->extra_data = NULL;
-        }
-
         if (rsvd_conv_data->task && rsvd_conv_data->task->itlq) {
             dissect_scsi_cdb(scsi_cdb, pinfo, top_tree, SCSI_DEV_SMC, rsvd_conv_data->task->itlq, get_itl_nexus(pinfo));
             if (data_in == 0) { /* Only OUT operations have meaningful SCSI payload in request packet */
@@ -387,7 +387,7 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
         guint8 scsi_status = 0;
 
         /* Length */
-        proto_tree_add_item(sub_tree, hf_svhdx_tunnel_scsi_length, tvb, offset, 2, ENC_LITTLE_ENDIAN);
+        proto_tree_add_item_ret_uint(sub_tree, hf_svhdx_tunnel_scsi_length, tvb, offset, 2, ENC_LITTLE_ENDIAN, &length);
         offset += 2;
 
         /* A */
@@ -430,6 +430,24 @@ dissect_RSVD_TUNNEL_SCSI(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_t
         offset += 4;
 
         /* SenseDataEx */
+        /* Microsoft kept going back and forth with this field. Up through
+         * version 6.0 of the MS-RSVD specification, SenseInfoExLength had
+         * the length of SenseDataEx, a variable length fields. In 7.0,
+         * it was changed so that SenseDataEx was a fixed length 20 byte
+         * field, and SenseInfoExLength had the number of bytes, of the
+         * data actually contained in the field, which had to be 20 or fewer.
+         * Then in 11.0 it was changed back.
+         * In the 7.0-10.0 case, the 20 byte field seemed to actually
+         * contain the CDB + padding + Reserved3 from the Request copied back.
+         * Luckily there's also a Length field that measures the size of
+         * the structure excluding the DataBuffer. In the versions with the
+         * 20 byte fixed SenseDataEx field, the protocol notes that it MUST
+         * MUST be set to the appropriate value of 36. (DataBuffer is the
+         * only other possibly variable length field.)
+         */
+        if (length == 36 && sense_info_ex_length < 20) {
+            sense_info_ex_length = 20;
+        }
         proto_tree_add_item(sub_tree, hf_svhdx_tunnel_scsi_sense_data_ex, tvb, offset, sense_info_ex_length, ENC_NA);
         offset += sense_info_ex_length;
 
@@ -495,6 +513,11 @@ dissect_RSVD_SRB_STATUS(tvbuff_t *tvb, proto_tree *parent_tree, int offset, gint
         offset += 1;
 
         /* SenseDataEx */
+        /* For the same reasons as discussed in RSVD_TUNNEL_SCSI, in some
+         * versions this field is a fixed 20 octets, and the length just
+         * indicates the number of bytes of real sense data in it.
+         * At least it's at the end; we'll just ignore the padding.
+         */
         proto_tree_add_item(gfi_sub_tree, hf_svhdx_tunnel_srb_status_sense_data_ex, tvb, offset, sense_info_length, ENC_NA);
         offset += sense_info_length;
     }
