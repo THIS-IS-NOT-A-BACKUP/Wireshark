@@ -12037,12 +12037,10 @@ proto_register_zbee_zcl_pwr_prof(void)
 
     /* initialize attribute subtree types */
     for ( i = 0, j = ZBEE_ZCL_PWR_PROF_NUM_GENERIC_ETT; i < ZBEE_ZCL_PWR_PROF_NUM_PWR_PROF_ETT; i++, j++ ) {
-        ett_zbee_zcl_pwr_prof_pwrprofiles[i] = -1;
         ett[j] = &ett_zbee_zcl_pwr_prof_pwrprofiles[i];
     }
 
     for ( i = 0; i < ZBEE_ZCL_PWR_PROF_NUM_EN_PHS_ETT; i++, j++ ) {
-        ett_zbee_zcl_pwr_prof_enphases[i] = -1;
         ett[j] = &ett_zbee_zcl_pwr_prof_enphases[i];
     }
 
@@ -12715,7 +12713,6 @@ proto_register_zbee_zcl_appl_ctrl(void)
 
     /* initialize attribute subtree types */
     for ( i = 0, j = ZBEE_ZCL_APPL_CTRL_NUM_GENERIC_ETT; i < ZBEE_ZCL_APPL_CTRL_NUM_FUNC_ETT; i++, j++) {
-        ett_zbee_zcl_appl_ctrl_func[i] = -1;
         ett[j] = &ett_zbee_zcl_appl_ctrl_func[i];
     }
 
@@ -13497,19 +13494,19 @@ static int hf_zbee_gp_cmd_pc_app_info_model_id_present = -1;
 static int hf_zbee_gp_cmd_pc_app_info_gpd_commands_present = -1;
 static int hf_zbee_gp_cmd_pc_app_info_cluster_list_present = -1;
 static int hf_zbee_gp_cmd_pc_actions = -1;
-static guint ett_zbee_gp_cmd_pc_actions = -1;
+static gint ett_zbee_gp_cmd_pc_actions = -1;
 static int hf_zbee_gp_cmd_pc_options = -1;
-static guint ett_zbee_gp_cmd_pc_options = -1;
-static guint ett_zbee_zcl_gp_group_list = -1;
+static gint ett_zbee_gp_cmd_pc_options = -1;
+static gint ett_zbee_zcl_gp_group_list = -1;
 static int hf_zbee_gp_group_list_len = -1;
 static int hf_zbee_gp_group_list_group_id = -1;
 static int hf_zbee_gp_group_list_alias = -1;
 static int hf_zbee_gp_cmd_pc_secur_options = -1;
-static guint ett_zbee_gp_cmd_pc_secur_options = -1;
+static gint ett_zbee_gp_cmd_pc_secur_options = -1;
 static int hf_zbee_gp_n_paired_endpoints = -1;
 static int hf_zbee_gp_paired_endpoint = -1;
 static int hf_zbee_gp_cmd_pc_app_info = -1;
-static guint ett_zbee_gp_cmd_pc_app_info = -1;
+static gint ett_zbee_gp_cmd_pc_app_info = -1;
 static int hf_zbee_zcl_gp_manufacturer_id = -1;
 static int hf_zbee_zcl_gp_model_id = -1;
 static int hf_zbee_gp_n_gpd_commands = -1;
@@ -13517,14 +13514,14 @@ static int hf_zbee_gp_gpd_command = -1;
 static int hf_zbee_gp_n_srv_clusters = -1;
 static int hf_zbee_gp_n_cli_clusters = -1;
 static int hf_zbee_gp_gpd_cluster_id = -1;
-static guint ett_zbee_zcl_gp_ep = -1;
-static guint ett_zbee_zcl_gp_cmds = -1;
-static guint ett_zbee_zcl_gp_clusters = -1;
-static guint ett_zbee_zcl_gp_srv_clusters = -1;
-static guint ett_zbee_zcl_gp_cli_clusters = -1;
+static gint ett_zbee_zcl_gp_ep = -1;
+static gint ett_zbee_zcl_gp_cmds = -1;
+static gint ett_zbee_zcl_gp_clusters = -1;
+static gint ett_zbee_zcl_gp_srv_clusters = -1;
+static gint ett_zbee_zcl_gp_cli_clusters = -1;
 
 /* GP_SINK_TABLE_REQUEST and GP_PROXY_TABLE_REQUEST */
-static guint ett_zbee_zcl_proxy_sink_tbl_req_options = -1;
+static gint ett_zbee_zcl_proxy_sink_tbl_req_options = -1;
 static int hf_zbee_zcl_proxy_sink_tbl_req_options = -1;
 static int hf_zbee_zcl_proxy_sink_tbl_req_fld_app_id = -1;
 static int hf_zbee_zcl_proxy_sink_tbl_req_fld_req_type = -1;

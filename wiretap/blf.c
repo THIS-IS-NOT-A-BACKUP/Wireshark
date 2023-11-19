@@ -1048,8 +1048,16 @@ blf_scan_file_for_logcontainers(blf_params_t *params, int *err, gchar **err_info
                 break;
             }
 
-            /* we are moving back and try again but 1 byte later */
-            /* TODO: better understand how this paddings works... */
+            /*
+             * we are moving back and try again but 1 byte later
+             * TODO: better understand how this paddings works...
+             * Note that, in at least one capture - the Example.blf
+             * file attached to
+             * https://gitlab.com/wireshark/wireshark/-/issues/19269 -
+             * one of the log container objects is aligned on a 2-byte
+             * bundary but *not* on a 4-byte boundary, with 3 bytes
+             * of padding.
+             */
             current_start_pos++;
             if (file_seek(params->fh, current_start_pos, SEEK_SET, err) < 0) {
                 return FALSE;
@@ -3387,6 +3395,13 @@ blf_open(wtap *wth, int *err, gchar **err_info) {
     }
 
     /* This seems to be an BLF! */
+    /* Check for a valid header length */
+    if (header.header_length < sizeof(blf_blockheader_t)) {
+        *err = WTAP_ERR_BAD_FILE;
+        *err_info = ws_strdup("blf: file header length too short");
+        return WTAP_OPEN_ERROR;
+    }
+
     /* skip past the header, which may include padding/reserved space */
     if (file_seek(wth->fh, header.header_length, SEEK_SET, err) < 0) {
         return WTAP_OPEN_ERROR;
