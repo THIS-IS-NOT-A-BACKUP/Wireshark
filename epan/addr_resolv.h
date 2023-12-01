@@ -65,6 +65,9 @@ typedef struct _e_addr_resolve {
 struct hashether;
 typedef struct hashether hashether_t;
 
+struct hashwka;
+typedef struct hashwka hashwka_t;
+
 struct hashmanuf;
 typedef struct hashmanuf hashmanuf_t;
 
@@ -222,38 +225,60 @@ const gchar *get_ether_name_if_known(const guint8 *addr);
 
 /*
  * Given a sequence of 3 octets containing an OID, get_manuf_name()
- * returns the vendor name, or "%02x:%02x:%02x" if not known.
+ * returns an abbreviated form of the vendor name, or "%02x:%02x:%02x"
+ * if not known. (The short form of the name is roughly similar in length
+ * to the hexstring, so that they may be used in similar places.)
+ * @note: This only looks up entries in the 24-bit OUI table (and the
+ * CID table), not the MA-M and MA-S tables. The hex byte string is
+ * returned for sequences registered to the IEEE Registration Authority
+ * for the purposes of being subdivided into MA-M and MA-S.
  */
 extern const gchar *get_manuf_name(const guint8 *addr, size_t size);
 
 /*
- * Given a sequence of 3 octets containing an OID, get_manuf_name_if_known()
- * returns the vendor name, or NULL if not known.
+ * Given a sequence of 3 or more octets containing an OUI,
+ * get_manuf_name_if_known() returns the vendor name, or NULL if not known.
+ * @note Unlike get_manuf_name() above, this returns the full vendor name.
+ * @note If size is 6 or larger, vendor names will be looked up in the MA-M
+ * and MA-S tables as well (but note that the length of the sequence is
+ * not returned.) If size is less than 6, only the 24 bit tables are searched,
+ * and NULL is returned for sequences registered to the IEEE Registration
+ * Authority for purposes of being subdivided into MA-M and MA-S.
  */
 WS_DLL_PUBLIC const gchar *get_manuf_name_if_known(const guint8 *addr, size_t size);
 
 /*
- * Given an integer containing a 24-bit OID, uint_get_manuf_name_if_known()
- * returns the vendor name, or NULL if not known.
+ * Given an integer containing a 24-bit OUI (or CID),
+ * uint_get_manuf_name_if_known() returns the vendor name, or NULL if not known.
+ * @note NULL is returned for sequences registered to the IEEE Registration
+ * Authority for purposes of being subdivided into MA-M and MA-S.
  */
 extern const gchar *uint_get_manuf_name_if_known(const guint32 oid);
 
 /*
  * Given a tvbuff and an offset in that tvbuff for a 3-octet OID,
- * tvb_get_manuf_name() returns the vendor name, or "%02x:%02x:%02x"
+ * tvb_get_manuf_name() returns an abbreviated vendor name, or "%02x:%02x:%02x"
  * if not known.
+ * @note: This only looks up entries in the 24-bit OUI table (and the
+ * CID table), not the MA-M and MA-S tables. The hex byte string is
+ * returned for sequences registered to the IEEE Registration Authority
+ * for the purposes of being subdivided into MA-M and MA-S.
  */
 WS_DLL_PUBLIC const gchar *tvb_get_manuf_name(tvbuff_t *tvb, gint offset);
 
 /*
  * Given a tvbuff and an offset in that tvbuff for a 3-octet OID,
- * tvb_get_manuf_name_if_known() returns the vendor name, or NULL
+ * tvb_get_manuf_name_if_known() returns the full vendor name, or NULL
  * if not known.
+ * @note NULL is returned for sequences registered to the IEEE Registration
+ * Authority for purposes of being subdivided into MA-M and MA-S.
  */
 WS_DLL_PUBLIC const gchar *tvb_get_manuf_name_if_known(tvbuff_t *tvb, gint offset);
 
-/* eui64_to_display returns "<vendor>_%02x:%02x:%02x:%02x:%02x:%02x" if the vendor code is known
-   "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x" */
+/* eui64_to_display returns "<vendor>_%02x:%02x:%02x:%02x:%02x:%02x" if the
+ * vendor code is known (or as appropriate for MA-M and MA-S), and if not,
+ * "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x"
+*/
 extern gchar *eui64_to_display(wmem_allocator_t *allocator, const guint64 addr);
 
 /* get_ipxnet_name returns the logical name if found in an ipxnets file,
@@ -268,8 +293,11 @@ WS_DLL_PUBLIC guint get_hash_ether_status(hashether_t* ether);
 WS_DLL_PUBLIC char* get_hash_ether_hexaddr(hashether_t* ether);
 WS_DLL_PUBLIC char* get_hash_ether_resolved_name(hashether_t* ether);
 
+WS_DLL_PUBLIC bool get_hash_manuf_used(hashmanuf_t* manuf);
 WS_DLL_PUBLIC char* get_hash_manuf_resolved_name(hashmanuf_t* manuf);
 
+WS_DLL_PUBLIC bool get_hash_wka_used(hashwka_t* wka);
+WS_DLL_PUBLIC char* get_hash_wka_resolved_name(hashwka_t* wka);
 
 /* adds a hostname/IPv4 in the hash table */
 WS_DLL_PUBLIC void add_ipv4_name(const guint addr, const gchar *name, const gboolean static_entry);

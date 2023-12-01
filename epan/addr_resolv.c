@@ -170,8 +170,13 @@ struct hashether {
     char              resolved_name[MAXNAMELEN];
 };
 
+struct hashwka {
+    uint8_t           flags;  /* (See above) */
+    char*             name;
+};
+
 struct hashmanuf {
-    guint             status;  /* (See above) */
+    uint8_t           flags;  /* (See above) */
     guint8            addr[3];
     char              hexaddr[3*3];
     char              resolved_name[MAXNAMELEN];
@@ -222,8 +227,13 @@ struct cb_serv_data {
 };
 
 // Maps guint -> hashmanuf_t*
+// XXX: Note that hashmanuf_t* only accommodates 24-bit OUIs.
+// We might want to store vendor names from MA-M and MA-S to
+// present in the Resolved Addresses dialog.
 static wmem_map_t *manuf_hashtable = NULL;
+// Maps address -> hashwka_t*
 static wmem_map_t *wka_hashtable = NULL;
+// Maps address -> hashether_t*
 static wmem_map_t *eth_hashtable = NULL;
 // Maps guint -> serv_port_t*
 static wmem_map_t *serv_port_hashtable = NULL;
@@ -1611,7 +1621,7 @@ manuf_hash_new_entry(const guint8 *addr, const char* name, const char* longname)
     memcpy(manuf_value->addr, addr, 3);
     if (name != NULL) {
         (void) g_strlcpy(manuf_value->resolved_name, name, MAXNAMELEN);
-        manuf_value->status = HASHETHER_STATUS_RESOLVED_NAME;
+        manuf_value->flags = NAME_RESOLVED;
         if (longname != NULL) {
             (void) g_strlcpy(manuf_value->resolved_longname, longname, MAXNAMELEN);
         }
@@ -1620,7 +1630,7 @@ manuf_hash_new_entry(const guint8 *addr, const char* name, const char* longname)
         }
     }
     else {
-        manuf_value->status = HASHETHER_STATUS_UNRESOLVED;
+        manuf_value->flags = 0;
         manuf_value->resolved_name[0] = '\0';
         manuf_value->resolved_longname[0] = '\0';
     }
@@ -1632,15 +1642,21 @@ manuf_hash_new_entry(const guint8 *addr, const char* name, const char* longname)
     return manuf_value;
 }
 
-static void
+static hashwka_t*
 wka_hash_new_entry(const guint8 *addr, char* name)
 {
     guint8 *wka_key;
+    hashwka_t *wka_value;
 
     wka_key = (guint8 *)wmem_alloc(addr_resolv_scope, 6);
     memcpy(wka_key, addr, 6);
 
-    wmem_map_insert(wka_hashtable, wka_key, wmem_strdup(addr_resolv_scope, name));
+    wka_value = (hashwka_t*)wmem_new(addr_resolv_scope, hashwka_t);
+    wka_value->flags = NAME_RESOLVED;
+    wka_value->name = wmem_strdup(addr_resolv_scope, name);
+
+    wmem_map_insert(wka_hashtable, wka_key, wka_value);
+    return wka_value;
 }
 
 static void
@@ -1649,22 +1665,32 @@ add_manuf_name(const guint8 *addr, unsigned int mask, gchar *name, gchar *longna
     switch (mask)
     {
     case 0:
+        {
         /* This is a manufacturer ID; add it to the manufacturer ID hash table */
-        manuf_hash_new_entry(addr, name, longname);
+        hashmanuf_t *entry = manuf_hash_new_entry(addr, name, longname);
+        entry->flags |= STATIC_HOSTNAME;
         break;
-
+        }
     case 48:
         /* This is a well-known MAC address; add it to the Ethernet hash table */
         add_eth_name(addr, name);
         break;
 
     default:
+        {
         /* This is a range of well-known addresses; add it to the well-known-address table */
-        wka_hash_new_entry(addr, name);
+        hashwka_t *entry = wka_hash_new_entry(addr, name);
+        entry->flags |= STATIC_HOSTNAME;
         break;
+        }
     }
 } /* add_manuf_name */
 
+/* XXX: manuf_name_lookup returns a hashmanuf_t*, which cannot hold a 28 or
+ * 36 bit MA-M or MA-S. So it returns those as unresolved. For EUI-48 and
+ * EUI-64, MA-M and MA-S should be checked for separately in the global
+ * tables.
+ */
 static hashmanuf_t *
 manuf_name_lookup(const guint8 *addr, size_t size)
 {
@@ -1672,7 +1698,7 @@ manuf_name_lookup(const guint8 *addr, size_t size)
     guint8       oct;
     hashmanuf_t  *manuf_value;
 
-    ws_return_val_if(size < 6, NULL);
+    ws_return_val_if(size < 3, NULL);
 
     /* manuf needs only the 3 most significant octets of the ethernet address */
     manuf_key = addr[0];
@@ -1687,6 +1713,7 @@ manuf_name_lookup(const guint8 *addr, size_t size)
     /* first try to find a "perfect match" */
     manuf_value = (hashmanuf_t*)wmem_map_lookup(manuf_hashtable, GUINT_TO_POINTER(manuf_key));
     if (manuf_value != NULL) {
+        manuf_value->flags |= TRIED_RESOLVE_ADDRESS;
         return manuf_value;
     }
 
@@ -1699,20 +1726,25 @@ manuf_name_lookup(const guint8 *addr, size_t size)
         manuf_key &= 0x00FEFFFF;
         manuf_value = (hashmanuf_t*)wmem_map_lookup(manuf_hashtable, GUINT_TO_POINTER(manuf_key));
         if (manuf_value != NULL) {
+            manuf_value->flags |= TRIED_RESOLVE_ADDRESS;
             return manuf_value;
         }
     }
 
     /* Try the global manuf tables. */
     const char *short_name, *long_name;
-    short_name = ws_manuf_lookup_str(addr, &long_name);
+    /* We can't insert a 28 or 36 bit entry into the used hash table. */
+    short_name = ws_manuf_lookup_oui24(addr, &long_name);
     if (short_name != NULL) {
         /* Found it */
-        return manuf_hash_new_entry(addr, short_name, long_name);
+        manuf_value = manuf_hash_new_entry(addr, short_name, long_name);
+    } else {
+        /* Add the address as a hex string */
+        manuf_value = manuf_hash_new_entry(addr, NULL, NULL);
     }
 
-    /* Add the address as a hex string */
-    return manuf_hash_new_entry(addr, NULL, NULL);
+    manuf_value->flags |= TRIED_RESOLVE_ADDRESS;
+    return manuf_value;
 
 } /* manuf_name_lookup */
 
@@ -1722,7 +1754,7 @@ wka_name_lookup(const guint8 *addr, const unsigned int mask)
     guint8     masked_addr[6];
     guint      num;
     gint       i;
-    gchar     *name;
+    hashwka_t *value;
 
     if (wka_hashtable == NULL) {
         return NULL;
@@ -1737,12 +1769,16 @@ wka_name_lookup(const guint8 *addr, const unsigned int mask)
     for (; i < 6; i++)
         masked_addr[i] = 0;
 
-    name = (gchar *)wmem_map_lookup(wka_hashtable, masked_addr);
+    value = (hashwka_t*)wmem_map_lookup(wka_hashtable, masked_addr);
 
-    return name;
+    if (value) {
+        value->flags |= TRIED_RESOLVE_ADDRESS;
+        return value->name;
+    }
+
+    return NULL;
 
 } /* wka_name_lookup */
-
 
 guint get_hash_ether_status(hashether_t* ether)
 {
@@ -1757,6 +1793,16 @@ char* get_hash_ether_hexaddr(hashether_t* ether)
 char* get_hash_ether_resolved_name(hashether_t* ether)
 {
     return ether->resolved_name;
+}
+
+bool get_hash_wka_used(hashwka_t* wka)
+{
+    return ((wka->flags & TRIED_OR_RESOLVED_MASK) == TRIED_OR_RESOLVED_MASK);
+}
+
+char* get_hash_wka_resolved_name(hashwka_t* wka)
+{
+    return wka->name;
 }
 
 static guint
@@ -1863,6 +1909,48 @@ ethers_cleanup(void)
     g_wka_path = NULL;
 }
 
+static void
+eth_resolved_name_fill(hashether_t *tp, const char *name, unsigned mask, const guint8 *addr)
+{
+    switch (mask) {
+        case 24:
+            snprintf(tp->resolved_name, MAXNAMELEN, "%s_%02x:%02x:%02x",
+                    name, addr[3], addr[4], addr[5]);
+            break;
+        case 28:
+            snprintf(tp->resolved_name, MAXNAMELEN, "%s_%01x:%02x:%02x",
+                    name, addr[3] & 0x0F, addr[4], addr[5]);
+            break;
+        case 36:
+            snprintf(tp->resolved_name, MAXNAMELEN, "%s_%01x:%02x",
+                    name, addr[4] & 0x0F, addr[5]);
+            break;
+        default: // Future-proof generic algorithm
+        {
+            unsigned bytes = mask / 8;
+            unsigned bitmask = mask % 8;
+
+            int pos = snprintf(tp->resolved_name, MAXNAMELEN, "%s", name);
+            if (pos >= MAXNAMELEN) return;
+
+            if (bytes < 6) {
+                pos += snprintf(tp->resolved_name + pos, MAXNAMELEN - pos,
+                    bitmask >= 4 ? "_%01x" : "_%02x",
+                    addr[bytes] & (0xFF >> bitmask));
+                bitmask = 0;
+                bytes++;
+            }
+
+            while (bytes < 6) {
+                if (pos >= MAXNAMELEN) return;
+                pos += snprintf(tp->resolved_name + pos, MAXNAMELEN - pos, ":%02x",
+                    addr[bytes]);
+                bytes++;
+            }
+        }
+    }
+}
+
 /* Resolve ethernet address */
 static hashether_t *
 eth_addr_resolve(hashether_t *tp) {
@@ -1917,7 +2005,7 @@ eth_addr_resolve(hashether_t *tp) {
 
         /* Now try looking in the manufacturer table. */
         manuf_value = manuf_name_lookup(addr, addr_size);
-        if ((manuf_value != NULL) && (manuf_value->status != HASHETHER_STATUS_UNRESOLVED)) {
+        if ((manuf_value != NULL) && ((manuf_value->flags & NAME_RESOLVED) == NAME_RESOLVED)) {
             snprintf(tp->resolved_name, MAXNAMELEN, "%s_%02x:%02x:%02x",
                     manuf_value->resolved_name, addr[3], addr[4], addr[5]);
             tp->status = HASHETHER_STATUS_RESOLVED_DUMMY;
@@ -1962,6 +2050,23 @@ eth_addr_resolve(hashether_t *tp) {
             }
         } while (--mask); /* Work down to the last bit */
 
+        /* Now try looking in the global manuf data for a MA-M or MA-S
+         * match. We do this last so that the other files override this
+         * result.
+         */
+        const char *short_name, *long_name;
+        short_name = ws_manuf_lookup(addr, &long_name, &mask);
+        if (short_name != NULL) {
+            if (mask == 24) {
+                /* This shouldn't happen as it should be handled above,
+                 * but it doesn't hurt.
+                 */
+                manuf_hash_new_entry(addr, short_name, long_name);
+            }
+            eth_resolved_name_fill(tp, short_name, mask, addr);
+            tp->status = HASHETHER_STATUS_RESOLVED_DUMMY;
+            return tp;
+        }
         /* No match whatsoever. */
         set_address(&ether_addr, AT_ETHER, 6, addr);
         address_to_str_buf(&ether_addr, tp->resolved_name, MAXNAMELEN);
@@ -3482,8 +3587,10 @@ get_manuf_name(const guint8 *addr, size_t size)
 {
     hashmanuf_t *manuf_value;
 
+    ws_return_val_if(size < 3, NULL);
+
     manuf_value = manuf_name_lookup(addr, size);
-    if (gbl_resolv_flags.mac_name && manuf_value->status != HASHETHER_STATUS_UNRESOLVED)
+    if (gbl_resolv_flags.mac_name && ((manuf_value->flags & NAME_RESOLVED) == NAME_RESOLVED))
         return manuf_value->resolved_name;
 
     return manuf_value->hexaddr;
@@ -3493,7 +3600,7 @@ get_manuf_name(const guint8 *addr, size_t size)
 const gchar *
 tvb_get_manuf_name(tvbuff_t *tvb, gint offset)
 {
-    guint8 buf[6] = { 0 };
+    guint8 buf[3] = { 0 };
     tvb_memcpy(tvb, buf, offset, 3);
     return get_manuf_name(buf, sizeof(buf));
 }
@@ -3502,31 +3609,22 @@ const gchar *
 get_manuf_name_if_known(const guint8 *addr, size_t size)
 {
     hashmanuf_t *manuf_value;
-    guint manuf_key;
-    guint8 oct;
 
-    ws_return_val_if(size != 6, NULL);
+    ws_return_val_if(size < 3, NULL);
 
-    /* manuf needs only the 3 most significant octets of the ethernet address */
-    manuf_key = addr[0];
-    manuf_key = manuf_key<<8;
-    oct = addr[1];
-    manuf_key = manuf_key | oct;
-    manuf_key = manuf_key<<8;
-    oct = addr[2];
-    manuf_key = manuf_key | oct;
-
-    manuf_value = (hashmanuf_t *)wmem_map_lookup(manuf_hashtable, GUINT_TO_POINTER(manuf_key));
-    if (manuf_value != NULL && manuf_value->status != HASHETHER_STATUS_UNRESOLVED) {
+    manuf_value = manuf_name_lookup(addr, size);
+    if (manuf_value != NULL && ((manuf_value->flags & NAME_RESOLVED) == NAME_RESOLVED)) {
         return manuf_value->resolved_longname;
     }
 
-    /* Try the global manuf tables. */
-    const char *short_name, *long_name;
-    short_name = ws_manuf_lookup_str(addr, &long_name);
-    if (short_name != NULL) {
-        /* Found it */
-        return long_name;
+    if (size >= 6) {
+        /* Try the global manuf tables. */
+        const char *short_name, *long_name;
+        short_name = ws_manuf_lookup_str(addr, &long_name);
+        if (short_name != NULL) {
+            /* Found it */
+            return long_name;
+        }
     }
 
     return NULL;
@@ -3536,35 +3634,25 @@ get_manuf_name_if_known(const guint8 *addr, size_t size)
 const gchar *
 uint_get_manuf_name_if_known(const guint32 manuf_key)
 {
-    hashmanuf_t *manuf_value;
     guint8 addr[6] = { 0 };
-
-    manuf_value = (hashmanuf_t *)wmem_map_lookup(manuf_hashtable, GUINT_TO_POINTER(manuf_key));
-    if (manuf_value != NULL && manuf_value->status != HASHETHER_STATUS_UNRESOLVED) {
-        return manuf_value->resolved_longname;
-    }
-
     addr[0] = (manuf_key >> 16) & 0xFF;
     addr[1] = (manuf_key >> 8) & 0xFF;
     addr[2] = manuf_key & 0xFF;
 
-    /* Try the global manuf tables. */
-    const char *short_name, *long_name;
-    short_name = ws_manuf_lookup_str(addr, &long_name);
-    if (short_name != NULL) {
-        /* Found it */
-        return long_name;
-    }
-
-    return NULL;
+    return get_manuf_name_if_known(addr, sizeof(addr));
 }
 
 const gchar *
 tvb_get_manuf_name_if_known(tvbuff_t *tvb, gint offset)
 {
-    guint8 buf[6] = { 0 };
+    guint8 buf[3] = { 0 };
     tvb_memcpy(tvb, buf, offset, 3);
     return get_manuf_name_if_known(buf, sizeof(buf));
+}
+
+bool get_hash_manuf_used(hashmanuf_t* manuf)
+{
+    return ((manuf->flags & TRIED_OR_RESOLVED_MASK) == TRIED_OR_RESOLVED_MASK);
 }
 
 char* get_hash_manuf_resolved_name(hashmanuf_t* manuf)
@@ -3582,9 +3670,38 @@ eui64_to_display(wmem_allocator_t *allocator, const guint64 addr_eui64)
     /* Copy and convert the address to network byte order. */
     *(guint64 *)(void *)(addr) = pntoh64(&(addr_eui64));
 
+    /* manuf_name_lookup returns a hashmanuf_t* that covers an entire /24,
+     * so we can't properly use it for MA-M and MA-S. We do want to check
+     * it first so it also covers the user-defined tables.
+     */
     manuf_value = manuf_name_lookup(addr, 8);
-    if (!gbl_resolv_flags.mac_name || (manuf_value->status == HASHETHER_STATUS_UNRESOLVED)) {
-        ret = wmem_strdup_printf(allocator, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7]);
+    if (!gbl_resolv_flags.mac_name || !manuf_value || ((manuf_value->flags & NAME_RESOLVED) == 0)) {
+        /* Now try looking in the global manuf data for a MA-M or MA-S match.
+         */
+        const char *short_name, *long_name;
+        unsigned mask;
+        short_name = ws_manuf_lookup(addr, &long_name, &mask);
+        if (short_name != NULL) {
+            switch (mask) {
+                case 24:
+                    /* This shouldn't happen as it should be handled above. */
+                    manuf_hash_new_entry(addr, short_name, long_name);
+                    ret = wmem_strdup_printf(allocator, "%s_%02x:%02x:%02x:%02x:%02x", short_name, addr[3], addr[4], addr[5], addr[6], addr[7]);
+                    break;
+                case 28:
+                    ret = wmem_strdup_printf(allocator, "%s_%01x:%02x:%02x:%02x:%02x", short_name, addr[3] & 0x0F, addr[4], addr[5], addr[6], addr[7]);
+                    break;
+                case 36:
+                    ret = wmem_strdup_printf(allocator, "%s_%01x:%02x:%02x:%02x", short_name, addr[4] & 0x0F, addr[5], addr[6], addr[7]);
+                    break;
+                default:
+                    /* Doesn't happen, ignore for now. */
+                    ret = wmem_strdup_printf(allocator, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7]);
+                    break;
+            }
+        } else {
+            ret = wmem_strdup_printf(allocator, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7]);
+        }
     } else {
         ret = wmem_strdup_printf(allocator, "%s_%02x:%02x:%02x:%02x:%02x", manuf_value->resolved_name, addr[3], addr[4], addr[5], addr[6], addr[7]);
     }

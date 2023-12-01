@@ -98,32 +98,34 @@ manuf_hash_to_qstringlist(gpointer key, gpointer value, gpointer sl_ptr)
     hashmanuf_t *manuf = (hashmanuf_t*)value;
     guint eth_as_guint = GPOINTER_TO_UINT(key);
 
-    QString entry = QString("%1:%2:%3")
-            .arg((eth_as_guint >> 16 & 0xff), 2, 16, QChar('0'))
-            .arg((eth_as_guint >>  8 & 0xff), 2, 16, QChar('0'))
-            .arg((eth_as_guint & 0xff), 2, 16, QChar('0'));
+    if (get_hash_manuf_used(manuf)) {
+        QString entry = QString("%1:%2:%3")
+                .arg((eth_as_guint >> 16 & 0xff), 2, 16, QChar('0'))
+                .arg((eth_as_guint >>  8 & 0xff), 2, 16, QChar('0'))
+                .arg((eth_as_guint & 0xff), 2, 16, QChar('0'));
 
-    *values << (QStringList() << entry << QString(get_hash_manuf_resolved_name(manuf)));
+        *values << (QStringList() << entry << QString(get_hash_manuf_resolved_name(manuf)));
+    }
 }
 
 static void
 wka_hash_to_qstringlist(gpointer key, gpointer value, gpointer sl_ptr)
 {
     QList<QStringList> *values = (QList<QStringList> *) sl_ptr;
-    gchar *name = (gchar *)value;
+    hashwka_t *wkahash = (hashwka_t *)value;
     guint8 *eth_addr = (guint8*)key;
 
-    QString entry = QString("%1:%2:%3:%4:%5:%6")
-            .arg(eth_addr[0], 2, 16, QChar('0'))
-            .arg(eth_addr[1], 2, 16, QChar('0'))
-            .arg(eth_addr[2], 2, 16, QChar('0'))
-            .arg(eth_addr[3], 2, 16, QChar('0'))
-            .arg(eth_addr[4], 2, 16, QChar('0'))
-            .arg(eth_addr[5], 2, 16, QChar('0'));
+    if (get_hash_wka_used(wkahash)) {
+        QString entry = QString("%1:%2:%3:%4:%5:%6")
+                .arg(eth_addr[0], 2, 16, QChar('0'))
+                .arg(eth_addr[1], 2, 16, QChar('0'))
+                .arg(eth_addr[2], 2, 16, QChar('0'))
+                .arg(eth_addr[3], 2, 16, QChar('0'))
+                .arg(eth_addr[4], 2, 16, QChar('0'))
+                .arg(eth_addr[5], 2, 16, QChar('0'));
 
-    // We should filter on only those actually resolved, not display
-    // everything in wka
-    *values << (QStringList() << entry << QString(name));
+        *values << (QStringList() << entry << QString(get_hash_wka_resolved_name(wkahash)));
+    }
 }
 
 }
