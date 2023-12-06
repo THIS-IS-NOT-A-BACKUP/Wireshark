@@ -110,19 +110,11 @@ compare_plugins(gconstpointer a, gconstpointer b)
 
 static bool
 pass_plugin_compatibility(const char *name, plugin_type_e type,
-                            int abi_version,
-                            struct ws_module *module)
+                            int abi_version)
 {
     if (abi_version != plugins_abi_version(type)) {
         report_failure("The plugin '%s' has incompatible ABI, have version %d, expected %d",
                             name, abi_version, plugins_abi_version(type));
-        return false;
-    }
-
-    if (module->license != WS_PLUGIN_IS_GPLv2_OR_LATER &&
-                module->license != WS_PLUGIN_IS_GPLv2_COMPATIBLE) {
-        report_failure("The plugin '%s' is not GPLv2 compatible (invalid license 0x%x, with SPDX ID \"%s\")",
-                                name, module->license, module->spdx_id);
         return false;
     }
 
@@ -210,7 +202,7 @@ DIAG_ON_PEDANTIC
             continue;
         }
 
-        if (!pass_plugin_compatibility(name, type, abi_version, module)) {
+        if (!pass_plugin_compatibility(name, type, abi_version)) {
             g_module_close(handle);
             g_free(plugin_file);
             continue;
@@ -286,8 +278,8 @@ plugins_get_descriptions(plugin_description_callback callback, void *callback_da
 
     for (unsigned i = 0; i < plugins_array->len; i++) {
         plugin *plug = (plugin *)plugins_array->pdata[i];
-        callback(plug->name, plug->module->version, plug->module->flags,
-                    g_module_name(plug->handle), callback_data);
+        callback(plug->name, plug->module->version, plug->module->flags, plug->module->spdx_id,
+                    plug->module->blurb, plug->module->home_url, g_module_name(plug->handle), callback_data);
     }
 
     g_ptr_array_free(plugins_array, true);
@@ -295,7 +287,9 @@ plugins_get_descriptions(plugin_description_callback callback, void *callback_da
 
 static void
 print_plugin_description(const char *name, const char *version,
-                         uint32_t flags, const char *filename,
+                         uint32_t flags, const char *spdx_id _U_,
+                         const char *blurb _U_, const char *home_url _U_,
+                         const char *filename,
                          void *user_data _U_)
 {
     printf("%-16s\t%s\t%s\t%s\n", name, version, flags_to_str(flags), filename);
