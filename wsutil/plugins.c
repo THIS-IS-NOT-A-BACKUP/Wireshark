@@ -88,8 +88,8 @@ flags_to_str(uint32_t flags)
         return "epan";
     else if (flags & WS_PLUGIN_DESC_TAP_LISTENER)
         return "tap listener";
-    else if (flags & WS_PLUGIN_DESC_DFILTER)
-        return "dfilter";
+    else if (flags & WS_PLUGIN_DESC_DFUNCTION)
+        return "dfunction";
     else
         return "unknown";
 }
@@ -122,13 +122,6 @@ pass_plugin_compatibility(const char *name, plugin_type_e type,
     return true;
 }
 
-// GLib and Qt allow ".dylib" and ".so" on macOS. Should we do the same?
-#ifdef _WIN32
-#define MODULE_SUFFIX ".dll"
-#else
-#define MODULE_SUFFIX ".so"
-#endif
-
 static void
 scan_plugins_dir(GHashTable *plugins_module, const char *dirpath,
                         plugin_type_e type, plugin_scope_e scope)
@@ -156,20 +149,30 @@ scan_plugins_dir(GHashTable *plugins_module, const char *dirpath,
 
     while ((name = g_dir_read_name(dir)) != NULL) {
         /* Skip anything but files with .dll or .so. */
-        if (!g_str_has_suffix(name, MODULE_SUFFIX))
+        if (!g_str_has_suffix(name, WS_PLUGIN_MODULE_SUFFIX))
             continue;
+
+        plugin_file = g_build_filename(plugin_folder, name, (char *)NULL);
 
         /*
          * Check if the same name is already registered.
          */
         if (g_hash_table_lookup(plugins_module, name)) {
-            /* Yes, it is. */
-            report_warning("The plugin '%s' was found "
-                                "in multiple directories", name);
+            /* Yes, it is. In that case ignore it without
+             * requiring user intervention. There are situations
+             * where this is a legitimate case, like the user overwriting
+             * the system plugin with their own updated version. They may not have
+             * permissions to replace the system plugin. We still log a
+             * message to the console in case this catches someone by surprise,
+             * and while it is not ideal to have duplicate plugins (at a minimum
+             * it is inneficient), it doesn't raise to the level of warning,
+             * i.e something that requires corrective action. */
+            ws_message("The plugin name '%s' is already registered, ignoring the "
+                       "file \"%s\"", name, plugin_file);
+            g_free(plugin_file);
             continue;
         }
 
-        plugin_file = g_build_filename(plugin_folder, name, (char *)NULL);
         handle = g_module_open(plugin_file, G_MODULE_BIND_LOCAL);
         if (handle == NULL) {
             /* g_module_error() provides file path. */
@@ -233,26 +236,38 @@ DIAG_ON_PEDANTIC
 plugins_t *
 plugins_init(plugin_type_e type)
 {
-    if (!g_module_supported())
+    if (!plugins_supported())
         return NULL; /* nothing to do */
 
     GHashTable *plugins_module = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, free_plugin);
 
-    /*
-     * Scan the global plugin directory.
-     */
-    scan_plugins_dir(plugins_module, get_plugins_dir_with_version(), type, WS_PLUGIN_SCOPE_GLOBAL);
-
-    /*
-     * If the program wasn't started with special privileges,
-     * scan the users plugin directory.  (Even if we relinquish
+    /* Scan the users plugins directory first, giving it priority over the
+     * global plugins folder. Only scan it if we weren't started with special
+     * privileges.  (Even if we relinquish
      * them, plugins aren't safe unless we've *permanently*
      * relinquished them, and we can't do that in Wireshark as,
      * if we need privileges to start capturing, we'd need to
      * reclaim them before each time we start capturing.)
      */
+    const char *user_dir = get_plugins_pers_dir_with_version();
     if (!started_with_special_privs()) {
-        scan_plugins_dir(plugins_module, get_plugins_pers_dir_with_version(), type, WS_PLUGIN_SCOPE_USER);
+        scan_plugins_dir(plugins_module, user_dir, type, WS_PLUGIN_SCOPE_USER);
+    }
+    else {
+        ws_message("Skipping the personal plugin folder because we were "
+                   "started with special privileges");
+    }
+
+    /*
+     * Scan the global plugin directory. Make sure we don't scan the same directory
+     * twice (under some unusual install configurations).
+     */
+    const char *global_dir = get_plugins_dir_with_version();
+    if (strcmp(global_dir, user_dir) != 0) {
+        scan_plugins_dir(plugins_module, global_dir, type, WS_PLUGIN_SCOPE_GLOBAL);
+    }
+    else {
+        ws_warning("Skipping the global plugin folder because it is the same path as the personal folder");
     }
 
     plugins_module_list = g_slist_prepend(plugins_module_list, plugins_module);
@@ -327,7 +342,58 @@ plugins_cleanup(plugins_t *plugins)
 bool
 plugins_supported(void)
 {
+#ifndef HAVE_PLUGINS
+    return false;
+#else
     return g_module_supported();
+#endif
+}
+
+plugin_type_e
+plugins_check_file(const char *from_filename)
+{
+    char          *name;
+    GModule       *handle;
+    void          *symbol;
+    plugin_type_e  have_type;
+    int            abi_version;
+
+    handle = g_module_open(from_filename, G_MODULE_BIND_LAZY);
+    if (handle == NULL) {
+        /* g_module_error() provides file path. */
+        report_failure("Couldn't load file: %s", g_module_error());
+        return WS_PLUGIN_NONE;
+    }
+
+    /* Search for the entry point for the plugin registration function */
+    if (!g_module_symbol(handle, "wireshark_load_module", &symbol)) {
+        report_failure("The file '%s' has no \"wireshark_load_module\" symbol", from_filename);
+        return WS_PLUGIN_NONE;
+    }
+
+DIAG_OFF_PEDANTIC
+    /* Load module. */
+    have_type = ((ws_load_module_func)symbol)(&abi_version, NULL, NULL);
+DIAG_ON_PEDANTIC
+
+    name = g_path_get_basename(from_filename);
+
+    if (!pass_plugin_compatibility(name, have_type, abi_version)) {
+        g_module_close(handle);
+        g_free(name);
+        return WS_PLUGIN_NONE;
+    }
+
+    g_module_close(handle);
+    g_free(name);
+    return have_type;
+}
+
+char *
+plugins_pers_type_folder(plugin_type_e type)
+{
+    return g_build_filename(get_plugins_pers_dir_with_version(),
+                type_to_dir(type), (const char *)NULL);
 }
 
 int

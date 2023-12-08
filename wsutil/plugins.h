@@ -18,6 +18,7 @@ extern "C" {
 #endif /* __cplusplus */
 
 typedef enum {
+    WS_PLUGIN_NONE,
     WS_PLUGIN_EPAN,
     WS_PLUGIN_WIRETAP,
     WS_PLUGIN_CODEC
@@ -27,6 +28,7 @@ typedef enum {
     WS_PLUGIN_SCOPE_NONE,
     WS_PLUGIN_SCOPE_USER,
     WS_PLUGIN_SCOPE_GLOBAL,
+    WS_PLUGIN_SCOPE_CLI,
 } plugin_scope_e;
 
 #define WS_PLUGIN_SPDX_GPLv2    "GPL-2.0-or-later"
@@ -37,7 +39,14 @@ typedef enum {
 #define WS_PLUGIN_DESC_CODEC        (1UL << 2)
 #define WS_PLUGIN_DESC_EPAN         (1UL << 3)
 #define WS_PLUGIN_DESC_TAP_LISTENER (1UL << 4)
-#define WS_PLUGIN_DESC_DFILTER      (1UL << 5)
+#define WS_PLUGIN_DESC_DFUNCTION    (1UL << 5)
+
+// GLib and Qt allow ".dylib" and ".so" on macOS. Should we do the same?
+#ifdef _WIN32
+#define WS_PLUGIN_MODULE_SUFFIX ".dll"
+#else
+#define WS_PLUGIN_MODULE_SUFFIX ".so"
+#endif
 
 typedef void plugins_t;
 
@@ -72,6 +81,10 @@ WS_DLL_PUBLIC void plugins_cleanup(plugins_t *plugins);
 
 WS_DLL_PUBLIC bool plugins_supported(void);
 
+WS_DLL_PUBLIC plugin_type_e plugins_check_file(const char *path);
+
+WS_DLL_PUBLIC char *plugins_pers_type_folder(plugin_type_e type);
+
 WS_DLL_PUBLIC
 int plugins_abi_version(plugin_type_e type);
 
@@ -84,8 +97,8 @@ int plugins_abi_version(plugin_type_e type);
             *abi_version_ptr = WIRESHARK_ABI_VERSION_ ## type; \
         if (min_api_level_ptr) \
             *min_api_level_ptr = api_level_; \
-        ws_assert(module_ptr); \
-        *module_ptr = ptr_; \
+        if (module_ptr) \
+            *module_ptr = ptr_; \
         return WS_PLUGIN_ ## type; \
     }
 

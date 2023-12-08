@@ -100,16 +100,29 @@ QStringList AuthorListModel::headerColumns() const
     return QStringList() << tr("Name") << tr("Email");
 }
 
+#if defined(HAVE_PLUGINS) || defined(HAVE_LUA)
+static const char *
+scope_to_str(plugin_scope_e scope)
+{
+    switch (scope) {
+        case WS_PLUGIN_SCOPE_NONE :     return "";
+        case WS_PLUGIN_SCOPE_USER:      return "personal";
+        case WS_PLUGIN_SCOPE_GLOBAL:    return "global";
+        case WS_PLUGIN_SCOPE_CLI:       return "cli";
+    }
+    return "";
+}
+#endif // HAVE_PLUGINS || HAVE_LUA
+
 #ifdef HAVE_PLUGINS
 static void plugins_add_description(const char *name, const char *version,
                                     uint32_t flags, const char *spdx_id _U_,
                                     const char *blurb, const char *home_url,
-                                    const char *filename _U_, plugin_scope_e scope,
+                                    const char *filename, plugin_scope_e scope,
                                     void *user_data)
 {
     QList<QStringList> *plugin_data = (QList<QStringList> *)user_data;
     QStringList plugin_types;
-    const char *scope_str = "";
 
     if (flags & WS_PLUGIN_DESC_DISSECTOR)
         plugin_types << "dissector";
@@ -121,32 +134,43 @@ static void plugins_add_description(const char *name, const char *version,
         plugin_types << "epan";
     if (flags & WS_PLUGIN_DESC_TAP_LISTENER)
         plugin_types << "tap listener";
-    if (flags & WS_PLUGIN_DESC_DFILTER)
-        plugin_types << "dfilter";
+    if (flags & WS_PLUGIN_DESC_DFUNCTION)
+        plugin_types << "dfunction";
     if (plugin_types.empty())
         plugin_types << "unknown";
 
-    switch (scope) {
-        case WS_PLUGIN_SCOPE_NONE: scope_str = "";
-            break;
-        case WS_PLUGIN_SCOPE_USER: scope_str = "personal";
-            break;
-        case WS_PLUGIN_SCOPE_GLOBAL: scope_str = "global";
-            break;
-    }
-
     QStringList plugin_row = QStringList() << name << version << plugin_types.join(", ")
-                                << scope_str << blurb << home_url;
+                                << scope_to_str(scope) << blurb << filename << home_url;
     *plugin_data << plugin_row;
 }
 #endif
 
-static void other_plugins_add_description(const char *name, const char *version,
-                                    const char *types, const char *filename _U_,
+#ifdef HAVE_LUA
+// This exists only to add "lua script" to the type, otherwise we could use
+// plugins_add_description(). Eventually lua scripts
+// should support plugin functional flags too
+// and the "lua script" type can be dropped, or moved to
+// a new binary/lua/extcap type column (but not really).
+static void wslua_plugins_add_description(const char *name, const char *version,
+                                    uint32_t flags _U_, const char *spdx_id _U_,
+                                    const char *blurb, const char *home_url,
+                                    const char *filename, plugin_scope_e scope,
                                     void *user_data)
 {
     QList<QStringList> *plugin_data = (QList<QStringList> *)user_data;
-    QStringList plugin_row = QStringList() << name << version << types << "" << "" << "";
+    QStringList plugin_row = QStringList() << name << version << "lua script"
+                                << scope_to_str(scope) << blurb << filename << home_url;
+    *plugin_data << plugin_row;
+}
+#endif
+
+static void extcap_plugins_add_description(const char *name, const char *version,
+                                    const char *types, const char *filename,
+                                    void *user_data)
+{
+    QList<QStringList> *plugin_data = (QList<QStringList> *)user_data;
+    QStringList plugin_row = QStringList() << name << version << types
+                                << "" << "" << filename << "";
     *plugin_data << plugin_row;
 }
 
@@ -158,10 +182,10 @@ PluginListModel::PluginListModel(QObject *parent) : AStringListListModel(parent)
 #endif
 
 #ifdef HAVE_LUA
-    wslua_plugins_get_descriptions(other_plugins_add_description, &plugin_data);
+    wslua_plugins_get_descriptions(wslua_plugins_add_description, &plugin_data);
 #endif
 
-    extcap_get_descriptions(other_plugins_add_description, &plugin_data);
+    extcap_get_descriptions(extcap_plugins_add_description, &plugin_data);
 
     typeNames_ << QString("");
     foreach(QStringList row, plugin_data)
@@ -183,7 +207,7 @@ QStringList PluginListModel::typeNames() const
 QStringList PluginListModel::headerColumns() const
 {
     return QStringList() << tr("Name") << tr("Version") << tr("Type")
-                << tr("Scope") << tr("Description") << tr("Homepage");
+                << tr("Scope") << tr("Description") << tr("Path") << tr("Homepage");
 }
 
 ShortcutListModel::ShortcutListModel(QObject * parent):
