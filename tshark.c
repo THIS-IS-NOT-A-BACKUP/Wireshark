@@ -125,7 +125,7 @@
 #include "extcap.h"
 
 #ifdef HAVE_PLUGINS
-#include <wsutil/codecs.h>
+#include <wsutil/codecs_priv.h>
 #include <wsutil/plugins.h>
 #endif
 
@@ -797,13 +797,13 @@ about_folders(void)
     constpath = get_progfile_dir();
     printf("%-21s\t%s\n", "Program:", constpath);
 
-#ifdef HAVE_PLUGINS
-    /* pers plugins */
-    printf("%-21s\t%s\n", "Personal Plugins:", get_plugins_pers_dir_with_version());
+    if (plugins_supported()) {
+        /* pers plugins */
+        printf("%-21s\t%s\n", "Personal Plugins:", get_plugins_pers_dir());
 
-    /* global plugins */
-    printf("%-21s\t%s\n", "Global Plugins:", get_plugins_dir_with_version());
-#endif
+        /* global plugins */
+        printf("%-21s\t%s\n", "Global Plugins:", get_plugins_dir());
+    }
 
 #ifdef HAVE_LUA
     /* pers lua plugins */

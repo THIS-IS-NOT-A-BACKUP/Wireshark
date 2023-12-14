@@ -10,10 +10,10 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(ilbc 0 1 0 0)
+set_module_info(g729 0 1 0 0)
 
 set(CODEC_SRC
-	iLBCdecode.c
+	G729decode.c
 )
 
 set(PLUGIN_FILES
@@ -27,26 +27,25 @@ set_source_files_properties(
 	COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
 
-register_plugin_files(plugin.c
-	plugin_codec
-	"Internet Low Bitrate Codec (iLBC)"
+register_codec_files(plugin.c 1
+	"G.729"
 	${CODEC_SRC}
 )
 
-add_wireshark_plugin_library(ilbc codecs)
+add_wireshark_codec_plugin_library(g729)
 
-target_include_directories(ilbc PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
+target_include_directories(g729 PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
 
-target_link_libraries(ilbc wsutil ${ILBC_LIBRARIES})
+target_link_libraries(g729 wsutil ${BCG729_LIBRARIES})
 
-target_include_directories(ilbc SYSTEM PRIVATE ${ILBC_INCLUDE_DIRS})
+target_include_directories(g729 SYSTEM PRIVATE ${BCG729_INCLUDE_DIRS})
 
-install_plugin(ilbc codecs)
+install_plugin(g729 codecs)
 
 file(GLOB CODEC_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
 CHECKAPI(
 	NAME
-	  ilbc
+	  g729
 	SWITCHES
 	SOURCES
 	  ${CODEC_SRC}

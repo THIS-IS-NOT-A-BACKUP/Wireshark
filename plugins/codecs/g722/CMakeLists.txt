@@ -10,10 +10,10 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(g726 0 1 0 0)
+set_module_info(g722 0 1 0 0)
 
 set(CODEC_SRC
-	G726decode.c
+	G722decode.c
 )
 
 set(PLUGIN_FILES
@@ -27,26 +27,25 @@ set_source_files_properties(
 	COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
 
-register_plugin_files(plugin.c
-	plugin_codec
-	"G.726"
+register_codec_files(plugin.c 1
+	"G.722"
 	${CODEC_SRC}
 )
 
-add_wireshark_plugin_library(g726 codecs)
+add_wireshark_codec_plugin_library(g722)
 
-target_include_directories(g726 PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
+target_include_directories(g722 PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
 
-target_link_libraries(g726 wsutil ${SPANDSP_LIBRARIES})
+target_link_libraries(g722 wsutil ${SPANDSP_LIBRARIES})
 
-target_include_directories(g726 SYSTEM PRIVATE ${SPANDSP_INCLUDE_DIRS})
+target_include_directories(g722 SYSTEM PRIVATE ${SPANDSP_INCLUDE_DIRS})
 
-install_plugin(g726 codecs)
+install_plugin(g722 codecs)
 
 file(GLOB CODEC_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
 CHECKAPI(
 	NAME
-	  g726
+	  g722
 	SWITCHES
 	SOURCES
 	  ${CODEC_SRC}
