@@ -221,61 +221,52 @@ capture_interface_list(int *err, char **err_str, void (*update_cb)(void))
 }
 
 static if_capabilities_t *
-deserialize_if_capability(char* data, jsmntok_t *inf_tok,
-                          char **err_primary_msg, char **err_secondary_msg)
+deserialize_if_capability(char* data, jsmntok_t *inf_tok)
 {
     if_capabilities_t *caps;
     GList             *linktype_list = NULL, *timestamp_list = NULL;
+    GList             *linktype_rfmon_list = NULL;
     int                err, i;
-    char              *primary_msg, *secondary_msg, *val_s;
+    char              *val_s;
     double             val_d;
     jsmntok_t         *array_tok, *cur_tok;
 
+    /*
+     * Allocate the interface capabilities structure.
+     */
+    caps = (if_capabilities_t *)g_malloc0(sizeof *caps);
+
     if (inf_tok == NULL || !json_get_double(data, inf_tok, "status", &val_d)) {
         ws_info("Capture Interface Capabilities failed with invalid JSON.");
-        if (err_primary_msg) {
-            *err_primary_msg = g_strdup("Dumpcap returned bad JSON.");
-        }
-        return NULL;
+        caps->primary_msg = g_strdup("Dumpcap returned bad JSON");
+        return caps;
     }
 
     err = (int)val_d;
     if (err != 0) {
-        primary_msg = json_get_string(data, inf_tok, "primary_msg");
-        if (primary_msg) {
-            primary_msg = g_strdup(primary_msg);
+        caps->primary_msg = json_get_string(data, inf_tok, "primary_msg");
+        if (caps->primary_msg) {
+            caps->primary_msg = g_strdup(caps->primary_msg);
+        } else {
+            caps->primary_msg = g_strdup("Failed with no message");
         }
-        secondary_msg = json_get_string(data, inf_tok, "secondary_msg");
-        if (secondary_msg) {
-            secondary_msg = g_strdup(secondary_msg);
+        caps->secondary_msg = json_get_string(data, inf_tok, "secondary_msg");
+        if (caps->secondary_msg) {
+            caps->secondary_msg = g_strdup(caps->secondary_msg);
         }
         ws_info("Capture Interface Capabilities failed. Error %d, %s",
-              err, primary_msg ? primary_msg : "no message");
-        if (err_primary_msg)
-            *err_primary_msg = primary_msg;
-        else
-            g_free(primary_msg);
-        if (err_secondary_msg)
-            *err_secondary_msg = secondary_msg;
-        else
-            g_free(secondary_msg);
-        return NULL;
+              err, caps->primary_msg ? caps->primary_msg : "no message");
+        return caps;
     }
 
     bool rfmon;
     if (!json_get_boolean(data, inf_tok, "rfmon", &rfmon)) {
         ws_message("Capture Interface Capabilities returned bad information.");
         ws_message("Didn't return monitor-mode cap");
-        if (err_primary_msg) {
-            *err_primary_msg = ws_strdup_printf("Dumpcap didn't return monitor-mode capability");
-        }
-        return NULL;
+        caps->primary_msg = g_strdup("Dumpcap didn't return monitor-mode capability");
+        return caps;
     }
 
-    /*
-     * Allocate the interface capabilities structure.
-     */
-    caps = (if_capabilities_t *)g_malloc(sizeof *caps);
     caps->can_set_rfmon = rfmon;
 
     /*
@@ -284,11 +275,8 @@ deserialize_if_capability(char* data, jsmntok_t *inf_tok,
     array_tok = json_get_array(data, inf_tok, "data_link_types");
     if (!array_tok) {
         ws_info("Capture Interface Capabilities returned bad data_link information.");
-        if (err_primary_msg) {
-            *err_primary_msg = ws_strdup_printf("Dumpcap didn't return data link types capability");
-        }
-        g_free(caps);
-        return NULL;
+        caps->primary_msg = g_strdup("Dumpcap didn't return data link types capability");
+        return caps;
     }
     for (i = 0; i < json_get_array_len(array_tok); i++) {
         cur_tok = json_get_array_index(array_tok, i);
@@ -312,6 +300,36 @@ deserialize_if_capability(char* data, jsmntok_t *inf_tok,
         linktype_list = g_list_append(linktype_list, data_link_info);
     }
 
+    if (rfmon) {
+        array_tok = json_get_array(data, inf_tok, "data_link_types_rfmon");
+
+        if (!array_tok) {
+            ws_info("Capture Interface Capabilities returned bad data_link information for monitor mode.");
+            caps->primary_msg = g_strdup("Dumpcap claimed that interface supported monitor mode, but didn't return data link types when in monitor mode");
+            caps->can_set_rfmon = false;
+        } else for (i = 0; i < json_get_array_len(array_tok); i++) {
+            cur_tok = json_get_array_index(array_tok, i);
+
+            if (!json_get_double(data, cur_tok, "dlt", &val_d)) {
+                continue;
+            }
+
+            data_link_info_t *data_link_info;
+            data_link_info = g_new(data_link_info_t,1);
+
+            data_link_info->dlt = (int)val_d;
+            val_s = json_get_string(data, cur_tok, "name");
+            data_link_info->name = val_s ? g_strdup(val_s) : NULL;
+            val_s = json_get_string(data, cur_tok, "description");
+            if (!val_s || strcmp(val_s, "(not supported)") == 0) {
+                data_link_info->description = NULL;
+            } else {
+                data_link_info->description = g_strdup(val_s);
+            }
+            linktype_rfmon_list = g_list_append(linktype_rfmon_list, data_link_info);
+        }
+    }
+
     array_tok = json_get_array(data, inf_tok, "timestamp_types");
     if (array_tok) {
         for (i = 0; i < json_get_array_len(array_tok); i++) {
@@ -329,6 +347,8 @@ deserialize_if_capability(char* data, jsmntok_t *inf_tok,
     }
 
     caps->data_link_types = linktype_list;
+    /* Should be NULL if rfmon unsupported. */
+    caps->data_link_types_rfmon = linktype_rfmon_list;
     /* Might be NULL. Not all systems report timestamp types */
     caps->timestamp_types = timestamp_list;
 
@@ -348,12 +368,14 @@ capture_get_if_capabilities(const char *ifname, bool monitor_mode,
 
     /* see if the interface is from extcap */
     caps = extcap_get_if_dlts(ifname, err_primary_msg);
-    if (caps != NULL)
+    if (caps != NULL) {
+        /* return if the extcap interface generated an error */
+        if (caps->primary_msg) {
+            free_if_capabilities(caps);
+            caps = NULL;
+        }
         return caps;
-
-    /* return if the extcap interface generated an error */
-    if (err_primary_msg != NULL && *err_primary_msg != NULL)
-        return NULL;
+    }
 
     /* Try to get our interface list */
     err = sync_if_capabilities_open(ifname, monitor_mode, auth_string, &data,
@@ -399,7 +421,19 @@ capture_get_if_capabilities(const char *ifname, bool monitor_mode,
         char *ifname2 = g_strndup(&data[inf_tok->start], inf_tok->end - inf_tok->start);
         if (json_decode_string_inplace(ifname2) && g_strcmp0(ifname2, ifname) == 0) {
             inf_tok++;
-            caps = deserialize_if_capability(data, inf_tok, err_primary_msg, err_secondary_msg);
+            caps = deserialize_if_capability(data, inf_tok);
+            if (caps->primary_msg) {
+                if (err_primary_msg) {
+                    *err_primary_msg = caps->primary_msg;
+                    caps->primary_msg = NULL;
+                }
+                if (caps->secondary_msg && err_secondary_msg) {
+                    *err_secondary_msg = caps->secondary_msg;
+                    caps->secondary_msg = NULL;
+                }
+                free_if_capabilities(caps);
+                caps = NULL;
+            }
         } else if (err_primary_msg) {
             *err_primary_msg = g_strdup("Dumpcap returned bad JSON.");
         }
@@ -440,9 +474,9 @@ capture_get_if_list_capabilities(GList *if_cap_queries,
 
         query = (if_cap_query_t *)li->data;
         /* see if the interface is from extcap */
-        caps = extcap_get_if_dlts(query->name, err_primary_msg);
+        caps = extcap_get_if_dlts(query->name, NULL);
         /* if the extcap interface generated an error, it was from extcap */
-        if (caps != NULL || (err_primary_msg != NULL && *err_primary_msg != NULL)) {
+        if (caps != NULL) {
             g_hash_table_replace(caps_hash, g_strdup(query->name), caps);
         } else {
             local_queries = g_list_prepend(local_queries, query);
@@ -498,7 +532,7 @@ capture_get_if_list_capabilities(GList *if_cap_queries,
                 continue;
             }
             inf_tok++;
-            caps = deserialize_if_capability(data, inf_tok, err_primary_msg, err_secondary_msg);
+            caps = deserialize_if_capability(data, inf_tok);
             g_hash_table_replace(caps_hash, ifname, caps);
         }
     }
