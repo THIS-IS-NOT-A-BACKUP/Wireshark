@@ -95,12 +95,14 @@
 #include "wiretap/pcapng.h"
 
 /*
- * Define these for extra logging messages at INFO and below. Note
- * that when dumpcap is spawned as a child process, logs are sent
- * to the parent via the sync pipe.
+ * Define these for extra logging. Note that when dumpcap is spawned as
+ * a child process, logs are sent to the parent via the sync pipe.
+ * The parent will pass along the Capchild domain log level settings,
+ * so "--log-debug Capchild" or "--log-level debug" can be used to get
+ * debugging from dumpcap sent to the parent.
  */
-/**#define DEBUG_DUMPCAP**/       /* Logs INFO and below messages normally */
-/**#define DEBUG_CHILD_DUMPCAP**/ /* Writes INFO and below logs to file */
+//#define DEBUG_DUMPCAP       /* Waits for keypress on quitting on Windows */
+//#define DEBUG_CHILD_DUMPCAP /* Writes logs to file */
 
 #ifdef _WIN32
 #include "wsutil/win32-utils.h"
@@ -113,9 +115,7 @@
 FILE *debug_log;   /* for logging debug messages to  */
                    /*  a file if DEBUG_CHILD_DUMPCAP */
                    /*  is defined                    */
-#ifdef DEBUG_DUMPCAP
 #include <stdarg.h> /* va_copy */
-#endif
 #endif
 
 static GAsyncQueue *pcap_queue;
@@ -4797,15 +4797,11 @@ capture_loop_write_pcapng_cb(capture_src *pcap_src, const pcapng_block_header_t 
             pcap_src->dropped++;
         } else if (bh->block_type == BLOCK_TYPE_EPB || bh->block_type == BLOCK_TYPE_SPB || bh->block_type == BLOCK_TYPE_SYSTEMD_JOURNAL_EXPORT || bh->block_type == BLOCK_TYPE_SYSDIG_EVENT || bh->block_type == BLOCK_TYPE_SYSDIG_EVENT_V2 || bh->block_type == BLOCK_TYPE_SYSDIG_EVENT_V2_LARGE) {
             /* Count packets for block types that should be dissected, i.e. ones that show up in the packet list. */
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-            ws_info("Wrote a pcapng block type %u of length %d captured on interface %u.",
+            ws_debug("Wrote a pcapng block type %u of length %d captured on interface %u.",
                    bh->block_type, bh->block_total_length, pcap_src->interface_id);
-#endif
             capture_loop_wrote_one_packet(pcap_src);
         } else if (bh->block_type == BLOCK_TYPE_SHB && report_capture_filename) {
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-            ws_info("Sending SP_FILE on first SHB");
-#endif
+            ws_debug("Sending SP_FILE on first SHB");
             /* SHB is now ready for capture parent to read on SP_FILE message */
             sync_pipe_write_string_msg(sync_pipe_fd, SP_FILE, report_capture_filename);
             report_capture_filename = NULL;
@@ -4859,10 +4855,8 @@ capture_loop_write_packet_cb(u_char *pcap_src_p, const struct pcap_pkthdr *phdr,
             global_ld.err = err;
             pcap_src->dropped++;
         } else {
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-            ws_info("Wrote a pcap packet of length %d captured on interface %u.",
+            ws_debug("Wrote a pcap packet of length %d captured on interface %u.",
                    phdr->caplen, pcap_src->interface_id);
-#endif
             capture_loop_wrote_one_packet(pcap_src);
         }
     }
@@ -5172,17 +5166,14 @@ main(int argc, char *argv[])
     /* Early logging command-line initialization. */
     ws_log_parse_args(&argc, argv, vcmdarg_err, 1);
 
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-    /* sync_pipe_start does not pass along log level information from
-     * the parent (XXX: it probably should.) Assume that if we're
-     * specially compiled with dumpcap debugging then we want it on.
+#if DEBUG_CHILD_DUMPCAP
+    /* Assume that if we're specially compiled with dumpcap debugging
+     * then we want maximum debugging.
      */
     if (capture_child) {
-        ws_log_set_level(LOG_LEVEL_DEBUG);
+        ws_log_set_level(LOG_LEVEL_NOISY);
     }
-#endif
 
-#ifdef DEBUG_CHILD_DUMPCAP
     if ((debug_log = ws_fopen("dumpcap_debug_log.tmp","w")) == NULL) {
         fprintf (stderr, "Unable to open debug log file .\n");
         exit (1);
@@ -5980,18 +5971,36 @@ dumpcap_log_writer(const char *domain, enum ws_log_level level,
                                     const char *user_format, va_list user_ap,
                                     void *user_data _U_)
 {
-    /* DEBUG & INFO msgs (if we're debugging today)                 */
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-    if (level <= LOG_LEVEL_INFO && ws_log_msg_is_active(domain, level)) {
-#ifdef DEBUG_DUMPCAP
+    if (ws_log_msg_is_active(domain, level)) {
+        /* log messages go to stderr or    */
+        /* to parent especially formatted if dumpcap running as child. */
 #ifdef DEBUG_CHILD_DUMPCAP
         va_list user_ap_copy;
         va_copy(user_ap_copy, user_ap);
 #endif
         if (capture_child) {
-            gchar *msg = ws_strdup_vprintf(user_format, user_ap);
-            sync_pipe_write_errmsgs_to_parent(sync_pipe_fd, msg, "");
-            g_free(msg);
+            /* Format the log mesage as the numeric level, followed
+             * by a colon and then a string matching the standard log
+             * string. In the future perhaps we serialize file, line,
+             * and func (which can be NULL) instead.
+             */
+            GString *msg = g_string_new(NULL);
+            g_string_append_printf(msg, "%u:", level);
+            if (file != NULL) {
+                g_string_append_printf(msg, "%s", file);
+                if (line >= 0) {
+                    g_string_append_printf(msg, ":%ld", line);
+                }
+            }
+            g_string_append(msg, " --");
+            if (func != NULL) {
+                g_string_append_printf(msg, " %s():", func);
+            }
+            g_string_append_c(msg, ' ');
+            g_string_append_vprintf(msg, user_format, user_ap);
+
+            sync_pipe_write_string_msg(sync_pipe_fd, SP_LOG_MSG, msg->str);
+            g_string_free(msg, TRUE);
         } else {
             ws_log_console_writer(domain, level, file, line, func, mft, user_format, user_ap);
         }
@@ -5999,21 +6008,6 @@ dumpcap_log_writer(const char *domain, enum ws_log_level level,
         ws_log_file_writer(debug_log, domain, level, file, line, func, mft, user_format, user_ap_copy);
         va_end(user_ap_copy);
 #endif
-#elif defined(DEBUG_CHILD_DUMPCAP)
-        ws_log_file_writer(debug_log, domain, level, file, line, func, mft, user_format, user_ap);
-#endif
-        return;
-    }
-#endif
-
-    /* ERROR, CRITICAL, WARNING, MESSAGE messages goto stderr or    */
-    /*  to parent especially formatted if dumpcap running as child. */
-    if (capture_child) {
-        gchar *msg = ws_strdup_vprintf(user_format, user_ap);
-        sync_pipe_write_errmsgs_to_parent(sync_pipe_fd, msg, "");
-        g_free(msg);
-    } else if(ws_log_msg_is_active(domain, level)) {
-        ws_log_console_writer(domain, level, file, line, func, mft, user_format, user_ap);
     }
 }
 
@@ -6045,9 +6039,7 @@ report_new_capture_file(const char *filename)
         ws_debug("File: %s", filename);
         if (global_ld.pcapng_passthrough) {
             /* Save filename for sending SP_FILE to capture parent after SHB is passed-through */
-#if defined(DEBUG_DUMPCAP) || defined(DEBUG_CHILD_DUMPCAP)
-            ws_info("Delaying SP_FILE until first SHB");
-#endif
+            ws_debug("Delaying SP_FILE until first SHB");
             report_capture_filename = filename;
         } else {
             sync_pipe_write_string_msg(sync_pipe_fd, SP_FILE, filename);
