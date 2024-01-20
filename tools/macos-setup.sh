@@ -70,12 +70,6 @@ XZ_VERSION=5.2.5
 LZIP_VERSION=1.21
 
 #
-# The version of libPCRE on Catalina is insufficient to build glib due to
-# missing UTF-8 support.
-#
-PCRE_VERSION=8.45
-
-#
 # CMake is required to do the build - and to build some of the
 # dependencies.
 #
@@ -207,7 +201,7 @@ else
     #
     # No - install a Python package.
     #
-    PYTHON3_VERSION=3.9.5
+    PYTHON3_VERSION=3.12.1
 fi
 BROTLI_VERSION=1.0.9
 # minizip
@@ -342,24 +336,9 @@ uninstall_lzip() {
     fi
 }
 
-install_pcre() {
-    if [ "$PCRE_VERSION" -a ! -f pcre-$PCRE_VERSION-done ] ; then
-        echo "Downloading, building, and installing pcre:"
-        [ -f pcre-$PCRE_VERSION.tar.bz2 ] || curl -L -O https://sourceforge.net/projects/pcre/files/pcre/$PCRE_VERSION/pcre-$PCRE_VERSION.tar.bz2 || exit 1
-        $no_build && echo "Skipping installation" && return
-        bzcat pcre-$PCRE_VERSION.tar.bz2 | tar xf - || exit 1
-        cd pcre-$PCRE_VERSION
-        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --enable-unicode-properties || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
-        $DO_MAKE_INSTALL || exit 1
-        cd ..
-        touch pcre-$PCRE_VERSION-done
-    fi
-}
-
 uninstall_pcre() {
     if [ -n "$installed_pcre_version" ] ; then
-        echo "Uninstalling pcre:"
+        echo "Uninstalling leftover pcre:"
         cd pcre-$installed_pcre_version
         $DO_MAKE_UNINSTALL || exit 1
         make distclean || exit 1
@@ -2471,20 +2450,10 @@ uninstall_opus() {
 }
 
 install_python3() {
-    # The macos11 installer can be deployed to older versions, down to
-    # 10.9 (Mavericks), but is still considered experimental so continue
-    # to use the 64-bit installer (10.9) on earlier releases for now.
-    local macver=x10.9
-    if [[ $DARWIN_MAJOR_VERSION -gt 19 ]]; then
-        # The macos11 installer is required for Arm-based Macs, which require
-        # macOS 11 Big Sur. Note that the package name is "11.0" (no x) for
-        # 3.9.1 but simply "11" for 3.9.2 (and later)
-        if [[ $PYTHON3_VERSION = 3.9.1 ]]; then
-            macver=11.0
-        else
-            macver=11
-        fi
-    fi
+    # The macos11 universal2 installer can be deployed to older versions,
+    # down to 10.9 (Mavericks). The 10.9 installer was deprecated in 3.9.8
+    # and stopped being released after 3.9.13
+    local macver=11
     if [ "$PYTHON3_VERSION" -a ! -f python3-$PYTHON3_VERSION-done ] ; then
         echo "Downloading and installing python3:"
         [ -f python-$PYTHON3_VERSION-macos$macver.pkg ] || curl -L -O https://www.python.org/ftp/python/$PYTHON3_VERSION/python-$PYTHON3_VERSION-macos$macver.pkg || exit 1
@@ -3110,14 +3079,9 @@ install_all() {
         uninstall_autoconf -r
     fi
 
-    if [ -n "$installed_pcre_version" -a \
-              "$installed_pcre_version" != "$PCRE_VERSION" ] ; then
-        echo "Installed pcre version is $installed_pcre_version"
-        if [ -z "$PCRE_VERSION" ] ; then
-            echo "pcre is not requested"
-        else
-            echo "Requested pcre version is $PCRE_VERSION"
-        fi
+    if [ -n "$installed_pcre_version" ] ; then
+        echo "Installed pcre1 version is $installed_pcre_version"
+        echo "(We no longer build with pcre1)"
         uninstall_pcre -r
     fi
 
@@ -3198,8 +3162,6 @@ install_all() {
     install_xz
 
     install_lzip
-
-    install_pcre
 
     install_autoconf
 
