@@ -230,8 +230,8 @@ install_curl() {
         $no_build && echo "Skipping installation" && return
         bzcat curl-$CURL_VERSION.tar.bz2 | tar xf - || exit 1
         cd curl-$CURL_VERSION
-        ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch curl-$CURL_VERSION-done
@@ -271,8 +271,9 @@ install_xz() {
         # Wireshark uses libxml2, so we need to build this with
         # all the minimum-deployment-version and SDK stuff.
         #
-        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch xz-$XZ_VERSION-done
@@ -307,8 +308,8 @@ install_lzip() {
         $no_build && echo "Skipping installation" && return
         gzcat lzip-$LZIP_VERSION.tar.gz | tar xf - || exit 1
         cd lzip-$LZIP_VERSION
-        ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch lzip-$LZIP_VERSION-done
@@ -368,9 +369,8 @@ install_pcre2() {
         cd build_dir
         # https://github.com/Homebrew/homebrew-core/blob/master/Formula/pcre2.rb
         # https://github.com/microsoft/vcpkg/blob/master/ports/pcre2/portfile.cmake
-        MACOSX_DEPLOYMENT_TARGET=$min_osx_target SDKROOT="$SDKPATH" \
-            $DO_CMAKE -DBUILD_STATIC_LIBS=OFF -DBUILD_SHARED_LIBS=ON -DPCRE2_SUPPORT_JIT=ON -DPCRE2_SUPPORT_UNICODE=ON .. || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        "${DO_CMAKE[@]}" -DBUILD_STATIC_LIBS=OFF -DBUILD_SHARED_LIBS=ON -DPCRE2_SUPPORT_JIT=ON -DPCRE2_SUPPORT_UNICODE=ON .. || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../..
         touch "pcre2-$PCRE2_VERSION-done"
@@ -403,8 +403,8 @@ install_autoconf() {
         $no_build && echo "Skipping installation" && return
         xzcat autoconf-$AUTOCONF_VERSION.tar.xz | tar xf - || exit 1
         cd autoconf-$AUTOCONF_VERSION
-        ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch autoconf-$AUTOCONF_VERSION-done
@@ -445,8 +445,8 @@ install_automake() {
         $no_build && echo "Skipping installation" && return
         xzcat automake-$AUTOMAKE_VERSION.tar.xz | tar xf - || exit 1
         cd automake-$AUTOMAKE_VERSION
-        ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch automake-$AUTOMAKE_VERSION-done
@@ -486,8 +486,8 @@ install_libtool() {
         $no_build && echo "Skipping installation" && return
         xzcat libtool-$LIBTOOL_VERSION.tar.xz | tar xf - || exit 1
         cd libtool-$LIBTOOL_VERSION
-        ./configure --program-prefix=g || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" --program-prefix=g || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
        touch libtool-$LIBTOOL_VERSION-done
@@ -498,8 +498,8 @@ uninstall_libtool() {
     if [ -n "$installed_libtool_version" ] ; then
         echo "Uninstalling GNU libtool:"
         cd libtool-$installed_libtool_version
-        $DO_MV /usr/local/bin/glibtool /usr/local/bin/libtool
-        $DO_MV /usr/local/bin/glibtoolize /usr/local/bin/libtoolize
+        $DO_MV "$installation_prefix/bin/glibtool" "$installation_prefix/bin/libtool"
+        $DO_MV "$installation_prefix/glibtoolize" "$installation_prefix/bin/libtoolize"
         $DO_MAKE_UNINSTALL || exit 1
         make distclean || exit 1
         cd ..
@@ -522,12 +522,12 @@ install_ninja() {
         echo "Downloading and installing Ninja:"
         #
         # Download the zipball, unpack it, and move the binary to
-        # /usr/local/bin.
+        # $installation_prefix/bin.
         #
         [ -f ninja-mac-v$NINJA_VERSION.zip ] || curl -L -o ninja-mac-v$NINJA_VERSION.zip https://github.com/ninja-build/ninja/releases/download/v$NINJA_VERSION/ninja-mac.zip || exit 1
         $no_build && echo "Skipping installation" && return
         unzip ninja-mac-v$NINJA_VERSION.zip
-        sudo mv ninja /usr/local/bin
+        sudo mv ninja "$installation_prefix/bin"
         touch ninja-$NINJA_VERSION-done
     fi
 }
@@ -535,7 +535,7 @@ install_ninja() {
 uninstall_ninja() {
     if [ -n "$installed_ninja_version" ]; then
         echo "Uninstalling Ninja:"
-        sudo rm /usr/local/bin/ninja
+        $DO_RM "$installation_prefix/bin/ninja"
         rm ninja-$installed_ninja_version-done
         if [ "$#" -eq 1 -a "$1" = "-r" ] ; then
             rm -f ninja-mac-v$installed_ninja_version.zip
@@ -548,6 +548,7 @@ uninstall_ninja() {
 install_asciidoctor() {
     if [ ! -f asciidoctor-${ASCIIDOCTOR_VERSION}-done ]; then
         echo "Downloading and installing Asciidoctor:"
+        $no_build && echo "Skipping installation" && return
         sudo gem install -V asciidoctor --version "=${ASCIIDOCTOR_VERSION}"
         touch asciidoctor-${ASCIIDOCTOR_VERSION}-done
     fi
@@ -576,6 +577,7 @@ install_asciidoctorpdf() {
         ## record them for uninstallation
         ## ttfunk, pdf-core, prawn, prawn-table, Ascii85, ruby-rc4, hashery, afm, pdf-reader, prawn-templates, public_suffix, addressable, css_parser, prawn-svg, prawn-icon, safe_yaml, thread_safe, polyglot, treetop, asciidoctor-pdf
         echo "Downloading and installing Asciidoctor-pdf:"
+        $no_build && echo "Skipping installation" && return
         sudo gem install -V asciidoctor-pdf --version "=${ASCIIDOCTORPDF_VERSION}"
         touch asciidoctorpdf-${ASCIIDOCTORPDF_VERSION}-done
     fi
@@ -602,8 +604,9 @@ uninstall_asciidoctorpdf() {
 install_cmake() {
     if [ ! -f cmake-$CMAKE_VERSION-done ]; then
         echo "Downloading and installing CMake:"
-        CMAKE_MAJOR_VERSION="`expr $CMAKE_VERSION : '\([0-9][0-9]*\).*'`"
-        CMAKE_MINOR_VERSION="`expr $CMAKE_VERSION : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
+        $no_build && echo "Skipping installation" && return
+        CMAKE_MAJOR_VERSION="$( expr "$CMAKE_VERSION" : '\([0-9][0-9]*\).*' )"
+        CMAKE_MINOR_VERSION="$( expr "$CMAKE_VERSION" : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
         CMAKE_MAJOR_MINOR_VERSION=$CMAKE_MAJOR_VERSION.$CMAKE_MINOR_VERSION
 
         #
@@ -644,11 +647,11 @@ install_cmake() {
             sudo ditto /Volumes/cmake-$CMAKE_VERSION-$type/CMake.app /Applications/CMake.app || exit 1
 
             #
-            # Plant the appropriate symbolic links in /usr/local/bin.
+            # Plant the appropriate symbolic links in $installation_prefix/bin.
             # It's a drag-install, so there's no installer to make them,
             # and the CMake code to put them in place is lame, as
             #
-            #    1) it defaults to /usr/bin, not /usr/local/bin;
+            #    1) it defaults to /usr/bin, not $installation_prefix/bin;
             #    2) it doesn't request the necessary root privileges;
             #    3) it can't be run from the command line;
             #
@@ -656,7 +659,7 @@ install_cmake() {
             #
             for i in ccmake cmake cmake-gui cmakexbuild cpack ctest
             do
-                sudo ln -s /Applications/CMake.app/Contents/bin/$i /usr/local/bin/$i
+                sudo ln -s /Applications/CMake.app/Contents/bin/$i "$installation_prefix/bin/$i"
             done
             sudo hdiutil detach /Volumes/cmake-$CMAKE_VERSION-$type
             ;;
@@ -671,7 +674,7 @@ install_cmake() {
 uninstall_cmake() {
     if [ -n "$installed_cmake_version" ]; then
         echo "Uninstalling CMake:"
-        installed_cmake_major_version="`expr $installed_cmake_version : '\([0-9][0-9]*\).*'`"
+        installed_cmake_major_version="$( expr "$installed_cmake_version" : '\([0-9][0-9]*\).*' )"
         case "$installed_cmake_major_version" in
 
         0|1|2)
@@ -682,7 +685,7 @@ uninstall_cmake() {
             sudo rm -rf /Applications/CMake.app
             for i in ccmake cmake cmake-gui cmakexbuild cpack ctest
             do
-                sudo rm -f /usr/local/bin/$i
+                sudo rm -f "$installation_prefix/bin/$i"
             done
             rm cmake-$installed_cmake_version-done
             ;;
@@ -711,6 +714,7 @@ install_meson() {
         # We have it.
         :
     else
+        $no_build && echo "Skipping installation" && return
         sudo pip3 install meson
         touch meson-done
     fi
@@ -730,7 +734,7 @@ install_pytest() {
     #
     # Install pytest with pip3 if we don't have it already.
     #
-    if python3 -m pytest --version >/dev/null 2>&1
+    if python3 -m pytest --version &> /dev/null || pytest --version &> /dev/null
     then
         # We have it.
         :
@@ -859,8 +863,9 @@ install_gettext() {
         else
             workaround_arg=
         fi
-        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure $workaround_arg || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" $workaround_arg || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch gettext-$GETTEXT_VERSION-done
@@ -900,8 +905,8 @@ install_pkg_config() {
         $no_build && echo "Skipping installation" && return
         gzcat pkg-config-$PKG_CONFIG_VERSION.tar.gz | tar xf - || exit 1
         cd pkg-config-$PKG_CONFIG_VERSION
-        ./configure --with-internal-glib || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        ./configure "${CONFIGURE_OPTS[@]}" --with-internal-glib || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch pkg-config-$PKG_CONFIG_VERSION-done
@@ -932,7 +937,7 @@ uninstall_pkg_config() {
 install_glib() {
     if [ ! -f glib-$GLIB_VERSION-done ] ; then
         echo "Downloading, building, and installing GLib:"
-        glib_dir=`expr $GLIB_VERSION : '\([0-9][0-9]*\.[0-9][0-9]*\).*'`
+        glib_dir=$( expr "$GLIB_VERSION" : '\([0-9][0-9]*\.[0-9][0-9]*\).*' )
         #
         # Starting with GLib 2.28.8, xz-compressed tarballs are available.
         #
@@ -951,7 +956,7 @@ install_glib() {
         #
         # We need this for several things we do later.
         #
-        includedir=`SDKROOT="$SDKPATH" xcrun --show-sdk-path 2>/dev/null`/usr/include
+        includedir=$( SDKROOT="$SDKPATH" xcrun --show-sdk-path 2>/dev/null )/usr/include
         #
         # GLib's configuration procedure, whether autotools-based or
         # Meson-based, really likes to use pkg-config to find libraries,
@@ -965,7 +970,7 @@ install_glib() {
         #
         # So, if we have a system-provided libffi, but pkg-config
         # doesn't find libffi, we construct a .pc file for that libffi,
-        # and install it in /usr/local/lib/pkgconfig.
+        # and install it in $installation_prefix/lib/pkgconfig.
         #
         # First, check whether pkg-config finds libffi but thinks its
         # header files are in a non-existent directory.  That probaby
@@ -980,17 +985,17 @@ install_glib() {
         if pkg-config libffi ; then
             # We have a .pc file for libffi; what does it say the
             # include directory is?
-            incldir=`pkg-config --variable=includedir libffi`
+            incldir=$( pkg-config --variable=includedir libffi )
             if [ -n "$incldir" -a ! -d "$incldir" ] ; then
                 # Bogus - remove it, assuming
-                $DO_RM /usr/local/lib/pkgconfig/libffi.pc
+                $DO_RM "$installation_prefix/lib/pkgconfig/libffi.pc"
             fi
         fi
         if pkg-config libffi ; then
             # It found libffi; no need to install a .pc file, and we
             # don't want to overwrite what's there already.
             :
-        elif [ ! -e $includedir/ffi/ffi.h ] ; then
+        elif [ ! -e "$includedir"/ffi/ffi.h ] ; then
             # We don't appear to have libffi as part of the system, so
             # let the configuration process figure out what to do.
             #
@@ -1026,7 +1031,7 @@ install_glib() {
             # to the standard output, but running the last process in
             # the pipeline as root won't allow the shell that's
             # *running* it to open the .pc file if we don't have write
-            # permission on /usr/local/lib/pkgconfig, so we need a
+            # permission on $installation_prefix/lib/pkgconfig, so we need a
             # program that creates a file and then reads from the
             # standard input and writes to that file.  UN*Xes have a
             # program that does that; it's called "tee". :-)
@@ -1034,7 +1039,7 @@ install_glib() {
             # However, it *also* writes the file to the standard output,
             # so we redirect that to /dev/null when we run it.
             #
-            cat <<"EOF" | sed "s;@INCLUDEDIR@;$includedir;" | $DO_TEE_TO_PC_FILE /usr/local/lib/pkgconfig/libffi.pc >/dev/null
+            cat <<"EOF" | sed "s;@INCLUDEDIR@;$includedir;" | $DO_TEE_TO_PC_FILE "$installation_prefix/lib/pkgconfig/libffi.pc" >/dev/null
 prefix=/usr
 libdir=${prefix}/lib
 includedir=@INCLUDEDIR@
@@ -1086,11 +1091,13 @@ EOF
                 if grep -qs '#define.*MACOSX' $includedir/ffi/fficonfig.h
                 then
                     # It's defined, nothing to do
-                    CFLAGS="$CFLAGS -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
+                    CFLAGS="$CFLAGS -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+                        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
                 else
-                    CFLAGS="$CFLAGS -DMACOSX -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -DMACOSX -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
+                    CFLAGS="$CFLAGS -DMACOSX -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -DMACOSX -Wno-format-nonliteral $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+                        ./configure "${CONFIGURE_OPTS[@]}" || exit 1
                 fi
-                make $MAKE_BUILD_OPTS || exit 1
+                make "${MAKE_BUILD_OPTS[@]}" || exit 1
                 $DO_MAKE_INSTALL || exit 1
                 ;;
 
@@ -1104,8 +1111,9 @@ EOF
                 #
                 #    https://gitlab.gnome.org/GNOME/glib/-/issues/2902
                 #
-                CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" $MESON -Dtests=false _build || exit 1
-                ninja $MAKE_BUILD_OPTS -C _build || exit 1
+                CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+                    $MESON -Dprefix="$installation_prefix" -Dtests=false _build || exit 1
+                ninja -C _build || exit 1
                 $DO_NINJA_INSTALL || exit 1
                 ;;
             *)
@@ -1122,12 +1130,12 @@ EOF
 uninstall_glib() {
     if [ -n "$installed_glib_version" ] ; then
         echo "Uninstalling GLib:"
-        cd glib-$installed_glib_version
-        installed_glib_major_version="`expr $installed_glib_version : '\([0-9][0-9]*\).*'`"
-        installed_glib_minor_version="`expr $installed_glib_version : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
-        installed_glib_dotdot_version="`expr $installed_glib_version : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
-        installed_glib_major_minor_version=$installed_glib_major_version.$installed_glib_minor_version
-        installed_glib_major_minor_dotdot_version=$installed_glib_major_version.$installed_glib_minor_version.$installed_glib_dotdot_version
+        cd "glib-$installed_glib_version" || exit 1
+        installed_glib_major_version="$( expr "$installed_glib_version" : '\([0-9][0-9]*\).*' )"
+        installed_glib_minor_version="$( expr "$installed_glib_version" : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
+        # installed_glib_dotdot_version="$( expr $installed_glib_version : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
+        # installed_glib_major_minor_version=$installed_glib_major_version.$installed_glib_minor_version
+        # installed_glib_major_minor_dotdot_version=$installed_glib_major_version.$installed_glib_minor_version.$installed_glib_dotdot_version
         #
         # GLib 2.59.1 and later use Meson+Ninja as the build system.
         #
@@ -1269,9 +1277,9 @@ uninstall_qt() {
             # 5.3 - 5.8:  qt-opensource-mac-x64-clang-{version}.dmg
             # 5.9 - 5.14: qt-opensource-mac-x64-{version}.dmg
             #
-            installed_qt_major_version="`expr $installed_qt_version : '\([0-9][0-9]*\).*'`"
-            installed_qt_minor_version="`expr $installed_qt_version : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
-            installed_qt_dotdot_version="`expr $installed_qt_version : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
+            installed_qt_major_version="$( expr "$installed_qt_version" : '\([0-9][0-9]*\).*' )"
+            installed_qt_minor_version="$( expr "$installed_qt_version" : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
+            # installed_qt_dotdot_version="$( expr "$installed_qt_version" : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
             case $installed_qt_major_version in
 
             1|2|3|4)
@@ -1304,8 +1312,8 @@ install_libsmi() {
         $no_build && echo "Skipping installation" && return
         gzcat libsmi-$LIBSMI_VERSION.tar.gz | tar xf - || exit 1
         cd libsmi-$LIBSMI_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch libsmi-$LIBSMI_VERSION-done
@@ -1340,8 +1348,8 @@ install_libgpg_error() {
         $no_build && echo "Skipping installation" && return
         bzcat libgpg-error-$LIBGPG_ERROR_VERSION.tar.bz2 | tar xf - || exit 1
         cd libgpg-error-$LIBGPG_ERROR_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch libgpg-error-$LIBGPG_ERROR_VERSION-done
@@ -1404,8 +1412,9 @@ install_libgcrypt() {
         # *REQUIRES* Linux getrandom(), which we don't have.  (This should
         # not matter, as we only use this for decryption, as far as I know.)
         #
-        CFLAGS="$CFLAGS -std=gnu89 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --disable-asm --enable-random=unix || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS -std=gnu89 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" --disable-asm --enable-random=unix || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch libgcrypt-$LIBGCRYPT_VERSION-done
@@ -1453,18 +1462,19 @@ install_gmp() {
         #
         # For now, link with -ld64 on Xcode 15 and later.
         #
-        XCODE_VERSION=`xcodebuild -version | sed -n 's;Xcode \(.*\);\1;p'`
-        XCODE_MAJOR_VERSION="`expr $XCODE_VERSION : '\([0-9][0-9]*\).*'`"
-        XCODE_MINOR_VERSION="`expr $XCODE_VERSION : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
-        XCODE_DOTDOT_VERSION="`expr $XCODE_VERSION : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
+        XCODE_VERSION=$( xcodebuild -version | sed -n 's;Xcode \(.*\);\1;p' )
+        XCODE_MAJOR_VERSION="$( expr $XCODE_VERSION : '\([0-9][0-9]*\).*' )"
+        # XCODE_MINOR_VERSION="$( expr $XCODE_VERSION : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
+        # XCODE_DOTDOT_VERSION="$( expr $XCODE_VERSION : '[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
         if [ "$XCODE_MAJOR_VERSION" -ge 15 ]
         then
             LD64_FLAG="-ld64"
         else
             LD64_FLAG=""
         fi
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS $LD64_FLAG" ./configure --enable-fat || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS $LD64_FLAG" \
+            ./configure "${CONFIGURE_OPTS[@]}" --enable-fat || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch gmp-$GMP_VERSION-done
@@ -1504,8 +1514,9 @@ install_libtasn1() {
         $no_build && echo "Skipping installation" && return
         gzcat libtasn1-$LIBTASN1_VERSION.tar.gz | tar xf - || exit 1
         cd libtasn1-$LIBTASN1_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch libtasn1-$LIBTASN1_VERSION-done
@@ -1560,8 +1571,9 @@ install_p11_kit() {
         # but it's not clear that this matters to us, so we just
         # configure p11-kit not to use libffi.
         #
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -L/usr/local/lib" LIBS=-lintl ./configure --without-libffi --without-trust-paths || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LIBS=-lintl \
+            ./configure "${CONFIGURE_OPTS[@]}" --without-libffi --without-trust-paths || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch p11-kit-$P11KIT_VERSION-done
@@ -1601,8 +1613,9 @@ install_nettle() {
         $no_build && echo "Skipping installation" && return
         gzcat nettle-$NETTLE_VERSION.tar.gz | tar xf - || exit 1
         cd nettle-$NETTLE_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -I/usr/local/include" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -L/usr/local/lib" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch nettle-$NETTLE_VERSION-done
@@ -1662,8 +1675,9 @@ install_gnutls() {
             bzcat gnutls-$GNUTLS_VERSION.tar.bz2 | tar xf - || exit 1
         fi
         cd gnutls-$GNUTLS_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -I /usr/local/include" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -I/usr/local/include/" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -L/usr/local/lib" ./configure --with-included-unistring --disable-guile || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" --with-included-unistring --disable-guile || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch gnutls-$GNUTLS_VERSION-done
@@ -1698,8 +1712,8 @@ install_lua() {
         $no_build && echo "Skipping installation" && return
         gzcat lua-$LUA_VERSION.tar.gz | tar xf - || exit 1
         cd lua-$LUA_VERSION
-        make MYCFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" MYLDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" $MAKE_BUILD_OPTS macosx || exit 1
-        $DO_MAKE_INSTALL || exit 1
+        make INSTALL_TOP="$installation_prefix" MYCFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" MYLDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" macosx || exit 1
+        $DO_MAKE INSTALL_TOP="$installation_prefix" install || exit 1
         cd ..
         touch lua-$LUA_VERSION-done
     fi
@@ -1713,10 +1727,10 @@ uninstall_lua() {
         # There's no configure script, so there's no need for
         # "make distclean", either; just do "make clean".
         #
-        (cd /usr/local/bin; $DO_RM -f lua luac)
-        (cd /usr/local/include; $DO_RM -f lua.h luaconf.h lualib.h lauxlib.h lua.hpp)
-        (cd /usr/local/lib; $DO_RM -f liblua.a)
-        (cd /usr/local/man/man1; $DO_RM -f lua.1 luac.1)
+        (cd "$installation_prefix/bin"; $DO_RM -f lua luac)
+        (cd "$installation_prefix/include"; $DO_RM -f lua.h luaconf.h lualib.h lauxlib.h lua.hpp)
+        (cd "$installation_prefix/lib"; $DO_RM -f liblua.a)
+        (cd "$installation_prefix/man/man1"; $DO_RM -f lua.1 luac.1)
         cd lua-$installed_lua_version
         make clean || exit 1
         cd ..
@@ -1754,8 +1768,8 @@ install_snappy() {
         # will carry that dependency with it, so linking with it should
         # Just Work.
         #
-        MACOSX_DEPLOYMENT_TARGET=$min_osx_target SDKROOT="$SDKPATH" $DO_CMAKE -DBUILD_SHARED_LIBS=YES -DSNAPPY_BUILD_BENCHMARKS=NO -DSNAPPY_BUILD_TESTS=NO ../ || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        "${DO_CMAKE[@]}" -DBUILD_SHARED_LIBS=YES -DSNAPPY_BUILD_BENCHMARKS=NO -DSNAPPY_BUILD_TESTS=NO .. || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../..
         touch snappy-$SNAPPY_VERSION-done
@@ -1774,17 +1788,18 @@ uninstall_snappy() {
         if [ -s build_dir/install_manifest.txt ] ; then
             while read -r ; do $DO_RM -v "$REPLY" ; done < <(cat build_dir/install_manifest.txt; echo)
         else
-            $DO_RM -f /usr/local/lib/libsnappy.1.1.8.dylib \
-                    /usr/local/lib/libsnappy.1.dylib \
-                    /usr/local/lib/libsnappy.dylib \
-                    /usr/local/include/snappy-c.h \
-                    /usr/local/include/snappy-sinksource.h \
-                    /usr/local/include/snappy-stubs-public.h \
-                    /usr/local/include/snappy.h \
-                    /usr/local/lib/cmake/Snappy/SnappyConfig.cmake \
-                    /usr/local/lib/cmake/Snappy/SnappyConfigVersion.cmake \
-                    /usr/local/lib/cmake/Snappy/SnappyTargets-noconfig.cmake \
-                    /usr/local/lib/cmake/Snappy/SnappyTargets.cmake || exit 1
+            $DO_RM -f "$installation_prefix/lib/libsnappy.1.1.8.dylib" \
+                    "$installation_prefix/lib/libsnappy.1.dylib" \
+                    "$installation_prefix/lib/libsnappy.dylib" \
+                    "$installation_prefix/include/snappy-c.h" \
+                    "$installation_prefix/include/snappy-sinksource.h" \
+                    "$installation_prefix/include/snappy-stubs-public.h" \
+                    "$installation_prefix/include/snappy.h" \
+                    "$installation_prefix/lib/cmake/Snappy/SnappyConfig.cmake" \
+                    "$installation_prefix/lib/cmake/Snappy/SnappyConfigVersion.cmake" \
+                    "$installation_prefix/lib/cmake/Snappy/SnappyTargets-noconfig.cmake" \
+                    "$installation_prefix/lib/cmake/Snappy/SnappyTargets.cmake" \
+                    || exit 1
         fi
         #
         # snappy uses cmake and doesn't support "make distclean";
@@ -1814,8 +1829,9 @@ install_zstd() {
         $no_build && echo "Skipping installation" && return
         gzcat zstd-$ZSTD_VERSION.tar.gz | tar xf - || exit 1
         cd zstd-$ZSTD_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" make $MAKE_BUILD_OPTS || exit 1
-        $DO_MAKE_INSTALL || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            make "${MAKE_BUILD_OPTS[@]}" || exit 1
+        $DO_MAKE PREFIX="$installation_prefix" install || exit 1
         cd ..
         touch zstd-$ZSTD_VERSION-done
     fi
@@ -1850,21 +1866,22 @@ uninstall_zstd() {
 install_libxml2() {
     if [ "$LIBXML2_VERSION" -a ! -f libxml2-$LIBXML2_VERSION-done ] ; then
         echo "Downloading, building, and installing libxml2:"
-        LIBXML2_MAJOR_VERSION="`expr $LIBXML2_VERSION : '\([0-9][0-9]*\).*'`"
-        LIBXML2_MINOR_VERSION="`expr $LIBXML2_VERSION : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
+        LIBXML2_MAJOR_VERSION="$( expr "$LIBXML2_VERSION" : '\([0-9][0-9]*\).*' )"
+        LIBXML2_MINOR_VERSION="$( expr "$LIBXML2_VERSION" : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
         LIBXML2_MAJOR_MINOR_VERSION=$LIBXML2_MAJOR_VERSION.$LIBXML2_MINOR_VERSION
         [ -f libxml2-$LIBXML2_VERSION.tar.gz ] || curl -L -O https://download.gnome.org/sources/libxml2/$LIBXML2_MAJOR_MINOR_VERSION/libxml2-$LIBXML2_VERSION.tar.xz || exit 1
         $no_build && echo "Skipping installation" && return
         xzcat libxml2-$LIBXML2_VERSION.tar.xz | tar xf - || exit 1
-        cd libxml2-$LIBXML2_VERSION
+        cd "libxml2-$LIBXML2_VERSION" || exit 1
         #
         # At least on macOS 12.0.1 with Xcode 13.1, when we build
         # libxml2, the linker complains that we don't have the right
         # to link with the Python framework, so don't build with
         # Python.
         #
-        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --without-python || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" --without-python || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch libxml2-$LIBXML2_VERSION-done
@@ -1931,8 +1948,8 @@ install_lz4() {
         # and CXXFLAGS into FLAGS, which is used when building source
         # files and libraries.
         #
-        MOREFLAGS="-D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" make $MAKE_BUILD_OPTS || exit 1
-        $DO_MAKE_INSTALL || exit 1
+        MOREFLAGS="-D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" make "${MAKE_BUILD_OPTS[@]}" || exit 1
+        $DO_MAKE PREFIX="$installation_prefix" install || exit 1
         cd ..
         touch lz4-$LZ4_VERSION-done
     fi
@@ -1979,11 +1996,13 @@ install_sbc() {
         gzcat sbc-$SBC_VERSION.tar.gz | tar xf - || exit 1
         cd sbc-$SBC_VERSION
         if [ "$DARWIN_PROCESSOR_ARCH" = "arm64" ] ; then
-            CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS -U__ARM_NEON__" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --disable-tools --disable-tester --disable-shared || exit 1
+            CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS -U__ARM_NEON__" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+                ./configure "${CONFIGURE_OPTS[@]}" --disable-tools --disable-tester --disable-shared || exit 1
         else
-            CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --disable-tools --disable-tester --disable-shared || exit 1
+            CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+                ./configure "${CONFIGURE_OPTS[@]}" --disable-tools --disable-tester --disable-shared || exit 1
         fi
-        make $MAKE_BUILD_OPTS || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch sbc-$SBC_VERSION-done
@@ -2018,8 +2037,9 @@ install_maxminddb() {
         $no_build && echo "Skipping installation" && return
         gzcat libmaxminddb-$MAXMINDDB_VERSION.tar.gz | tar xf - || exit 1
         cd libmaxminddb-$MAXMINDDB_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch maxminddb-$MAXMINDDB_VERSION-done
@@ -2054,8 +2074,9 @@ install_c_ares() {
         $no_build && echo "Skipping installation" && return
         gzcat c-ares-$CARES_VERSION.tar.gz | tar xf - || exit 1
         cd c-ares-$CARES_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch c-ares-$CARES_VERSION-done
@@ -2086,17 +2107,17 @@ uninstall_c_ares() {
 install_libssh() {
     if [ "$LIBSSH_VERSION" -a ! -f libssh-$LIBSSH_VERSION-done ] ; then
         echo "Downloading, building, and installing libssh:"
-        LIBSSH_MAJOR_VERSION="`expr $LIBSSH_VERSION : '\([0-9][0-9]*\).*'`"
-        LIBSSH_MINOR_VERSION="`expr $LIBSSH_VERSION : '[0-9][0-9]*\.\([0-9][0-9]*\).*'`"
+        LIBSSH_MAJOR_VERSION="$( expr "$LIBSSH_VERSION" : '\([0-9][0-9]*\).*' )"
+        LIBSSH_MINOR_VERSION="$( expr "$LIBSSH_VERSION" : '[0-9][0-9]*\.\([0-9][0-9]*\).*' )"
         LIBSSH_MAJOR_MINOR_VERSION=$LIBSSH_MAJOR_VERSION.$LIBSSH_MINOR_VERSION
         [ -f libssh-$LIBSSH_VERSION.tar.xz ] || curl -L -O https://www.libssh.org/files/$LIBSSH_MAJOR_MINOR_VERSION/libssh-$LIBSSH_VERSION.tar.xz
         $no_build && echo "Skipping installation" && return
         xzcat libssh-$LIBSSH_VERSION.tar.xz | tar xf - || exit 1
-        cd libssh-$LIBSSH_VERSION
+        cd "libssh-$LIBSSH_VERSION" || exit 1
         mkdir build
         cd build
-        MACOSX_DEPLOYMENT_TARGET=$min_osx_target SDKROOT="$SDKPATH" $DO_CMAKE -DWITH_GCRYPT=1 ../ || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        "${DO_CMAKE[@]}" -DWITH_GCRYPT=1 .. || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../..
         touch libssh-$LIBSSH_VERSION-done
@@ -2112,10 +2133,10 @@ uninstall_libssh() {
         # just remove what we know it installs.
         #
         # $DO_MAKE_UNINSTALL || exit 1
-        $DO_RM -rf /usr/local/lib/libssh* \
-                   /usr/local/include/libssh \
-                   /usr/local/lib/pkgconfig/libssh* \
-                   /usr/local/lib/cmake/libssh || exit 1
+        $DO_RM -rf "$installation_prefix"/lib/libssh* \
+                   "$installation_prefix"/include/libssh \
+                   "$installation_prefix"/lib/pkgconfig/libssh* \
+                   "$installation_prefix"/lib/cmake/libssh || exit 1
         #
         # libssh uses cmake and doesn't support "make distclean";
         # just remove the entire build directory.
@@ -2144,8 +2165,9 @@ install_nghttp2() {
         $no_build && echo "Skipping installation" && return
         xzcat nghttp2-$NGHTTP2_VERSION.tar.xz | tar xf - || exit 1
         cd nghttp2-$NGHTTP2_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --enable-lib-only || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" --enable-lib-only || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch nghttp2-$NGHTTP2_VERSION-done
@@ -2180,8 +2202,9 @@ install_nghttp3() {
         $no_build && echo "Skipping installation" && return
         xzcat nghttp3-$NGHTTP3_VERSION.tar.xz | tar xf - || exit 1
         cd nghttp3-$NGHTTP3_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure --enable-lib-only || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" --enable-lib-only || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch nghttp3-$NGHTTP3_VERSION-done
@@ -2219,8 +2242,9 @@ install_libtiff() {
         $no_build && echo "Skipping installation" && return
         gzcat tiff-$LIBTIFF_VERSION.tar.gz | tar xf - || exit 1
         cd tiff-$LIBTIFF_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch tiff-$LIBTIFF_VERSION-done
@@ -2261,8 +2285,9 @@ install_spandsp() {
         # support.
         #
         patch -p0 < "${topdir}/tools/macos-setup-patches/spandsp-configure-patch" || exit 1
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -I/usr/local/include" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS -L/usr/local/lib" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch spandsp-$SPANDSP_VERSION-done
@@ -2297,8 +2322,9 @@ install_speexdsp() {
         $no_build && echo "Skipping installation" && return
         gzcat speexdsp-$SPEEXDSP_VERSION.tar.gz | tar xf - || exit 1
         cd speexdsp-$SPEEXDSP_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch speexdsp-$SPEEXDSP_VERSION-done
@@ -2335,8 +2361,8 @@ install_bcg729() {
         cd bcg729-$BCG729_VERSION
         mkdir build_dir
         cd build_dir
-        MACOSX_DEPLOYMENT_TARGET=$min_osx_target SDKROOT="$SDKPATH" $DO_CMAKE  ../ || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        "${DO_CMAKE[@]}" .. || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../..
         touch bcg729-$BCG729_VERSION-done
@@ -2352,10 +2378,10 @@ uninstall_bcg729() {
         # just remove what we know it installs.
         #
         # $DO_MAKE_UNINSTALL || exit 1
-        $DO_RM -rf /usr/local/share/Bcg729 \
-                   /usr/local/lib/libbcg729* \
-                   /usr/local/include/bcg729 \
-                   /usr/local/lib/pkgconfig/libbcg729* || exit 1
+        $DO_RM -rf "$installation_prefix"/share/Bcg729 \
+                   "$installation_prefix"/lib/libbcg729* \
+                   "$installation_prefix"/include/bcg729 \
+                   "$installation_prefix"/lib/pkgconfig/libbcg729* || exit 1
         #
         # bcg729 uses cmake on macOS and doesn't support "make distclean";
         # just remove the enire build directory.
@@ -2384,8 +2410,9 @@ install_ilbc() {
         $no_build && echo "Skipping installation" && return
         bzcat libilbc-$ILBC_VERSION.tar.bz2 | tar xf - || exit 1
         cd libilbc-$ILBC_VERSION || exit 1
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch ilbc-$ILBC_VERSION-done
@@ -2420,8 +2447,9 @@ install_opus() {
         $no_build && echo "Skipping installation" && return
         gzcat opus-$OPUS_VERSION.tar.gz | tar xf - || exit 1
         cd opus-$OPUS_VERSION
-        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ..
         touch opus-$OPUS_VERSION-done
@@ -2469,7 +2497,7 @@ install_python3() {
         #
         # Strip off any dot-dot component in $PYTHON3_VERSION.
         #
-        python_version=`echo $PYTHON3_VERSION | sed 's/\([1-9][0-9]*\.[1-9][0-9]*\).*/\1/'`
+        python_version=$( echo "$PYTHON3_VERSION" | sed 's/\([1-9][0-9]*\.[1-9][0-9]*\).*/\1/' )
         #
         # Now treat Meson as being in the directory in question.
         #
@@ -2492,7 +2520,7 @@ uninstall_python3() {
         frameworkdir="/Library/Frameworks/Python.framework/Versions/$PYTHON_VERSION"
         sudo rm -rf "$frameworkdir"
         sudo rm -rf "/Applications/Python $PYTHON_VERSION"
-        sudo find /usr/local/bin -maxdepth 1 -lname "*$frameworkdir/bin/*" -delete
+        sudo find "$installation_prefix"/bin -maxdepth 1 -lname "*$frameworkdir/bin/*" -delete
         # Remove three symlinks and empty directories. Removing directories
         # might fail if for some reason multiple versions are installed.
         sudo rm    /Library/Frameworks/Python.framework/Headers
@@ -2529,8 +2557,8 @@ install_brotli() {
         cd brotli-$BROTLI_VERSION
         mkdir build_dir
         cd build_dir
-        MACOSX_DEPLOYMENT_TARGET=$min_osx_target SDKROOT="$SDKPATH" $DO_CMAKE ../ || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        "${DO_CMAKE[@]}" .. || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../..
         touch brotli-$BROTLI_VERSION-done
@@ -2546,10 +2574,10 @@ uninstall_brotli() {
         # just remove what we know it installs.
         #
         # $DO_MAKE_UNINSTALL || exit 1
-        $DO_RM -rf /usr/local/bin/brotli \
-                   /usr/local/lib/libbrotli* \
-                   /usr/local/include/brotli \
-                   /usr/local/lib/pkgconfig/libbrotli* || exit 1
+        $DO_RM -rf "$installation_prefix"/bin/brotli \
+                   "$installation_prefix"/lib/libbrotli* \
+                   "$installation_prefix"/include/brotli \
+                   "$installation_prefix"/lib/pkgconfig/libbrotli* || exit 1
         #
         # brotli uses cmake on macOS and doesn't support "make distclean";
         # just remove the enire build directory.
@@ -2590,8 +2618,9 @@ install_minizip() {
         #
         cd zlib-$ZLIB_VERSION/contrib/minizip || exit 1
         LIBTOOLIZE=glibtoolize autoreconf --force --install
-        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" ./configure || exit 1
-        make $MAKE_BUILD_OPTS || exit 1
+        CFLAGS="$CFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" CXXFLAGS="$CXXFLAGS -D_FORTIFY_SOURCE=0 $VERSION_MIN_FLAGS $SDKFLAGS" LDFLAGS="$LDFLAGS $VERSION_MIN_FLAGS $SDKFLAGS" \
+            ./configure "${CONFIGURE_OPTS[@]}" || exit 1
+        make "${MAKE_BUILD_OPTS[@]}" || exit 1
         $DO_MAKE_INSTALL || exit 1
         cd ../../..
         touch minizip-$ZLIB_VERSION-done
@@ -2624,12 +2653,12 @@ install_sparkle() {
     if [ "$SPARKLE_VERSION" ] && [ ! -f sparkle-$SPARKLE_VERSION-done ] ; then
         echo "Downloading and installing Sparkle:"
         #
-        # Download the tarball and unpack it in /usr/local/Sparkle-x.y.z
+        # Download the tarball and unpack it in $installation_prefix/Sparkle-x.y.z
         #
         [ -f Sparkle-$SPARKLE_VERSION.tar.xz ] || curl -L -o Sparkle-$SPARKLE_VERSION.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz || exit 1
         $no_build && echo "Skipping installation" && return
-        test -d "/usr/local/Sparkle-$SPARKLE_VERSION" || sudo mkdir "/usr/local/Sparkle-$SPARKLE_VERSION"
-        sudo tar -C "/usr/local/Sparkle-$SPARKLE_VERSION" -xpof Sparkle-$SPARKLE_VERSION.tar.xz
+        test -d "$installation_prefix/Sparkle-$SPARKLE_VERSION" || sudo mkdir "$installation_prefix/Sparkle-$SPARKLE_VERSION"
+        sudo tar -C "$installation_prefix/Sparkle-$SPARKLE_VERSION" -xpof Sparkle-$SPARKLE_VERSION.tar.xz
         touch sparkle-$SPARKLE_VERSION-done
     fi
 }
@@ -2637,7 +2666,7 @@ install_sparkle() {
 uninstall_sparkle() {
     if [ -n "$installed_sparkle_version" ]; then
         echo "Uninstalling Sparkle:"
-        sudo rm -rf "/usr/local/Sparkle-$installed_sparkle_version"
+        sudo rm -rf "$installation_prefix/Sparkle-$installed_sparkle_version"
 
         rm sparkle-$installed_sparkle_version-done
 
@@ -3401,60 +3430,6 @@ uninstall_all() {
     fi
 }
 
-#
-# Do we have permission to write in /usr/local?
-#
-# If so, assume we have permission to write in its subdirectories.
-# (If that's not the case, this test needs to check the subdirectories
-# as well.)
-#
-# If not, do "make install", "make uninstall", "ninja install",
-# "ninja uninstall", the removes for dependencies that don't support
-# "make uninstall" or "ninja uninstall", the renames of [g]libtool*,
-# and the writing of a libffi .pc file with sudo.
-#
-if [ -w /usr/local ]
-then
-    DO_MAKE_INSTALL="make install"
-    DO_MAKE_UNINSTALL="make uninstall"
-    DO_NINJA_INSTALL="ninja -C _build install"
-    DO_NINJA_UNINSTALL="ninja -C _build uninstall"
-    DO_TEE_TO_PC_FILE="tee"
-    DO_RM="rm"
-    DO_MV="mv"
-else
-    DO_MAKE_INSTALL="sudo make install"
-    DO_MAKE_UNINSTALL="sudo make uninstall"
-    DO_NINJA_INSTALL="sudo ninja -C _build install"
-    DO_NINJA_UNINSTALL="sudo ninja -C _build uninstall"
-    DO_TEE_TO_PC_FILE="sudo tee"
-    DO_RM="sudo rm"
-    DO_MV="sudo mv"
-fi
-
-#
-# When building with CMake, don't build libraries with an install path
-# that begins with @rpath because that will cause binaries linked with it
-# to use that path as the library to look for, and that will cause the
-# run-time linker, at least on macOS 14 and later, not to find the library
-# in /usr/local/lib unless you explicitly set DYLD_LIBRARY_PATH to include
-# /usr/local/lib.  That means that you get "didn't find libpcre" errors if
-# you try to run binaries from a build unless you set DYLD_LIBRARYPATH to
-# include /usr/local/lib.
-#
-# However, setting CMAKE_MACOSX_RPATH to OFF causes the installed
-# library just to have the file name of the library as its install
-# name.  It needs to be the full installed path of the library in
-# order to make running binaries from the build directory work, so
-# we set CMAKE_INSTALL_NAME_DIR to /usr/local/lib.
-#
-# packaging/macosx/osx-app.sh will convert *all* libraries in
-# the app bundle to have an @rpath install name, so this won't
-# break anything there; it just fixes the ability to run from the
-# build directory.
-#
-DO_CMAKE="cmake -DCMAKE_MACOSX_RPATH=OFF -DCMAKE_INSTALL_NAME_DIR=/usr/local/lib"
-
 # This script is meant to be run in the source root.  The following
 # code will attempt to get you there, but is not perfect (particulary
 # if someone copies the script).
@@ -3503,24 +3478,102 @@ done
 
 no_build=false
 
-while getopts ht:un name
+installation_prefix=/usr/local
+
+while getopts hnp:t:u name
 do
     case $name in
-    u)
-        do_uninstall=yes
+    h|\?)
+        echo "Usage: macos-setup.sh [ -n ] [ -p <installation prefix> ] [ -t <target> ] [ -u ]" 1>&1
+        exit 0
         ;;
     n)
         no_build=true
         ;;
+    p)
+        installation_prefix="$OPTARG"
+        ;;
     t)
         min_osx_target="$OPTARG"
         ;;
-    h|?)
-        echo "Usage: macos-setup.sh [ -t <target> ] [ -u ] [ -n ]" 1>&1
-        exit 0
+    u)
+        do_uninstall=yes
         ;;
     esac
 done
+
+#
+# Create our custom installation prefix if needed.
+#
+if [ "$installation_prefix" != "/usr/local" ] ; then
+    export PATH="$installation_prefix/bin:$PATH"
+    if [ ! -d "$installation_prefix" ] ; then
+        echo "Creating $installation_prefix"
+        $DO_MKDIR "$installation_prefix" || exit 1
+    fi
+fi
+
+#
+# Do we have permission to write in $installation_prefix?
+#
+# If so, assume we have permission to write in its subdirectories.
+# (If that's not the case, this test needs to check the subdirectories
+# as well.)
+#
+# If not, do "make install", "make uninstall", "ninja install",
+# "ninja uninstall", the removes for dependencies that don't support
+# "make uninstall" or "ninja uninstall", the renames of [g]libtool*,
+# and the writing of a libffi .pc file with sudo.
+#
+if [ -w "$installation_prefix" ]
+then
+    DO_MAKE="make"
+    DO_MAKE_INSTALL="make install"
+    DO_MAKE_UNINSTALL="make uninstall"
+    DO_NINJA_INSTALL="ninja -C _build install"
+    DO_NINJA_UNINSTALL="ninja -C _build uninstall"
+    DO_TEE_TO_PC_FILE="tee"
+    DO_RM="rm"
+    DO_MV="mv"
+else
+    DO_MAKE="sudo make"
+    DO_MAKE_INSTALL="sudo make install"
+    DO_MAKE_UNINSTALL="sudo make uninstall"
+    DO_NINJA_INSTALL="sudo ninja -C _build install"
+    DO_NINJA_UNINSTALL="sudo ninja -C _build uninstall"
+    DO_TEE_TO_PC_FILE="sudo tee"
+    DO_RM="sudo rm"
+    DO_MV="sudo mv"
+fi
+
+#
+# When building with CMake, don't build libraries with an install path
+# that begins with @rpath because that will cause binaries linked with it
+# to use that path as the library to look for, and that will cause the
+# run-time linker, at least on macOS 14 and later, not to find the library
+# in $installation_prefix/lib unless you explicitly set DYLD_LIBRARY_PATH to include
+# $installation_prefix/lib.  That means that you get "didn't find libpcre" errors if
+# you try to run binaries from a build unless you set DYLD_LIBRARYPATH to
+# include $installation_prefix/lib.
+#
+# However, setting CMAKE_MACOSX_RPATH to OFF causes the installed
+# library just to have the file name of the library as its install
+# name.  It needs to be the full installed path of the library in
+# order to make running binaries from the build directory work, so
+# we set CMAKE_INSTALL_NAME_DIR to $installation_prefix/lib.
+#
+# packaging/macosx/osx-app.sh will convert *all* libraries in
+# the app bundle to have an @rpath install name, so this won't
+# break anything there; it just fixes the ability to run from the
+# build directory.
+#
+DO_CMAKE=( cmake
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$min_osx_target"
+    -DSDKROOT="$SDKPATH"
+    -DCMAKE_MACOSX_RPATH=OFF
+    -DCMAKE_INSTALL_PREFIX="$installation_prefix"
+    -DCMAKE_INSTALL_NAME_DIR="$installation_prefix/lib"
+    )
 
 #
 # Get the version numbers of installed packages, if any.
@@ -3529,52 +3582,52 @@ if [ -d "${MACOSX_SUPPORT_LIBS}" ]
 then
     cd "${MACOSX_SUPPORT_LIBS}"
 
-    installed_xz_version=`ls xz-*-done 2>/dev/null | sed 's/xz-\(.*\)-done/\1/'`
-    installed_lzip_version=`ls lzip-*-done 2>/dev/null | sed 's/lzip-\(.*\)-done/\1/'`
-    installed_pcre_version=`ls pcre-*-done 2>/dev/null | sed 's/pcre-\(.*\)-done/\1/'`
-    installed_pcre2_version=$(ls pcre2-*-done 2>/dev/null | sed 's/pcre2-\(.*\)-done/\1/')
-    installed_autoconf_version=`ls autoconf-*-done 2>/dev/null | sed 's/autoconf-\(.*\)-done/\1/'`
-    installed_automake_version=`ls automake-*-done 2>/dev/null | sed 's/automake-\(.*\)-done/\1/'`
-    installed_libtool_version=`ls libtool-*-done 2>/dev/null | sed 's/libtool-\(.*\)-done/\1/'`
-    installed_cmake_version=`ls cmake-*-done 2>/dev/null | sed 's/cmake-\(.*\)-done/\1/'`
-    installed_ninja_version=`ls ninja-*-done 2>/dev/null | sed 's/ninja-\(.*\)-done/\1/'`
-    installed_asciidoctor_version=`ls asciidoctor-*-done 2>/dev/null | sed 's/asciidoctor-\(.*\)-done/\1/'`
-    installed_asciidoctorpdf_version=`ls asciidoctorpdf-*-done 2>/dev/null | sed 's/asciidoctorpdf-\(.*\)-done/\1/'`
-    installed_gettext_version=`ls gettext-*-done 2>/dev/null | sed 's/gettext-\(.*\)-done/\1/'`
-    installed_pkg_config_version=`ls pkg-config-*-done 2>/dev/null | sed 's/pkg-config-\(.*\)-done/\1/'`
-    installed_glib_version=`ls glib-*-done 2>/dev/null | sed 's/glib-\(.*\)-done/\1/'`
-    installed_qt_version=`ls qt-*-done 2>/dev/null | sed 's/qt-\(.*\)-done/\1/'`
-    installed_libsmi_version=`ls libsmi-*-done 2>/dev/null | sed 's/libsmi-\(.*\)-done/\1/'`
-    installed_libgpg_error_version=`ls libgpg-error-*-done 2>/dev/null | sed 's/libgpg-error-\(.*\)-done/\1/'`
-    installed_libgcrypt_version=`ls libgcrypt-*-done 2>/dev/null | sed 's/libgcrypt-\(.*\)-done/\1/'`
-    installed_gmp_version=`ls gmp-*-done 2>/dev/null | sed 's/gmp-\(.*\)-done/\1/'`
-    installed_libtasn1_version=`ls libtasn1-*-done 2>/dev/null | sed 's/libtasn1-\(.*\)-done/\1/'`
-    installed_p11_kit_version=`ls p11-kit-*-done 2>/dev/null | sed 's/p11-kit-\(.*\)-done/\1/'`
-    installed_nettle_version=`ls nettle-*-done 2>/dev/null | sed 's/nettle-\(.*\)-done/\1/'`
-    installed_gnutls_version=`ls gnutls-*-done 2>/dev/null | sed 's/gnutls-\(.*\)-done/\1/'`
-    installed_lua_version=`ls lua-*-done 2>/dev/null | sed 's/lua-\(.*\)-done/\1/'`
-    installed_snappy_version=`ls snappy-*-done 2>/dev/null | sed 's/snappy-\(.*\)-done/\1/'`
-    installed_zstd_version=`ls zstd-*-done 2>/dev/null | sed 's/zstd-\(.*\)-done/\1/'`
-    installed_libxml2_version=`ls libxml2-*-done 2>/dev/null | sed 's/libxml2-\(.*\)-done/\1/'`
-    installed_lz4_version=`ls lz4-*-done 2>/dev/null | sed 's/lz4-\(.*\)-done/\1/'`
-    installed_sbc_version=`ls sbc-*-done 2>/dev/null | sed 's/sbc-\(.*\)-done/\1/'`
-    installed_maxminddb_version=`ls maxminddb-*-done 2>/dev/null | sed 's/maxminddb-\(.*\)-done/\1/'`
-    installed_cares_version=`ls c-ares-*-done 2>/dev/null | sed 's/c-ares-\(.*\)-done/\1/'`
-    installed_libssh_version=`ls libssh-*-done 2>/dev/null | sed 's/libssh-\(.*\)-done/\1/'`
-    installed_nghttp2_version=`ls nghttp2-*-done 2>/dev/null | sed 's/nghttp2-\(.*\)-done/\1/'`
-    installed_nghttp3_version=`ls nghttp3-*-done 2>/dev/null | sed 's/nghttp3-\(.*\)-done/\1/'`
-    installed_libtiff_version=`ls tiff-*-done 2>/dev/null | sed 's/tiff-\(.*\)-done/\1/'`
-    installed_spandsp_version=`ls spandsp-*-done 2>/dev/null | sed 's/spandsp-\(.*\)-done/\1/'`
-    installed_speexdsp_version=`ls speexdsp-*-done 2>/dev/null | sed 's/speexdsp-\(.*\)-done/\1/'`
-    installed_bcg729_version=`ls bcg729-*-done 2>/dev/null | sed 's/bcg729-\(.*\)-done/\1/'`
-    installed_ilbc_version=`ls ilbc-*-done 2>/dev/null | sed 's/ilbc-\(.*\)-done/\1/'`
-    installed_opus_version=`ls opus-*-done 2>/dev/null | sed 's/opus-\(.*\)-done/\1/'`
-    installed_python3_version=`ls python3-*-done 2>/dev/null | sed 's/python3-\(.*\)-done/\1/'`
-    installed_brotli_version=`ls brotli-*-done 2>/dev/null | sed 's/brotli-\(.*\)-done/\1/'`
-    installed_minizip_version=`ls minizip-*-done 2>/dev/null | sed 's/minizip-\(.*\)-done/\1/'`
-    installed_sparkle_version=`ls sparkle-*-done 2>/dev/null | sed 's/sparkle-\(.*\)-done/\1/'`
+    installed_xz_version=$( ls xz-*-done 2>/dev/null | sed 's/xz-\(.*\)-done/\1/' )
+    installed_lzip_version=$( ls lzip-*-done 2>/dev/null | sed 's/lzip-\(.*\)-done/\1/' )
+    installed_pcre_version=$( ls pcre-*-done 2>/dev/null | sed 's/pcre-\(.*\)-done/\1/' )
+    installed_pcre2_version=$( ls pcre2-*-done 2>/dev/null | sed 's/pcre2-\(.*\)-done/\1/' )
+    installed_autoconf_version=$( ls autoconf-*-done 2>/dev/null | sed 's/autoconf-\(.*\)-done/\1/' )
+    installed_automake_version=$( ls automake-*-done 2>/dev/null | sed 's/automake-\(.*\)-done/\1/' )
+    installed_libtool_version=$( ls libtool-*-done 2>/dev/null | sed 's/libtool-\(.*\)-done/\1/' )
+    installed_cmake_version=$( ls cmake-*-done 2>/dev/null | sed 's/cmake-\(.*\)-done/\1/' )
+    installed_ninja_version=$( ls ninja-*-done 2>/dev/null | sed 's/ninja-\(.*\)-done/\1/' )
+    installed_asciidoctor_version=$( ls asciidoctor-*-done 2>/dev/null | sed 's/asciidoctor-\(.*\)-done/\1/' )
+    installed_asciidoctorpdf_version=$( ls asciidoctorpdf-*-done 2>/dev/null | sed 's/asciidoctorpdf-\(.*\)-done/\1/' )
+    installed_gettext_version=$( ls gettext-*-done 2>/dev/null | sed 's/gettext-\(.*\)-done/\1/' )
+    installed_pkg_config_version=$( ls pkg-config-*-done 2>/dev/null | sed 's/pkg-config-\(.*\)-done/\1/' )
+    installed_glib_version=$( ls glib-*-done 2>/dev/null | sed 's/glib-\(.*\)-done/\1/' )
+    installed_qt_version=$( ls qt-*-done 2>/dev/null | sed 's/qt-\(.*\)-done/\1/' )
+    installed_libsmi_version=$( ls libsmi-*-done 2>/dev/null | sed 's/libsmi-\(.*\)-done/\1/' )
+    installed_libgpg_error_version=$( ls libgpg-error-*-done 2>/dev/null | sed 's/libgpg-error-\(.*\)-done/\1/' )
+    installed_libgcrypt_version=$( ls libgcrypt-*-done 2>/dev/null | sed 's/libgcrypt-\(.*\)-done/\1/' )
+    installed_gmp_version=$( ls gmp-*-done 2>/dev/null | sed 's/gmp-\(.*\)-done/\1/' )
+    installed_libtasn1_version=$( ls libtasn1-*-done 2>/dev/null | sed 's/libtasn1-\(.*\)-done/\1/' )
+    installed_p11_kit_version=$( ls p11-kit-*-done 2>/dev/null | sed 's/p11-kit-\(.*\)-done/\1/' )
+    installed_nettle_version=$( ls nettle-*-done 2>/dev/null | sed 's/nettle-\(.*\)-done/\1/' )
+    installed_gnutls_version=$( ls gnutls-*-done 2>/dev/null | sed 's/gnutls-\(.*\)-done/\1/' )
+    installed_lua_version=$( ls lua-*-done 2>/dev/null | sed 's/lua-\(.*\)-done/\1/' )
+    installed_snappy_version=$( ls snappy-*-done 2>/dev/null | sed 's/snappy-\(.*\)-done/\1/' )
+    installed_zstd_version=$( ls zstd-*-done 2>/dev/null | sed 's/zstd-\(.*\)-done/\1/' )
+    installed_libxml2_version=$( ls libxml2-*-done 2>/dev/null | sed 's/libxml2-\(.*\)-done/\1/' )
+    installed_lz4_version=$( ls lz4-*-done 2>/dev/null | sed 's/lz4-\(.*\)-done/\1/' )
+    installed_sbc_version=$( ls sbc-*-done 2>/dev/null | sed 's/sbc-\(.*\)-done/\1/' )
+    installed_maxminddb_version=$( ls maxminddb-*-done 2>/dev/null | sed 's/maxminddb-\(.*\)-done/\1/' )
+    installed_cares_version=$( ls c-ares-*-done 2>/dev/null | sed 's/c-ares-\(.*\)-done/\1/' )
+    installed_libssh_version=$( ls libssh-*-done 2>/dev/null | sed 's/libssh-\(.*\)-done/\1/' )
+    installed_nghttp2_version=$( ls nghttp2-*-done 2>/dev/null | sed 's/nghttp2-\(.*\)-done/\1/' )
+    installed_nghttp3_version=$( ls nghttp3-*-done 2>/dev/null | sed 's/nghttp3-\(.*\)-done/\1/' )
+    installed_libtiff_version=$( ls tiff-*-done 2>/dev/null | sed 's/tiff-\(.*\)-done/\1/' )
+    installed_spandsp_version=$( ls spandsp-*-done 2>/dev/null | sed 's/spandsp-\(.*\)-done/\1/' )
+    installed_speexdsp_version=$( ls speexdsp-*-done 2>/dev/null | sed 's/speexdsp-\(.*\)-done/\1/' )
+    installed_bcg729_version=$( ls bcg729-*-done 2>/dev/null | sed 's/bcg729-\(.*\)-done/\1/' )
+    installed_ilbc_version=$( ls ilbc-*-done 2>/dev/null | sed 's/ilbc-\(.*\)-done/\1/' )
+    installed_opus_version=$( ls opus-*-done 2>/dev/null | sed 's/opus-\(.*\)-done/\1/' )
+    installed_python3_version=$( ls python3-*-done 2>/dev/null | sed 's/python3-\(.*\)-done/\1/' )
+    installed_brotli_version=$( ls brotli-*-done 2>/dev/null | sed 's/brotli-\(.*\)-done/\1/' )
+    installed_minizip_version=$( ls minizip-*-done 2>/dev/null | sed 's/minizip-\(.*\)-done/\1/' )
+    installed_sparkle_version=$( ls sparkle-*-done 2>/dev/null | sed 's/sparkle-\(.*\)-done/\1/' )
 
-    cd $topdir
+    cd "$topdir"
 fi
 
 if [ "$do_uninstall" = "yes" ]
@@ -3590,13 +3643,17 @@ fi
 # However, we *are* setting them in the environment, for our own
 # nefarious purposes, so start them out as "-g -O2".
 #
-CFLAGS="-g -O2"
-CXXFLAGS="-g -O2"
+export CFLAGS="-g -O2 -I$installation_prefix/include"
+export CXXFLAGS="-g -O2 -I$installation_prefix/include"
+export LDFLAGS="-L$installation_prefix/lib"
+export PKG_CONFIG_PATH="$installation_prefix/lib/pkgconfig"
 
+CONFIGURE_OPTS=( --prefix="$installation_prefix" )
 # if no make options are present, set default options
+# Should we just set MAKEFLAGS instead?
 if [ -z "$MAKE_BUILD_OPTS" ] ; then
     # by default use 1.5x number of cores for parallel build
-    MAKE_BUILD_OPTS="-j $(( $(sysctl -n hw.logicalcpu) * 3 / 2))"
+    MAKE_BUILD_OPTS=( -j $(( $(sysctl -n hw.logicalcpu) * 3 / 2)) )
 fi
 
 #
@@ -3620,8 +3677,8 @@ then
         #
         # major.minor.
         #
-        min_osx_target_major=`echo "$min_osx_target" | sed -n 's/\([1-9][0-9]*\)\..*/\1/p'`
-        min_osx_target_minor=`echo "$min_osx_target" | sed -n 's/[1-9][0-9]*\.\(.*\)/\1/p'`
+        min_osx_target_major=$( echo "$min_osx_target" | sed -n 's/\([1-9][0-9]*\)\..*/\1/p' )
+        min_osx_target_minor=$( echo "$min_osx_target" | sed -n 's/[1-9][0-9]*\.\(.*\)/\1/p' )
         ;;
 
     [1-9][0-9])
@@ -3663,15 +3720,15 @@ then
         # Get a list of all the SDKs in that directory, if any.
         # We assume it'll be a while before there's a macOS 100. :-)
         #
-        sdklist=`(cd "$sdksdir"; ls -d MacOSX[1-9][0-9].[0-9]*.sdk 2>/dev/null)`
+        sdklist=$( (cd "$sdksdir"; ls -d MacOSX[1-9][0-9].[0-9]*.sdk 2>/dev/null) )
 
         for sdk in $sdklist
         do
             #
             # Get the major and minor version for this SDK.
             #
-            sdk_major=`echo "$sdk" | sed -n 's/MacOSX\([1-9][0-9]*\)\..*\.sdk/\1/p'`
-            sdk_minor=`echo "$sdk" | sed -n 's/MacOSX[1-9][0-9]*\.\(.*\)\.sdk/\1/p'`
+            sdk_major=$( echo "$sdk" | sed -n 's/MacOSX\([1-9][0-9]*\)\..*\.sdk/\1/p' )
+            sdk_minor=$( echo "$sdk" | sed -n 's/MacOSX[1-9][0-9]*\.\(.*\)\.sdk/\1/p' )
 
             #
             # Is it for the deployment target or some later release?
@@ -3701,25 +3758,26 @@ then
     echo "Using the $sdk_major.$sdk_minor SDK"
 
     #
-    # Make sure there are links to /usr/local/include and /usr/local/lib
+    # Make sure there are links to $installation_prefix/include and $installation_prefix/lib
     # in the SDK's usr/local.
     #
-    if [ ! -e $SDKPATH/usr/local/include ]
-    then
-        if [ ! -d $SDKPATH/usr/local ]
-        then
-            sudo mkdir $SDKPATH/usr/local
-        fi
-        sudo ln -s /usr/local/include $SDKPATH/usr/local/include
-    fi
-    if [ ! -e $SDKPATH/usr/local/lib ]
-    then
-        if [ ! -d $SDKPATH/usr/local ]
-        then
-            sudo mkdir $SDKPATH/usr/local
-        fi
-        sudo ln -s /usr/local/lib $SDKPATH/usr/local/lib
-    fi
+    # XXX - Is this needed any more?
+#     if [ ! -e $SDKPATH$installation_prefix/include ]
+#     then
+#         if [ ! -d $SDKPATH$installation_prefix ]
+#         then
+#             sudo mkdir $SDKPATH$installation_prefix
+#         fi
+#         sudo ln -s $installation_prefix/include $SDKPATH$installation_prefix/include
+#     fi
+#     if [ ! -e $SDKPATH$installation_prefix/lib ]
+#     then
+#         if [ ! -d $SDKPATH$installation_prefix ]
+#         then
+#             sudo mkdir $SDKPATH$installation_prefix
+#         fi
+#         sudo ln -s $installation_prefix/lib $SDKPATH$installation_prefix/lib
+#     fi
 
     #
     # Set the minimum OS version for which to build to the specified
@@ -3735,9 +3793,6 @@ then
     SDKFLAGS="-isysroot $SDKPATH"
 
 fi
-
-export CFLAGS
-export CXXFLAGS
 
 #
 # You need Xcode or the command-line tools installed to get the compilers (xcrun checks both).
@@ -3770,8 +3825,6 @@ if [ "$QT_VERSION" ]; then
     fi
 fi
 
-export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
-
 #
 # Do all the downloads and untarring in a subdirectory, so all that
 # stuff can be removed once we've installed the support libraries.
@@ -3789,11 +3842,9 @@ echo ""
 #
 # Indicate what paths to use for pkg-config and cmake.
 #
-pkg_config_path=/usr/local/lib/pkgconfig
 if [ "$QT_VERSION" ]; then
     qt_base_path=$HOME/Qt$QT_VERSION/$QT_VERSION/clang_64
-    pkg_config_path="$pkg_config_path":"$qt_base_path/lib/pkgconfig"
-    CMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH":"$qt_base_path/lib/cmake"
+    CMAKE_PREFIX_PATH="$PACKAGE_CONFIG_PATH:$qt_base_path/lib/cmake"
 fi
 
 if $no_build; then
@@ -3820,8 +3871,6 @@ fi
 echo
 echo "To build:"
 echo
-echo "export PKG_CONFIG_PATH=$pkg_config_path"
-echo "export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
 echo "export PATH=$PATH:$qt_base_path/bin"
 echo
 echo "mkdir build; cd build"
