@@ -238,7 +238,11 @@ static char* dfilter_macro_apply_recurse(const char* text, unsigned depth, df_er
 			{
 				if (MACRO_NAME_CHAR(c)) {
 					g_string_append_c(name,c);
-				} else if ( c == ':') {
+				} else if ( c == ':' || c == ';' ) {
+					/* XXX - The traditional form with ':' makes for a more
+					 * complicated grammar because ':' is found inside
+					 * literals and args can be literals. (See #19499)
+					 */
 					state = ARGS;
 				} else if ( c == '}') {
 					g_ptr_array_add(args,NULL);
@@ -260,6 +264,9 @@ static char* dfilter_macro_apply_recurse(const char* text, unsigned depth, df_er
 						*error = df_error_new_msg("end of filter in the middle of a macro expression");
 					goto on_error;
 				} else {
+					/* XXX - Spaces or other whitespace after the macro name but
+					 * before the ':' or ';' are not allowed. Should it be?
+					 */
 					if (error != NULL)
 						*error = df_error_new_msg("invalid character in macro name");
 					goto on_error;
@@ -294,6 +301,12 @@ static char* dfilter_macro_apply_recurse(const char* text, unsigned depth, df_er
 						goto on_error;
 					case ';':
 					case ',':
+						if (arg->len == 0) {
+							/* Null arguments aren't accepted */
+							if (error != NULL)
+								*error = df_error_new_msg("null argument in macro expression");
+							goto on_error;
+						}
 						g_ptr_array_add(args,g_string_free(arg,false));
 
 						arg = g_string_sized_new(32);
@@ -316,10 +329,19 @@ static char* dfilter_macro_apply_recurse(const char* text, unsigned depth, df_er
 							break;
 						}
 
-						g_ptr_array_add(args,g_string_free(arg,false));
-						g_ptr_array_add(args,NULL);
-
-						arg = NULL;
+						if (arg->len == 0) {
+							/* Null arguments aren't accepted... */
+							if (args->len != 0) {
+								/* Except $macro() or ${macro:} means zero args, not one null arg */
+								if (error != NULL)
+									*error = df_error_new_msg("null argument in macro expression");
+								goto on_error;
+							}
+						} else {
+							g_ptr_array_add(args,g_string_free(arg,false));
+							g_ptr_array_add(args,NULL);
+							arg = NULL;
+						}
 
 						resolved = dfilter_macro_resolve(name->str, (char**)args->pdata, error);
 						if (resolved == NULL)
@@ -335,6 +357,10 @@ static char* dfilter_macro_apply_recurse(const char* text, unsigned depth, df_er
 						state = OUTSIDE;
 						break;
 					default:
+						/* XXX - Spaces and other whitespace are passed through
+						 * whether interior or exterior to the rest of the
+						 * argument, which is powerful but confusing.
+						 */
 						g_string_append_c(arg,c);
 						break;
 				}
