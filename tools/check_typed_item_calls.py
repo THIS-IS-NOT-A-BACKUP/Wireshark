@@ -824,7 +824,12 @@ class Item:
         self.strings = strings
         self.mask_exact_width = mask_exact_width
 
-        global warnings_found
+        global warnings_found, errors_found
+
+        if blurb == '0':
+            print('Error:', filename, hf, ': - filter "' + filter +
+                '" has blurb of 0 - if no string, please set NULL instead')
+            errors_found += 1
 
         self.set_mask_value(macros)
 
@@ -1694,7 +1699,7 @@ def checkFile(filename, check_mask=False, mask_exact_width=False, check_label=Fa
         # Only checking if almost every field does match.
         checking = len(items_defined) and matches<len(items_defined) and ((matches / len(items_defined)) > 0.93)
         if checking:
-            print(filename, ':', matches, 'label-vs-filter matches of out of', len(items_defined), 'so reporting mismatches')
+            print(filename, ':', matches, 'label-vs-filter matches out of', len(items_defined), 'so reporting mismatches')
             for hf in items_defined:
                 items_defined[hf].check_label_vs_filter(reportError=True, reportNumericalMismatch=False)
 
