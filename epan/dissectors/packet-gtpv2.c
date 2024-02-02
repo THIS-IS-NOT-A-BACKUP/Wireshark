@@ -4722,7 +4722,7 @@ dissect_gtpv2_mm_context_utms_q(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tre
         proto_tree_add_bitmask_list(tree, tvb, offset, 1, ear_flags, ENC_BIG_ENDIAN);
         offset += 1;
         if (ear_len > 1) {
-            proto_tree_add_expert_format(flag_tree, pinfo, &ei_gtpv2_ie_data_not_dissected, tvb, offset, -1, "The rest of the IE not dissected yet");
+            proto_tree_add_expert_format(tree, pinfo, &ei_gtpv2_ie_data_not_dissected, tvb, offset, -1, "The rest of the IE not dissected yet");
             offset += ear_len - 1;
         }
     } else {
@@ -4733,7 +4733,7 @@ dissect_gtpv2_mm_context_utms_q(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tre
         return;
     }
     /* ts+1) to (n+4) These octet(s) is/are present only if explicitly specified */
-    proto_tree_add_expert_format(flag_tree, pinfo, &ei_gtpv2_ie_data_not_dissected, tvb, offset, -1, "The rest of the IE not dissected yet");
+    proto_tree_add_expert_format(tree, pinfo, &ei_gtpv2_ie_data_not_dissected, tvb, offset, -1, "The rest of the IE not dissected yet");
 
 }
 
@@ -4942,6 +4942,10 @@ dissect_gtpv2_mm_context_eps_qq(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tre
         proto_tree_add_bitmask_list(tree, tvb, offset, 1, ear_flags, ENC_BIG_ENDIAN);
 
         offset += 1;
+        if (ex_access_res_data_len > 1) {
+            proto_tree_add_expert_format(tree, pinfo, &ei_gtpv2_ie_data_not_dissected, tvb, offset, ex_access_res_data_len - 1, "The rest of the IE not dissected yet");
+            offset += ex_access_res_data_len - 1;
+        }
     }
 
     if (offset == (gint)length) {
@@ -5338,7 +5342,7 @@ static const value_string gtpv2_container_type_vals[] = {
 
 
 static void
-dissect_gtpv2_F_container(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item _U_, guint16 length, guint8 message_type, guint8 instance _U_, session_args_t * args _U_)
+dissect_gtpv2_F_container(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_item *item, guint16 length, guint8 message_type, guint8 instance _U_, session_args_t * args _U_)
 {
     tvbuff_t   *new_tvb;
     proto_tree *sub_tree;
@@ -5353,7 +5357,7 @@ dissect_gtpv2_F_container(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, p
     offset += 1;
     length--;
     if (length == 0) {
-        proto_tree_add_expert(tree, pinfo, &ei_gtpv2_ie_len_invalid, tvb, offset-3, 3);
+        expert_add_info(pinfo, item, &ei_gtpv2_ie_len_invalid);
         return;
     }
     if (   (message_type == GTPV2_FORWARD_RELOCATION_REQ)
