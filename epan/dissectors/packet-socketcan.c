@@ -670,7 +670,7 @@ dissect_socketcan_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, gu
         guint32 proto_vcid;
 
         proto_tree_add_bitmask_list(can_tree, tvb, 0, 4, canxl_prio_vcid_fields, xl_encoding);
-        proto_vcid = tvb_get_ntohl(tvb, 0);
+        proto_vcid = tvb_get_guint32(tvb, 0, xl_encoding);
         col_add_fstr(pinfo->cinfo, COL_INFO, "Priority: %u (0x%03x), VCID: %u (0x%02X)", proto_vcid & 0x7FF, proto_vcid & 0x7FF, (proto_vcid >> 16) & 0xFF, (proto_vcid >> 16) & 0xFF);
         proto_item_append_text(can_tree, ", Priority: %u (0x%03x), VCID: %u (0x%02X)", proto_vcid & 0x7FF, proto_vcid & 0x7FF, (proto_vcid >> 16) & 0xFF, (proto_vcid >> 16) & 0xFF);
         proto_tree_add_bitmask_list(can_tree, tvb, 4, 1, canxl_flag_fields, xl_encoding);
@@ -842,7 +842,7 @@ static int
 dissect_socketcan_bigendian(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_) {
     return dissect_socketcan_common(tvb, pinfo, tree,
                                     byte_swap ? ENC_LITTLE_ENDIAN : ENC_BIG_ENDIAN,
-                                    byte_swap ? ENC_BIG_ENDIAN : ENC_LITTLE_ENDIAN,
+                                    ENC_LITTLE_ENDIAN,
                                     PACKET_TYPE_UNKNOWN);
 }
 
@@ -850,7 +850,7 @@ static int
 dissect_socketcan_classic(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_) {
     return dissect_socketcan_common(tvb, pinfo, tree,
                                     byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
-                                    byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
+                                    ENC_HOST_ENDIAN, /* Not used, as this is CAN classic, not CAN XL */
                                     PACKET_TYPE_CAN);
 }
 
@@ -858,7 +858,7 @@ static int
 dissect_socketcan_fd(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_) {
     return dissect_socketcan_common(tvb, pinfo, tree,
                                     byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
-                                    byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
+                                    ENC_HOST_ENDIAN, /* Not used, as this is CAN FD, not CAN XL */
                                     PACKET_TYPE_CAN_FD);
 }
 
@@ -866,7 +866,7 @@ static int
 dissect_socketcan_xl(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_) {
     return dissect_socketcan_common(tvb, pinfo, tree,
                                     byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
-                                    byte_swap ? ENC_ANTI_HOST_ENDIAN : ENC_HOST_ENDIAN,
+                                    ENC_HOST_ENDIAN,
                                     PACKET_TYPE_CAN_XL);
 }
 
@@ -1018,7 +1018,7 @@ proto_register_socketcan(void) {
     prefs_register_obsolete_preference(can_module, "protocol");
 
     prefs_register_bool_preference(can_module, "byte_swap", "Byte-swap the CAN ID/flags field",
-        "Whether the CAN ID/flags field should be byte-swapped",
+        "Whether the CAN ID/flags field should be byte-swapped in CAN classic and CAN FD packets",
         &byte_swap);
 
     prefs_register_bool_preference(can_module, "try_heuristic_first", "Try heuristic sub-dissectors first",
