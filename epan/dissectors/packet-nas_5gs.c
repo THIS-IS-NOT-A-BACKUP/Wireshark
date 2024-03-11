@@ -62,7 +62,6 @@ static guint16 de_nas_5gs_mm_req_type(tvbuff_t *tvb, proto_tree *tree, packet_in
 static dissector_handle_t nas_5gs_handle;
 static dissector_handle_t eap_handle;
 static dissector_handle_t nas_eps_handle;
-static dissector_handle_t nas_eps_plain_handle;
 static dissector_handle_t lpp_handle;
 static dissector_handle_t gsm_a_dtap_handle;
 static dissector_handle_t ipv4_handle;
@@ -10245,7 +10244,7 @@ const value_string nas_5gs_pdu_session_id_vals[] = {
 };
 
 static int
-dissect_nas_5gs_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, void* data _U_)
+dissect_nas_5gs_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, void* data)
 {
     proto_tree *sub_tree;
     guint32 epd;
@@ -10282,6 +10281,10 @@ dissect_nas_5gs_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int 
         proto_tree_add_item(sub_tree, hf_nas_5gs_proc_trans_id, tvb, offset, 1, ENC_BIG_ENDIAN);
         break;
     default:
+        if ((epd & 0xf) == 15 && gsm_a_dtap_handle) {
+            /* dissect Test Procedure messages */
+            return call_dissector_with_data(gsm_a_dtap_handle, tvb_new_subset_remaining(tvb, offset - 1), pinfo, sub_tree, data);
+        }
         proto_tree_add_expert_format(sub_tree, pinfo, &ei_nas_5gs_unknown_pd, tvb, offset, -1, "Not a NAS 5GS PD %u (%s)",
             epd, val_to_str_const(epd, nas_5gs_epd_vals, "Unknown"));
         return 0;
@@ -13998,7 +14001,6 @@ proto_reg_handoff_nas_5gs(void)
         heur_dissector_add("udp", dissect_nas_5gs_heur, "NAS-5GS over UDP", "nas_5gs_udp", proto_nas_5gs, HEURISTIC_DISABLE);
         eap_handle = find_dissector("eap");
         nas_eps_handle = find_dissector("nas-eps");
-        nas_eps_plain_handle = find_dissector("nas-eps_plain");
         lpp_handle = find_dissector("lpp");
         gsm_a_dtap_handle = find_dissector("gsm_a_dtap");
         ipv4_handle = find_dissector("ip");
