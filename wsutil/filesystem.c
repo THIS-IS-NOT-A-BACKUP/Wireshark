@@ -596,7 +596,7 @@ get_executable_path(const char *program_name)
  * g_mallocated string containing an error on failure.
  */
 #ifdef _WIN32
-char *
+static char *
 configuration_init_w32(const char* arg0 _U_)
 {
     TCHAR prog_pathname_w[_MAX_PATH+2];
@@ -681,7 +681,7 @@ configuration_init_w32(const char* arg0 _U_)
 
 #else /* !_WIN32 */
 
-char *
+static char *
 configuration_init_posix(const char* arg0)
 {
     const char *execname;
@@ -1168,47 +1168,22 @@ init_plugin_dir(void)
          * Let {WIRESHARK,LOGRAY}_PLUGIN_DIR take precedence.
          */
         plugin_dir = g_strdup(g_getenv(plugin_dir_envar));
-        return;
     }
 
 #if defined(HAVE_PLUGINS) || defined(HAVE_LUA)
 #if defined(HAVE_MSYSTEM)
-    if (running_in_build_directory_flag) {
+    else if (running_in_build_directory_flag) {
         plugin_dir = g_build_filename(install_prefix, "plugins", (char *)NULL);
     } else {
         plugin_dir = g_build_filename(install_prefix, PLUGIN_DIR, (char *)NULL);
     }
 #elif defined(_WIN32)
-    /*
-     * On Windows, the data file directory is the installation
-     * directory; the plugins are stored under it.
-     *
-     * Assume we're running the installed version of Wireshark;
-     * on Windows, the data file directory is the directory
-     * in which the Wireshark binary resides.
-     */
-    plugin_dir = g_build_filename(get_datafile_dir(), "plugins", (char *)NULL);
-
-    /*
-     * Make sure that pathname refers to a directory.
-     */
-    if (test_for_directory(plugin_dir) != EISDIR) {
+    else {
         /*
-         * Either it doesn't refer to a directory or it
-         * refers to something that doesn't exist.
-         *
-         * Assume that means we're running a version of
-         * Wireshark we've built in a build directory,
-         * in which case {datafile dir}\plugins is the
-         * top-level plugins source directory, and use
-         * that directory and set the "we're running in
-         * a build directory" flag, so the plugin
-         * scanner will check all subdirectories of that
-         * directory for plugins.
+         * On Windows, plugins are stored under the program file directory
+         * in both the build and the installation directories.
          */
-        g_free(plugin_dir);
-        plugin_dir = g_build_filename(get_datafile_dir(), "plugins", (char *)NULL);
-        running_in_build_directory_flag = true;
+        plugin_dir = g_build_filename(get_progfile_dir(), "plugins", (char *)NULL);
     }
 #else
 #ifdef ENABLE_APPLICATION_BUNDLE
@@ -1225,7 +1200,7 @@ init_plugin_dir(void)
         plugin_dir = g_build_filename(appbundle_dir, "Contents/PlugIns",
                                         CONFIGURATION_NAMESPACE_LOWER, (char *)NULL);
     }
-#endif
+#endif // ENABLE_APPLICATION_BUNDLE
     else if (running_in_build_directory_flag) {
         /*
          * We're (probably) being run from the build directory and
@@ -1237,7 +1212,7 @@ init_plugin_dir(void)
     } else {
         plugin_dir = g_build_filename(install_prefix, PLUGIN_DIR, (char *)NULL);
     }
-#endif
+#endif // HAVE_MSYSTEM / _WIN32
 #endif /* defined(HAVE_PLUGINS) || defined(HAVE_LUA) */
 }
 
@@ -1280,7 +1255,7 @@ get_plugins_pers_dir(void)
  * If the WIRESHARK_EXTCAP_DIR environment variable is set and we are not
  * running with special privileges, use that. Otherwise:
  *
- * On Windows, we use the "extcap" subdirectory of the datafile directory.
+ * On Windows, we use the "extcap" subdirectory of the program directory.
  *
  * On UN*X:
  *
@@ -1315,25 +1290,14 @@ init_extcap_dir(void)
 #elif defined(_WIN32)
     else {
         /*
-         * On Windows, the data file directory is the installation
-         * directory; the extcap hooks are stored under it.
-         *
-         * Assume we're running the installed version of Wireshark;
-         * on Windows, the data file directory is the directory
-         * in which the Wireshark binary resides.
+         * On Windows, extcap utilities are stored in "extcap/<program name>"
+         * in the program file directory in both the build and installation
+         * directories.
          */
-        extcap_dir = g_build_filename(get_datafile_dir(), "extcap", (char *)NULL);
+        extcap_dir = g_build_filename(get_progfile_dir(), EXTCAP_DIR_NAME,
+            CONFIGURATION_NAMESPACE_LOWER, (char *)NULL);
     }
 #else
-    else if (running_in_build_directory_flag) {
-        /*
-         * We're (probably) being run from the build directory and
-         * weren't started with special privileges, so we'll use
-         * the "extcap hooks" subdirectory of the directory where the program
-         * we're running is (that's the build directory).
-         */
-        extcap_dir = g_build_filename(get_progfile_dir(), "extcap", (char *)NULL);
-    }
 #ifdef ENABLE_APPLICATION_BUNDLE
     else if (appbundle_dir != NULL) {
         /*
@@ -1347,11 +1311,22 @@ init_extcap_dir(void)
          */
         extcap_dir = g_build_filename(appbundle_dir, "Contents/MacOS/extcap", (char *)NULL);
     }
-#endif
-    else {
-        extcap_dir = g_build_filename(install_prefix, EXTCAP_DIR, (char *)NULL);
+#endif // ENABLE_APPLICATION_BUNDLE
+    else if (running_in_build_directory_flag) {
+        /*
+         * We're (probably) being run from the build directory and
+         * weren't started with special privileges, so we'll use
+         * the "extcap hooks" subdirectory of the directory where the program
+         * we're running is (that's the build directory).
+         */
+        extcap_dir = g_build_filename(get_progfile_dir(), EXTCAP_DIR_NAME,
+            CONFIGURATION_NAMESPACE_LOWER, (char *)NULL);
     }
-#endif
+    else {
+        extcap_dir = g_build_filename(install_prefix,
+            is_packet_configuration_namespace() ? EXTCAP_DIR : LOG_EXTCAP_DIR, (char *)NULL);
+    }
+#endif // HAVE_MSYSTEM / _WIN32
 }
 
 static void
