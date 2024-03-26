@@ -981,16 +981,16 @@ void IOGraphDialog::updateLegend()
 
     // Nothing.
     if (vu_label_set.size() < 1) {
+        iop->legend->layer()->replot();
         return;
     }
 
     // All the same. Use the Y Axis label.
     if (vu_label_set.size() == 1) {
         iop->yAxis->setLabel(vu_label_set.values()[0] + "/" + intervalText);
-        return;
     }
 
-    // Differing labels. Create a legend with a Title label at top.
+    // Create a legend with a Title label at top.
     // Legend Title thanks to: https://www.qcustomplot.com/index.php/support/forum/443
     QCPTextElement* legendTitle = qobject_cast<QCPTextElement*>(iop->legend->elementAt(0));
     if (legendTitle == NULL) {
@@ -1020,6 +1020,7 @@ void IOGraphDialog::updateLegend()
     else {
         iop->legend->setVisible(false);
     }
+    iop->legend->layer()->replot();
 }
 
 QRectF IOGraphDialog::getZoomRanges(QRect zoom_rect)
@@ -1297,6 +1298,17 @@ void IOGraphDialog::on_intervalComboBox_currentIndexChanged(int)
         precision_ = 0;
     }
 
+    // XXX - This is the default QCP date time format, but adding fractional
+    // seconds when our interval is small. Should we make it something else,
+    // like ISO 8601 (but still with a line break between time and date)?
+    // Note this is local time, with no time zone offset displayed. Should
+    // it be in UTC? (call setDateTimeSpec())
+    if (precision_) {
+        datetime_ticker_->setDateTimeFormat("hh:mm:ss.z\ndd.MM.yy");
+    } else {
+        datetime_ticker_->setDateTimeFormat("hh:mm:ss\ndd.MM.yy");
+    }
+
     if (uat_model_ != NULL) {
         for (int row = 0; row < uat_model_->rowCount(); row++) {
             IOGraph *iog = ioGraphs_.value(row, NULL);
@@ -1437,6 +1449,23 @@ void IOGraphDialog::on_moveUpwardsToolButton_clicked()
             ioGraphs_[current_row] = temp;
 
             uat_model_->moveRow(current_row, current_row - 1);
+
+            // setting a QCPLayerable to its current layer moves it to the
+            // end as though it were the last added. Do that for all the
+            // elements starting with the first one that changed.
+            // (moveToLayer() is the same thing but with a parameter to prepend
+            // instead, which would be faster if we're in the top half of the
+            // list, except that's a protected function. There's no function
+            // to swap layerables in a layer.)
+            for (int row = current_row - 1; row < uat_model_->rowCount(); row++) {
+                temp = ioGraphs_[row];
+                if (temp->graph()) {
+                    temp->graph()->setLayer(temp->graph()->layer());
+                } else if (temp->bars()) {
+                    temp->bars()->setLayer(temp->bars()->layer());
+                }
+            }
+            ui->ioPlot->replot();
         }
     }
 }
@@ -1454,6 +1483,16 @@ void IOGraphDialog::on_moveDownwardsToolButton_clicked()
             ioGraphs_[current_row] = temp;
 
             uat_model_->moveRow(current_row, current_row + 1);
+
+            for (int row = current_row; row < uat_model_->rowCount(); row++) {
+                temp = ioGraphs_[row];
+                if (temp->graph()) {
+                    temp->graph()->setLayer(temp->graph()->layer());
+                } else if (temp->bars()) {
+                    temp->bars()->setLayer(temp->bars()->layer());
+                }
+            }
+            ui->ioPlot->replot();
         }
     }
 }
@@ -1679,7 +1718,19 @@ void IOGraphDialog::makeCsv(QTextStream &stream) const
 
     for (int interval = 0; interval <= max_interval; interval++) {
         double interval_start = (double)interval * ((double)ui_interval / SCALE_F);
-        stream << interval_start;
+        if (qSharedPointerDynamicCast<QCPAxisTickerDateTime>(ui->ioPlot->xAxis->ticker()) != nullptr) {
+            interval_start += start_time_;
+            // XXX - If we support precision smaller than ms, we can't use
+            // QDateTime, and would use nstime_to_iso8601 or similar. (In such
+            // case we'd want to store the nstime_t version of start_time_ rather
+            // than immediately converting it to a double in tapPacket().)
+            // Should we convert to UTC for output, even if the graph axis has
+            // local time?
+            QDateTime interval_dt = QDateTime::fromMSecsSinceEpoch(int64_t(interval_start * 1000.0));
+            stream << interval_dt.toString(Qt::ISODateWithMs);
+        } else {
+            stream << interval_start;
+        }
         foreach (IOGraph *iog, activeGraphs) {
             double value = 0.0;
             if (interval <= iog->maxInterval()) {
@@ -2032,8 +2083,9 @@ int IOGraph::packetFromTime(double ts)
     if (idx >= 0 && idx <= cur_idx_) {
         switch (val_units_) {
         case IOG_ITEM_UNIT_CALC_MAX:
+            return items_[idx].max_frame_in_invl;
         case IOG_ITEM_UNIT_CALC_MIN:
-            return items_[idx].extreme_frame_in_invl;
+            return items_[idx].min_frame_in_invl;
         default:
             return items_[idx].last_frame_in_invl;
         }
@@ -2044,7 +2096,9 @@ int IOGraph::packetFromTime(double ts)
 void IOGraph::clearAllData()
 {
     cur_idx_ = -1;
-    reset_io_graph_items(&items_[0], items_.size());
+    if (items_.size()) {
+        reset_io_graph_items(&items_[0], items_.size(), hf_index_);
+    }
     if (graph_) {
         graph_->data()->clear();
     }
