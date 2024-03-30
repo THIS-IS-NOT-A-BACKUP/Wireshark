@@ -629,6 +629,9 @@ void IOGraphDialog::syncGraphSettings(int row)
 
     bool visible = graphIsEnabled(row);
     bool retap = !iog->visible() && visible;
+    // XXX - Do we really need to retap every time we make the graph
+    // visible from invisible? If we have tapped before and nothing
+    // has changed, we might be able to get away with only a recalc.
     QString data_str;
 
     iog->setName(uat_model_->data(uat_model_->index(row, colName)).toString());
@@ -1852,16 +1855,37 @@ void IOGraph::setFilter(const QString &filter)
         }
     }
 
-    error_string = set_tap_dfilter(this, full_filter.toUtf8().constData());
-    if (error_string) {
-        config_err_ = error_string->str;
-        g_string_free(error_string, TRUE);
-        return;
-    } else {
-        if (filter_.compare(filter) && visible_) {
+    if (full_filter_.compare(full_filter)) {
+        error_string = set_tap_dfilter(this, full_filter.toUtf8().constData());
+        if (error_string) {
+            config_err_ = error_string->str;
+            g_string_free(error_string, TRUE);
+            return;
+        }
+
+        filter_ = filter;
+        full_filter_ = full_filter;
+        /* If we changed the tap filter the graph is visible, we need to
+         * retap. (If it's not visible, we'll retap when it becomes
+         * visible, see syncGraphSettings.) Note that setting the tap
+         * dfilter will mark the tap as needing a redraw, which will
+         * cause a recalculation (via tapDraw) via the (fairly long)
+         * main application timer.
+         */
+        /* XXX - When changing from an advanced graph to one that doesn't
+         * use the field, we don't actually need to retap if filter and
+         * full_filter produce the same results. (We do have to retap
+         * regardless if changing _to_ an advanced graph, because the
+         * extra fields in the io_graph_item_t aren't filled in from the
+         * edt for the basic graph.)
+         * Checking that in full generality would require more optimization
+         * in the dfilter engine plus functions to compare filters, but
+         * we could test the simple case where filter and vu_field are
+         * the same string.
+         */
+        if (visible_) {
             emit requestRetap();
         }
-        filter_ = filter;
     }
 }
 
@@ -1886,7 +1910,14 @@ void IOGraph::setVisible(bool visible)
         bars_->setVisible(visible_);
     }
     if (old_visibility != visible_) {
-        emit requestReplot();
+        // XXX - If the number of enabled graphs changed to or from 1, we
+        // need to recalculate to possibly change the rescaling. (This is
+        // why QCP recommends doing scaling in the axis ticker instead.)
+        // If we can't determined number of enabled graphs here, always
+        // request a recalculation instead of a replot. (At least until we
+        // change the scaling to be done in the ticker.)
+        //emit requestReplot();
+        emit requestRecalc();
     }
 }
 
@@ -1901,7 +1932,7 @@ void IOGraph::setName(const QString &name)
     }
 }
 
-QRgb IOGraph::color()
+QRgb IOGraph::color() const
 {
     return color_.color().rgb();
 }
@@ -2014,7 +2045,7 @@ void IOGraph::setPlotStyle(int style)
     applyCurrentColor();
 }
 
-const QString IOGraph::valueUnitLabel()
+QString IOGraph::valueUnitLabel() const
 {
     return val_to_str_const(val_units_, y_axis_vs, "Unknown");
 }
@@ -2026,8 +2057,18 @@ void IOGraph::setValueUnits(int val_units)
         val_units_ = (io_graph_item_unit_t)val_units;
 
         if (old_val_units != val_units) {
+            // If val_units changed, switching between a type that doesn't
+            // use the vu_field/hfi/edt to one of the advanced graphs that
+            // does requires a retap. setFilter will handle that.
+            // XXX - If we are switching between LOAD and one of the
+            // other advanced graphs, we also need to retap because
+            // LOAD doesn't fill in the io_graph_item_t the same way.
+            // We don't do that currently.
             setFilter(filter_); // Check config & prime vu field
             if (val_units < IOG_ITEM_UNIT_CALC_SUM) {
+                // XXX - Is this necessary? Won't modelDataChanged()
+                // always be called for colYAxis and that schedule
+                // a recalculation?
                 emit requestRecalc();
             }
         }
@@ -2047,6 +2088,8 @@ void IOGraph::setValueUnitField(const QString &vu_field)
     }
 
     if (old_hf_index != hf_index_) {
+        // If the field changed, and val_units is a type that uses it,
+        // we need to retap. setFilter will handle that.
         setFilter(filter_); // Check config & prime vu field
     }
 }
@@ -2073,7 +2116,7 @@ bool IOGraph::removeFromLegend()
     return false;
 }
 
-double IOGraph::startOffset()
+double IOGraph::startOffset() const
 {
     if (graph_ && qSharedPointerDynamicCast<QCPAxisTickerDateTime>(graph_->keyAxis()->ticker()) && graph_->data()->size() > 0) {
         return graph_->data()->at(0)->key;
@@ -2084,7 +2127,7 @@ double IOGraph::startOffset()
     return 0.0;
 }
 
-int IOGraph::packetFromTime(double ts)
+int IOGraph::packetFromTime(double ts) const
 {
     int idx = ts * SCALE_F / interval_;
     if (idx >= 0 && idx <= cur_idx_) {
@@ -2198,8 +2241,9 @@ void IOGraph::recalcGraphData(capture_file *cap_file, bool enable_scaling)
 //        qDebug() << "=rgd i" << i << ts << val;
     }
 
-    // attempt to rescale time values to specific units
-    if (enable_scaling) {
+    // attempt to rescale time values to specific units if this
+    // is the only enabled graph
+    if (enable_scaling && visible_) {
         calculateScaledValueUnit();
     } else {
         scaled_value_unit_.clear();
