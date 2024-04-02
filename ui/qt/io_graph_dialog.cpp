@@ -61,12 +61,18 @@
 
 // To do:
 // - Use scroll bars?
+//   https://www.qcustomplot.com/index.php/tutorials/specialcases/scrollbar
 // - Scroll during live captures
 // - Set ticks per pixel (e.g. pressing "2" sets 2 tpp).
 // - Explicitly handle missing values, e.g. via NAN.
 // - Add a "show missing" or "show zero" option to the UAT?
 //   It would add yet another graph configuration column.
 // - Increase max number of items (or make configurable)
+// - Dark Mode support, e.g.
+//   https://www.qcustomplot.com/index.php/demos/barchartdemo
+// - Multiple y-axes?
+//   https://www.qcustomplot.com/index.php/demos/multiaxisdemo
+//   https://www.qcustomplot.com/index.php/tutorials/specialcases/axistags
 
 // Scale factor to convert the units the interval is stored in to seconds.
 // Must match what get_io_graph_index() in io_graph_item expects.
@@ -1367,6 +1373,12 @@ void IOGraphDialog::on_graphUat_currentItemChanged(const QModelIndex &current, c
         ui->clearToolButton->setEnabled(true);
         ui->moveUpwardsToolButton->setEnabled(true);
         ui->moveDownwardsToolButton->setEnabled(true);
+        if (graphIsEnabled(current.row())) {
+            // Try to set the tracer to the new current graph.
+            // If it's not enabled, don't try to switch from the
+            // old graph to the one in the first row.
+            getGraphInfo();
+        }
     } else {
         ui->deleteToolButton->setEnabled(false);
         ui->copyToolButton->setEnabled(false);
