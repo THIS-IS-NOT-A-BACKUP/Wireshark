@@ -12,8 +12,6 @@
 
 #include <config.h>
 
-#include <glib.h>
-
 #include "epan/epan_dissect.h"
 #include "epan/prefs.h"
 #include "ui/preference_utils.h"
@@ -67,7 +65,7 @@ public:
     QString name() const { return name_; }
     void setName(const QString &name);
     QString filter() const { return filter_; }
-    void setFilter(const QString &filter);
+    bool setFilter(const QString &filter);
     void applyCurrentColor();
     bool visible() const { return visible_; }
     void setVisible(bool visible);
@@ -189,7 +187,7 @@ private:
     QString hint_err_;
     QCPGraph *base_graph_;
     QCPItemTracer *tracer_;
-    guint32 packet_num_;
+    uint32_t packet_num_;
     double start_time_;
     bool mouse_drags_;
     QRubberBand *rubber_band_;
