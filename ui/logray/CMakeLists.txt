@@ -44,6 +44,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	../qt/widgets/path_selection_edit.h
 	../qt/widgets/pref_module_view.h
 	../qt/widgets/profile_tree_view.h
+	../qt/widgets/qcp_axis_ticker_si.h
 	../qt/widgets/qcp_string_legend_item.h
 	../qt/widgets/range_syntax_lineedit.h
 	../qt/widgets/resolved_addresses_view.h
@@ -79,6 +80,7 @@ set(WIRESHARK_UTILS_HEADERS
 	../qt/utils/field_information.h
 	../qt/utils/frame_information.h
 	../qt/utils/idata_printable.h
+	../qt/utils/profile_switcher.h
 	../qt/utils/proto_node.h
 	../qt/utils/qt_ui_utils.h
 	../qt/utils/stock_icon.h
@@ -273,6 +275,7 @@ set(WIRESHARK_WIDGET_SRCS
 	../qt/widgets/path_selection_edit.cpp
 	../qt/widgets/pref_module_view.cpp
 	../qt/widgets/profile_tree_view.cpp
+	../qt/widgets/qcp_axis_ticker_si.cpp
 	../qt/widgets/qcp_string_legend_item.cpp
 	../qt/widgets/range_syntax_lineedit.cpp
 	../qt/widgets/resolved_addresses_view.cpp
@@ -307,6 +310,7 @@ set(WIRESHARK_UTILS_SRCS
 	../qt/utils/data_printer.cpp
 	../qt/utils/field_information.cpp
 	../qt/utils/frame_information.cpp
+	../qt/utils/profile_switcher.cpp
 	../qt/utils/proto_node.cpp
 	../qt/utils/qt_ui_utils.cpp
 	../qt/utils/stock_icon.cpp

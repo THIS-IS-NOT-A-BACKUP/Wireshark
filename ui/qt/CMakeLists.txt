@@ -45,6 +45,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	widgets/path_selection_edit.h
 	widgets/pref_module_view.h
 	widgets/profile_tree_view.h
+	widgets/qcp_axis_ticker_si.h
 	widgets/qcp_string_legend_item.h
 	widgets/range_syntax_lineedit.h
 	widgets/resolved_addresses_view.h
@@ -75,6 +76,7 @@ set(WIRESHARK_UTILS_HEADERS
 	utils/field_information.h
 	utils/frame_information.h
 	utils/idata_printable.h
+	utils/profile_switcher.h
 	utils/proto_node.h
 	utils/qt_ui_utils.h
 	utils/rtp_audio_file.h
@@ -308,6 +310,7 @@ set(WIRESHARK_WIDGET_SRCS
 	widgets/path_selection_edit.cpp
 	widgets/pref_module_view.cpp
 	widgets/profile_tree_view.cpp
+	widgets/qcp_axis_ticker_si.cpp
 	widgets/qcp_string_legend_item.cpp
 	widgets/range_syntax_lineedit.cpp
 	widgets/resolved_addresses_view.cpp
@@ -337,6 +340,7 @@ set(WIRESHARK_UTILS_SRCS
 	utils/data_printer.cpp
 	utils/field_information.cpp
 	utils/frame_information.cpp
+	utils/profile_switcher.cpp
 	utils/proto_node.cpp
 	utils/qt_ui_utils.cpp
 	utils/rtp_audio_file.cpp
