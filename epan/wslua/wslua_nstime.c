@@ -55,6 +55,7 @@ WSLUA_METAMETHOD NSTime__call(lua_State* L) { /* Creates a NSTime object. */
 
 WSLUA_METHOD NSTime_tonumber(lua_State* L) {
         /* Returns a Lua number of the `NSTime` representing seconds from epoch
+
            @since 2.4.0
          */
         NSTime nstime = checkNSTime(L,1);
@@ -171,12 +172,12 @@ WSLUA_METAMETHOD NSTime__lt(lua_State* L) { /* Compares two NSTimes. */
 
 
 /* WSLUA_ATTRIBUTE NSTime_secs RW The NSTime seconds. */
-WSLUA_ATTRIBUTE_NUMBER_GETTER(NSTime,secs);
-WSLUA_ATTRIBUTE_NUMBER_SETTER(NSTime,secs,time_t);
+WSLUA_ATTRIBUTE_INTEGER_GETTER(NSTime,secs);
+WSLUA_ATTRIBUTE_INTEGER_SETTER(NSTime,secs,time_t);
 
 /* WSLUA_ATTRIBUTE NSTime_nsecs RW The NSTime nano seconds. */
-WSLUA_ATTRIBUTE_NUMBER_GETTER(NSTime,nsecs);
-WSLUA_ATTRIBUTE_NUMBER_SETTER(NSTime,nsecs,int);
+WSLUA_ATTRIBUTE_INTEGER_GETTER(NSTime,nsecs);
+WSLUA_ATTRIBUTE_INTEGER_SETTER(NSTime,nsecs,int);
 
 /* Gets registered as metamethod automatically by WSLUA_REGISTER_CLASS/META */
 static int NSTime__gc(lua_State* L) {
