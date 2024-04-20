@@ -10,10 +10,10 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(ilbc 0 1 0 0)
+set_module_info(g722 0 1 0 0)
 
 set(CODEC_SRC
-	iLBCdecode.c
+	G722decode.c
 )
 
 set(PLUGIN_FILES
@@ -27,25 +27,25 @@ set_source_files_properties(
 	COMPILE_FLAGS "${WERROR_COMMON_FLAGS}"
 )
 
-register_codec_files(plugin.c 1
-	"Internet Low Bitrate Codec (iLBC)"
+register_plugin_files(plugin.c
+	plugin_codec
 	${CODEC_SRC}
 )
 
-add_wireshark_codec_plugin_library(ilbc)
+add_wireshark_plugin_library(g722 codecs)
 
-target_include_directories(ilbc PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
+target_include_directories(g722 PRIVATE ${CMAKE_SOURCE_DIR}/codecs)
 
-target_link_libraries(ilbc wsutil ${ILBC_LIBRARIES})
+target_link_libraries(g722 wsutil ${SPANDSP_LIBRARIES})
 
-target_include_directories(ilbc SYSTEM PRIVATE ${ILBC_INCLUDE_DIRS})
+target_include_directories(g722 SYSTEM PRIVATE ${SPANDSP_INCLUDE_DIRS})
 
-install_plugin(ilbc codecs)
+install_plugin(g722 codecs)
 
 file(GLOB CODEC_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
 CHECKAPI(
 	NAME
-	  ilbc
+	  g722
 	SWITCHES
 	SOURCES
 	  ${CODEC_SRC}
