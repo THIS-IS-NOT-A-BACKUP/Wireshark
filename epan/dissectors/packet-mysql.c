@@ -1957,18 +1957,18 @@ mysql_dissect_login(tvbuff_t *tvb, packet_info *pinfo, int offset,
 		proto_tree_add_item(login_tree, hf_mysql_max_packet, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 		offset += 4;
 
-		proto_tree_add_item(login_tree, conn_data->is_mariadb_server ? hf_mariadb_collation : hf_mysql_collation, tvb, offset, 2, ENC_LITTLE_ENDIAN);
-		offset += 2; /* for charset */
+		proto_tree_add_item(login_tree, conn_data->is_mariadb_server ? hf_mariadb_collation : hf_mysql_collation, tvb, offset, 1, ENC_NA);
+		offset += 1; /* for charset */
 
 		if (conn_data->is_mariadb_client){
 			/* 19 bytes unused */
-			proto_tree_add_item(login_tree, hf_mysql_unused, tvb, offset, 18, ENC_NA);
-			offset += 18;
+			proto_tree_add_item(login_tree, hf_mysql_unused, tvb, offset, 19, ENC_NA);
+			offset += 19;
 			offset= mariadb_dissect_caps_or_flags(tvb, offset, FT_UINT32, login_tree, hf_mariadb_extcaps_client, mariadb_extcaps_flags, &conn_data->mariadb_client_ext_caps);
 		} else {
 			/* 23 bytes unused */
-			proto_tree_add_item(login_tree, hf_mysql_unused, tvb, offset, 22, ENC_NA);
-			offset += 22;
+			proto_tree_add_item(login_tree, hf_mysql_unused, tvb, offset, 23, ENC_NA);
+			offset += 23;
 		}
 
 	} else { /* pre-4.1 */
@@ -2411,7 +2411,7 @@ mysql_dissect_request(tvbuff_t *tvb,packet_info *pinfo, int offset, proto_tree *
 		offset += lenstr;
 
 		if (tvb_reported_length_remaining(tvb, offset) > 0) {
-			proto_tree_add_item(req_tree, conn_data->is_mariadb_server ? hf_mariadb_collation : hf_mysql_collation, tvb, offset, 2, ENC_LITTLE_ENDIAN);
+			proto_tree_add_item(req_tree, conn_data->is_mariadb_server ? hf_mariadb_collation : hf_mysql_collation, tvb, offset, 1, ENC_NA);
 			offset += 2; /* for charset */
 		}
 		mysql_set_conn_state(pinfo, conn_data, RESPONSE_OK);
