@@ -126,6 +126,7 @@ typedef struct {
 #ifdef HAVE_KERBEROS
 	enc_key_t *last_decryption_key;
 	enc_key_t *last_added_key;
+	enc_key_t *current_ticket_key;
 	tvbuff_t *last_ticket_enc_part_tvb;
 #endif
 	gint save_encryption_key_parent_hf_index;
@@ -874,6 +875,22 @@ save_EncAPRepPart_subkey(tvbuff_t *tvb, int offset, int length,
 		return;
 	}
 
+	private_data->last_added_key->is_ap_rep_key = true;
+
+	if (private_data->last_decryption_key != NULL &&
+	    private_data->last_decryption_key->is_ticket_key)
+	{
+		enc_key_t *ak = private_data->last_added_key;
+		enc_key_t *tk = private_data->last_decryption_key;
+
+		/*
+		 * The enc_key_t structures and their strings
+		 * in pac_names are all allocated on wmem_epan_scope(),
+		 * so we don't need to copy the content.
+		 */
+		ak->pac_names = tk->pac_names;
+	}
+
 	kerberos_key_map_insert(kerberos_app_session_keys, private_data->last_added_key);
 }
 
@@ -892,7 +909,20 @@ save_EncTicketPart_key(tvbuff_t *tvb, int offset, int length,
 		       int parent_hf_index,
 		       int hf_index)
 {
+	kerberos_private_data_t *private_data = kerberos_get_private_data(actx);
+
 	save_encryption_key(tvb, offset, length, actx, tree, parent_hf_index, hf_index);
+
+	if (actx->pinfo->fd->visited) {
+		return;
+	}
+
+	if (private_data->last_added_key == NULL) {
+		return;
+	}
+
+	private_data->current_ticket_key = private_data->last_added_key;
+	private_data->current_ticket_key->is_ticket_key = true;
 }
 
 static void
@@ -3378,6 +3408,7 @@ dissect_krb5_decrypt_ticket_data (bool imp_tag _U_, tvbuff_t *tvb, int offset, a
 	if(plaintext){
 		kerberos_private_data_t *private_data = kerberos_get_private_data(actx);
 		tvbuff_t *last_ticket_enc_part_tvb = private_data->last_ticket_enc_part_tvb;
+		enc_key_t *current_ticket_key = private_data->current_ticket_key;
 		tvbuff_t *child_tvb;
 		child_tvb = tvb_new_child_real_data(tvb, plaintext, length, length);
 
@@ -3385,7 +3416,9 @@ dissect_krb5_decrypt_ticket_data (bool imp_tag _U_, tvbuff_t *tvb, int offset, a
 		add_new_data_source(actx->pinfo, child_tvb, "Krb5 Ticket");
 
 		private_data->last_ticket_enc_part_tvb = child_tvb;
+		private_data->current_ticket_key = NULL;
 		offset=dissect_kerberos_Applications(FALSE, child_tvb, 0, actx , tree, /* hf_index*/ -1);
+		private_data->current_ticket_key = current_ticket_key;
 		private_data->last_ticket_enc_part_tvb = last_ticket_enc_part_tvb;
 	}
 	return offset;
@@ -4065,8 +4098,9 @@ dissect_krb5_PAC_LOGON_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset, 
 	proto_item *item;
 	proto_tree *tree;
 	guint8 drep[4] = { 0x10, 0x00, 0x00, 0x00}; /* fake DREP struct */
-	static dcerpc_info di;      /* fake dcerpc_info struct */
-	static dcerpc_call_value call_data;
+	/* fake dcerpc_info struct */
+	dcerpc_call_value call_data = { .flags = 0, };
+	dcerpc_info di = { .ptype = UINT8_MAX, .call_data = &call_data, };
 
 	item = proto_tree_add_item(parent_tree, hf_krb_pac_logon_info, tvb, offset, -1, ENC_NA);
 	tree = proto_item_add_subtree(item, ett_krb_pac_logon_info);
@@ -4077,14 +4111,11 @@ dissect_krb5_PAC_LOGON_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset, 
 	offset = dissect_krb5_PAC_NDRHEADERBLOB(tree, tvb, offset, &drep[0], actx);
 
 	/* the PAC_LOGON_INFO blob */
-	/* fake whatever state the dcerpc runtime support needs */
-	di.conformant_run=0;
-	/* we need di->call_data->flags.NDR64 == 0 */
-	di.call_data=&call_data;
 	init_ndr_pointer_list(&di);
 	offset = dissect_ndr_pointer(tvb, offset, actx->pinfo, tree, &di, drep,
 									netlogon_dissect_PAC_LOGON_INFO, NDR_POINTER_UNIQUE,
 									"PAC_LOGON_INFO:", -1);
+	free_ndr_pointer_list(&di);
 
 	return offset;
 }
@@ -4156,8 +4187,9 @@ dissect_krb5_PAC_S4U_DELEGATION_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int
 	proto_item *item;
 	proto_tree *tree;
 	guint8 drep[4] = { 0x10, 0x00, 0x00, 0x00}; /* fake DREP struct */
-	static dcerpc_info di;      /* fake dcerpc_info struct */
-	static dcerpc_call_value call_data;
+	/* fake dcerpc_info struct */
+	dcerpc_call_value call_data = { .flags = 0, };
+	dcerpc_info di = { .ptype = UINT8_MAX, .call_data = &call_data, };
 
 	item = proto_tree_add_item(parent_tree, hf_krb_pac_s4u_delegation_info, tvb, offset, -1, ENC_NA);
 	tree = proto_item_add_subtree(item, ett_krb_pac_s4u_delegation_info);
@@ -4167,16 +4199,12 @@ dissect_krb5_PAC_S4U_DELEGATION_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int
 	 */
 	offset = dissect_krb5_PAC_NDRHEADERBLOB(tree, tvb, offset, &drep[0], actx);
 
-
 	/* the S4U_DELEGATION_INFO blob. See [MS-PAC] */
-	/* fake whatever state the dcerpc runtime support needs */
-	di.conformant_run=0;
-	/* we need di->call_data->flags.NDR64 == 0 */
-	di.call_data=&call_data;
 	init_ndr_pointer_list(&di);
 	offset = dissect_ndr_pointer(tvb, offset, actx->pinfo, tree, &di, drep,
 									netlogon_dissect_PAC_S4U_DELEGATION_INFO, NDR_POINTER_UNIQUE,
 									"PAC_S4U_DELEGATION_INFO:", -1);
+	free_ndr_pointer_list(&di);
 
 	return offset;
 }
@@ -4200,12 +4228,16 @@ static int * const hf_krb_pac_upn_flags_fields[] = {
 static int
 dissect_krb5_PAC_UPN_DNS_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset, asn1_ctx_t *actx _U_)
 {
+#ifdef HAVE_KERBEROS
+	kerberos_private_data_t *private_data = kerberos_get_private_data(actx);
+#endif /* HAVE_KERBEROS */
 	proto_item *item;
 	proto_tree *tree;
 	guint16 dns_offset, dns_len;
 	guint16 upn_offset, upn_len;
 	guint16 samaccountname_offset = 0, samaccountname_len = 0;
 	guint16 objectsid_offset = 0, objectsid_len = 0;
+	char *sid_str = NULL;
 	guint32 flags;
 
 	item = proto_tree_add_item(parent_tree, hf_krb_pac_upn_dns_info, tvb, offset, -1, ENC_NA);
@@ -4266,8 +4298,37 @@ dissect_krb5_PAC_UPN_DNS_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset
 	if (objectsid_offset != 0 && objectsid_len != 0) {
 		tvbuff_t *sid_tvb;
 		sid_tvb=tvb_new_subset_length(tvb, objectsid_offset, objectsid_len);
-		dissect_nt_sid(sid_tvb, 0, tree, "objectSid", NULL, -1);
+		dissect_nt_sid(sid_tvb, 0, tree, "objectSid", &sid_str, -1);
 	}
+
+#ifdef HAVE_KERBEROS
+	if (private_data->current_ticket_key != NULL) {
+		enc_key_t *ek = private_data->current_ticket_key;
+
+		if (samaccountname_offset != 0 && samaccountname_len != 0) {
+			ek->pac_names.account_name = tvb_get_string_enc(wmem_epan_scope(),
+									tvb,
+									samaccountname_offset,
+									samaccountname_len,
+									ENC_UTF_16|ENC_LITTLE_ENDIAN);
+		} else {
+			ek->pac_names.account_name = tvb_get_string_enc(wmem_epan_scope(),
+									tvb,
+									upn_offset,
+									upn_len,
+									ENC_UTF_16|ENC_LITTLE_ENDIAN);
+		}
+		ek->pac_names.account_domain = tvb_get_string_enc(wmem_epan_scope(),
+								  tvb,
+								  dns_offset,
+								  dns_len,
+								  ENC_UTF_16|ENC_LITTLE_ENDIAN);
+		if (sid_str != NULL) {
+			ek->pac_names.account_sid = wmem_strdup(wmem_epan_scope(),
+								sid_str);
+		}
+	}
+#endif /* HAVE_KERBEROS */
 
 	return dns_offset;
 }
@@ -4289,11 +4350,22 @@ dissect_krb5_PAC_CLIENT_CLAIMS_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int 
 static int
 dissect_krb5_PAC_DEVICE_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset, asn1_ctx_t *actx _U_)
 {
+#ifdef HAVE_KERBEROS
+	kerberos_private_data_t *private_data = kerberos_get_private_data(actx);
+	const char *device_sid = NULL;
+#endif /* HAVE_KERBEROS */
 	proto_item *item;
 	proto_tree *tree;
 	guint8 drep[4] = { 0x10, 0x00, 0x00, 0x00}; /* fake DREP struct */
-	static dcerpc_info di;      /* fake dcerpc_info struct */
-	static dcerpc_call_value call_data;
+	/* fake dcerpc_info struct */
+	dcerpc_call_value call_data = { .flags = 0, };
+	dcerpc_info di = { .ptype = UINT8_MAX, .call_data = &call_data, };
+
+#ifdef HAVE_KERBEROS
+	if (private_data->current_ticket_key != NULL) {
+		call_data.private_data = &device_sid;
+	}
+#endif /* HAVE_KERBEROS */
 
 	item = proto_tree_add_item(parent_tree, hf_krb_pac_device_info, tvb, offset, -1, ENC_NA);
 	tree = proto_item_add_subtree(item, ett_krb_pac_device_info);
@@ -4304,14 +4376,23 @@ dissect_krb5_PAC_DEVICE_INFO(proto_tree *parent_tree, tvbuff_t *tvb, int offset,
 	offset = dissect_krb5_PAC_NDRHEADERBLOB(tree, tvb, offset, &drep[0], actx);
 
 	/* the PAC_DEVICE_INFO blob */
-	/* fake whatever state the dcerpc runtime support needs */
-	di.conformant_run=0;
-	/* we need di->call_data->flags.NDR64 == 0 */
-	di.call_data=&call_data;
 	init_ndr_pointer_list(&di);
 	offset = dissect_ndr_pointer(tvb, offset, actx->pinfo, tree, &di, drep,
 				     netlogon_dissect_PAC_DEVICE_INFO, NDR_POINTER_UNIQUE,
 				     "PAC_DEVICE_INFO:", -1);
+	free_ndr_pointer_list(&di);
+
+#ifdef HAVE_KERBEROS
+	if (private_data->current_ticket_key != NULL) {
+		enc_key_t *ek = private_data->current_ticket_key;
+
+		/*
+		 * netlogon_dissect_PAC_DEVICE_INFO allocated on
+		 * wmem_epan_scope() for us
+		 */
+		ek->pac_names.device_sid = device_sid;
+	}
+#endif /* HAVE_KERBEROS */
 
 	return offset;
 }
