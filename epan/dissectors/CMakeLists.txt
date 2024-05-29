@@ -1778,6 +1778,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-riemann.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rip.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-ripng.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-rk512.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rlc-lte.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rlc-nr.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rlm.c
@@ -1839,6 +1840,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sapigs.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sapms.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sapni.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-saprfc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-saprouter.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sapsnc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sasp.c
