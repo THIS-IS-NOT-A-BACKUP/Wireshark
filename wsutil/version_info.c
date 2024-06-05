@@ -171,6 +171,17 @@ gather_zlib_compile_info(feature_list l)
 #endif /* HAVE_ZLIB */
 }
 
+void
+gather_zlib_ng_compile_info(feature_list l)
+{
+#ifdef HAVE_ZLIBNG
+	with_feature(l, "zlib-ng");
+#else
+	without_feature(l, "zlib-ng");
+#endif /* HAVE_ZLIB */
+}
+
+
 /*
  * Get various library compile-time versions, put them in a GString,
  * and return the GString.
