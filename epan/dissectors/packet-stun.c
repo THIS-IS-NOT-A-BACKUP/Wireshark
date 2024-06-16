@@ -539,7 +539,7 @@ static const value_string attributes[] = {
     {ICMP                  , "ICMP"},
     {MS_TURN_UNKNOWN_8006  , "MS-TURN UNKNOWN 8006"},
     {MS_VERSION            , "MS-VERSION"},
-    {MS_XOR_MAPPED_ADDRESS , "XOR-MAPPED-ADDRESS"},
+    {MS_XOR_MAPPED_ADDRESS , "MS-XOR-MAPPED-ADDRESS"},
     {SOFTWARE              , "SOFTWARE"},
     {ALTERNATE_SERVER      , "ALTERNATE-SERVER"},
     {TRANSACTION_TRANSMIT_COUNTER, "TRANSACTION-TRANSMIT-COUNTER"},
@@ -1842,13 +1842,6 @@ dissect_stun_heur_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void 
     dissect_stun_tcp(tvb, pinfo, tree, data);
     return true;
 }
-static gboolean
-dissect_stun_heur_udp_register(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
-{
-    if (dissect_stun_message(tvb, pinfo, tree, TRUE, TRUE) == 0)
-        return FALSE;
-    return TRUE;
-}
 
 static bool
 dissect_stun_heur_udp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_)
@@ -2265,7 +2258,6 @@ proto_register_stun(void)
 
     register_dissector("stun-tcp", dissect_stun_tcp, proto_stun);
     register_dissector("stun-udp", dissect_stun_udp, proto_stun);
-    register_dissector("stun-heur", dissect_stun_heur_udp_register, proto_stun);
 
     /* Register preferences */
     stun_module = prefs_register_protocol(proto_stun, NULL);
