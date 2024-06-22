@@ -21,6 +21,7 @@ use Exporter;
 @EXPORT_OK = qw(field2name %res PrintIdl StripPrefixes RegisterInterfaceHandoff register_hf_field CheckUsed ProcessImport ProcessInclude find_type DumpEttList DumpEttDeclaration DumpHfList DumpHfDeclaration DumpFunctionTable register_type register_ett);
 
 use strict;
+use warnings;
 use Parse::Pidl qw(error warning);
 use Parse::Pidl::Typelist qw(getType);
 use Parse::Pidl::Util qw(has_property property_matches make_str);
@@ -583,7 +584,7 @@ sub Function($$$)
 	my %dissectornames;
 
 	foreach (@{$fn->{ELEMENTS}}) {
-	    $dissectornames{$_->{NAME}} = $self->Element($_, $fn->{NAME}, $ifname, undef, undef) if not defined($dissectornames{$_->{NAME}});
+	    $dissectornames{$_->{NAME}} = $self->Element($_, $fn->{NAME}, $ifname, undef, ()) if not defined($dissectornames{$_->{NAME}});
 	}
 
 	my $fn_name = $_->{NAME};
@@ -813,7 +814,7 @@ sub Union($$$$)
 	foreach (@{$e->{ELEMENTS}}) {
 		$res.="\n\t\t$_->{CASE}:\n";
 		if ($_->{TYPE} ne "EMPTY") {
-			$res.="\t\t\t".$self->Element($_, $name, $ifname, undef, undef)."\n";
+			$res.="\t\t\t".$self->Element($_, $name, $ifname, undef, ())."\n";
 		}
 		$res.="\t\tbreak;\n";
 	}
@@ -1105,6 +1106,7 @@ sub Initialize($$)
 
 	$self->register_type("uint3264", "offset = dissect_ndr_uint3264(tvb, offset, pinfo, tree, di, drep, \@HF\@, NULL);", "FT_UINT32", "BASE_DEC", 0, "NULL", 8);
 	$self->register_type("hyper", "offset = dissect_ndr_uint64(tvb, offset, pinfo, tree, di, drep, \@HF\@, NULL);", "FT_UINT64", "BASE_DEC", 0, "NULL", 8);
+	$self->register_type("int64", "offset = dissect_ndr_uint64(tvb, offset, pinfo, tree, di, drep, \@HF\@, NULL);", "FT_INT64", "BASE_DEC", 0, "NULL", 8);
 	$self->register_type("udlong", "offset = dissect_ndr_duint32(tvb, offset, pinfo, tree, di, drep, \@HF\@, NULL);", "FT_UINT64", "BASE_DEC", 0, "NULL", 4);
 	$self->register_type("bool8", "offset = PIDL_dissect_uint8(tvb, offset, pinfo, tree, di, drep, \@HF\@, \@PARAM\@);","FT_INT8", "BASE_DEC", 0, "NULL", 1);
 	$self->register_type("char", "offset = PIDL_dissect_uint8(tvb, offset, pinfo, tree, di, drep, \@HF\@, \@PARAM\@);","FT_INT8", "BASE_DEC", 0, "NULL", 1);
