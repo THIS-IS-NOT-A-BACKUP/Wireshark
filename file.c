@@ -25,6 +25,7 @@
 #include <wsutil/wslog.h>
 #include <wsutil/ws_assert.h>
 #include <wsutil/version_info.h>
+#include <wsutil/report_message.h>
 
 #include <wiretap/merge.h>
 
@@ -1483,11 +1484,7 @@ cf_merge_files_to_tempfile(gpointer pd_window, const char *temp_dir, char **out_
         int in_file_count, const char *const *in_filenames,
         int file_type, gboolean do_append)
 {
-    int                        err      = 0;
-    gchar                     *err_info = NULL;
-    guint                      err_fileno;
-    guint32                    err_framenum;
-    merge_result               status;
+    bool                       status;
     merge_progress_callback_t  cb;
     callback_data_t           *cb_data = g_new0(callback_data_t, 1);
 
@@ -1503,58 +1500,16 @@ cf_merge_files_to_tempfile(gpointer pd_window, const char *temp_dir, char **out_
             in_filenames,
             in_file_count, do_append,
             IDB_MERGE_MODE_ALL_SAME, 0 /* snaplen */,
-            "Wireshark", &cb, &err, &err_info,
-            &err_fileno, &err_framenum);
+            "Wireshark", &cb);
 
     g_free(cb.data);
 
-    switch (status) {
-        case MERGE_OK:
-            break;
-
-        case MERGE_USER_ABORTED:
-            /* this isn't really an error, though we will return CF_ERROR later */
-            break;
-
-        case MERGE_ERR_CANT_OPEN_INFILE:
-            cfile_open_failure_alert_box(in_filenames[err_fileno], err, err_info);
-            break;
-
-        case MERGE_ERR_CANT_OPEN_OUTFILE:
-            cfile_dump_open_failure_alert_box(*out_filenamep, err, err_info,
-                    file_type);
-            break;
-
-        case MERGE_ERR_CANT_READ_INFILE:
-            cfile_read_failure_alert_box(in_filenames[err_fileno], err, err_info);
-            break;
-
-        case MERGE_ERR_BAD_PHDR_INTERFACE_ID:
-            simple_error_message_box("Record %u of \"%s\" has an interface ID that does not match any IDB in its file.",
-                    err_framenum, in_filenames[err_fileno]);
-            break;
-
-        case MERGE_ERR_CANT_WRITE_OUTFILE:
-            cfile_write_failure_alert_box(in_filenames[err_fileno],
-                    *out_filenamep, err, err_info,
-                    err_framenum, file_type);
-            break;
-
-        case MERGE_ERR_CANT_CLOSE_OUTFILE:
-            cfile_close_failure_alert_box(*out_filenamep, err, err_info);
-            break;
-
-        default:
-            simple_error_message_box("Unknown merge_files error %d", status);
-            break;
-    }
-
     cf_callback_invoke(cf_cb_file_merge_finished, NULL);
 
-    if (status != MERGE_OK) {
+    if (!status) {
         /* Callers aren't expected to treat an error or an explicit abort
-           differently - we put up error dialogs ourselves, so they don't
-           have to. */
+           differently - the merge code puts up error dialogs itself, so
+           they don't have to. */
         return CF_ERROR;
     } else
         return CF_OK;
