@@ -71,6 +71,8 @@ private slots:
     void yAxisChanged(QCPRange range);
     void showContextMenu(const QPoint &pos);
     void diagramClicked(QMouseEvent *event);
+    void axisDoubleClicked(QCPAxis *axis, QCPAxis::SelectablePart part, QMouseEvent *event);
+    void mouseReleased(QMouseEvent *event);
     void mouseMoved(QMouseEvent *event);
     void mouseWheeled(QWheelEvent *event);
 
