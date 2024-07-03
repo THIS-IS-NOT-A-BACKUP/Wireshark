@@ -2522,9 +2522,10 @@ finished_fwd:
      *
      * Note that a simple KeepAlive is not a retransmission
      */
+    gboolean seq_not_advanced = tcpd->fwd->tcp_analyze_seq_info->nextseq
+            && (LT_SEQ(seq, tcpd->fwd->tcp_analyze_seq_info->nextseq));
+
     if (seglen>0 || flags&(TH_SYN|TH_FIN)) {
-        gboolean seq_not_advanced = tcpd->fwd->tcp_analyze_seq_info->nextseq
-                && (LT_SEQ(seq, tcpd->fwd->tcp_analyze_seq_info->nextseq));
 
         guint64 t;
         guint64 ooo_thres;
@@ -2560,6 +2561,9 @@ finished_fwd:
 
         nextseq = seq+seglen;
 
+        if(!seq_not_advanced)
+            goto finished_checking_retransmission_type;
+
         gboolean precedence_count = tcp_fastrt_precedence;
         do {
             switch(precedence_count) {
@@ -2573,10 +2577,9 @@ finished_fwd:
                      */
                     t=(pinfo->abs_ts.secs-tcpd->rev->tcp_analyze_seq_info->lastacktime.secs)*1000000000;
                     t=t+(pinfo->abs_ts.nsecs)-tcpd->rev->tcp_analyze_seq_info->lastacktime.nsecs;
-                    if( seq_not_advanced
+                    if( t<20000000
                     &&  tcpd->rev->tcp_analyze_seq_info->dupacknum>=2
-                    &&  tcpd->rev->tcp_analyze_seq_info->lastack==seq
-                    &&  t<20000000 ) {
+                    &&  tcpd->rev->tcp_analyze_seq_info->lastack==seq) {
                         if(!tcpd->ta) {
                             tcp_analyze_get_acked_struct(pinfo->num, seq, ack, TRUE, tcpd);
                         }
@@ -2587,8 +2590,7 @@ finished_fwd:
                     /* Look for this segment in reported SACK ranges,
                      * if not present this might very well be a FAST Retrans,
                      * when the conditions above (timing, number of retrans) are still true */
-                    if( seq_not_advanced
-                    &&  t<20000000
+                    if( t<20000000
                     &&  tcpd->rev->tcp_analyze_seq_info->dupacknum>=2
                     &&  tcpd->rev->tcp_analyze_seq_info->num_sack_ranges > 0) {
 
@@ -2641,7 +2643,7 @@ finished_fwd:
                         ual=ual->next;
                     }
 
-                    if(seq_not_advanced && t < ooo_thres && !pk_already_seen) {
+                    if(t < ooo_thres && !pk_already_seen) {
                         /* ordinary OOO with SEQ numbers and lengths clearly stating the situation */
                         if( tcpd->fwd->tcp_analyze_seq_info->nextseq != (seq + seglen + (flags&(TH_SYN|TH_FIN) ? 1 : 0))) {
                             if(!tcpd->ta) {
@@ -2669,37 +2671,35 @@ finished_fwd:
             }
         } while (precedence_count!=tcp_fastrt_precedence) ;
 
-        if (seq_not_advanced) {
-            /* Then it has to be a generic retransmission */
-            if(!tcpd->ta) {
-                tcp_analyze_get_acked_struct(pinfo->num, seq, ack, TRUE, tcpd);
-            }
-            tcpd->ta->flags|=TCP_A_RETRANSMISSION;
+        /* Then it has to be a generic retransmission */
+        if(!tcpd->ta) {
+            tcp_analyze_get_acked_struct(pinfo->num, seq, ack, TRUE, tcpd);
+        }
+        tcpd->ta->flags|=TCP_A_RETRANSMISSION;
 
-            /*
-             * worst case scenario: if we don't have better than a recent packet,
-             * use it as the reference for RTO
-             */
-            nstime_delta(&tcpd->ta->rto_ts, &pinfo->abs_ts, &tcpd->fwd->tcp_analyze_seq_info->nextseqtime);
-            tcpd->ta->rto_frame=tcpd->fwd->tcp_analyze_seq_info->nextseqframe;
+        /*
+         * worst case scenario: if we don't have better than a recent packet,
+         * use it as the reference for RTO
+         */
+        nstime_delta(&tcpd->ta->rto_ts, &pinfo->abs_ts, &tcpd->fwd->tcp_analyze_seq_info->nextseqtime);
+        tcpd->ta->rto_frame=tcpd->fwd->tcp_analyze_seq_info->nextseqframe;
 
-            /*
-             * better case scenario: if we have a list of the previous unacked packets,
-             * go back to the eldest one, which in theory is likely to be the one retransmitted here.
-             * It's not always the perfect match, particularly when original captured packet used LSO
-             * We may parse this list and try to find an obvious matching packet present in the
-             * capture. If such packet is actually missing, we'll reach the list first entry.
-             * See : issue #12259
-             * See : issue #17714
-             */
-            ual = tcpd->fwd->tcp_analyze_seq_info->segments;
-            while(ual) {
-                if(GE_SEQ(ual->seq, seq)) {
-                    nstime_delta(&tcpd->ta->rto_ts, &pinfo->abs_ts, &ual->ts );
-                    tcpd->ta->rto_frame=ual->frame;
-                }
-                ual=ual->next;
+        /*
+         * better case scenario: if we have a list of the previous unacked packets,
+         * go back to the eldest one, which in theory is likely to be the one retransmitted here.
+         * It's not always the perfect match, particularly when original captured packet used LSO
+         * We may parse this list and try to find an obvious matching packet present in the
+         * capture. If such packet is actually missing, we'll reach the list first entry.
+         * See : issue #12259
+         * See : issue #17714
+         */
+        ual = tcpd->fwd->tcp_analyze_seq_info->segments;
+        while(ual) {
+            if(GE_SEQ(ual->seq, seq)) {
+                nstime_delta(&tcpd->ta->rto_ts, &pinfo->abs_ts, &ual->ts );
+                tcpd->ta->rto_frame=ual->frame;
             }
+            ual=ual->next;
         }
     }
 
@@ -10244,6 +10244,10 @@ proto_register_tcp(void)
     register_conversation_table(proto_mptcp, FALSE, mptcpip_conversation_packet, tcpip_endpoint_packet);
     register_follow_stream(proto_tcp, "tcp_follow", tcp_follow_conv_filter, tcp_follow_index_filter, tcp_follow_address_filter,
                             tcp_port_to_display, follow_tcp_tap_listener, get_tcp_stream_count, NULL);
+
+    tcp_tap = register_tap("tcp");
+    tcp_follow_tap = register_tap("tcp_follow");
+    mptcp_tap = register_tap("mptcp");
 }
 
 void
@@ -10253,8 +10257,6 @@ proto_reg_handoff_tcp(void)
     dissector_add_for_decode_as_with_preference("udp.port", tcp_handle);
     data_handle = find_dissector("data");
     sport_handle = find_dissector("sport");
-    tcp_tap = register_tap("tcp");
-    tcp_follow_tap = register_tap("tcp_follow");
 
     capture_dissector_add_uint("ip.proto", IP_PROTO_TCP, tcp_cap_handle);
 
@@ -10288,7 +10290,6 @@ proto_reg_handoff_tcp(void)
     /* Common handle for all the unknown/unsupported TCP options */
     tcp_opt_unknown_handle = create_dissector_handle( dissect_tcpopt_unknown, proto_tcp_option_unknown );
 
-    mptcp_tap = register_tap("mptcp");
     exported_pdu_tap = find_tap_id(EXPORT_PDU_TAP_NAME_LAYER_4);
 
     proto_ip = proto_get_id_by_filter_name("ip");
