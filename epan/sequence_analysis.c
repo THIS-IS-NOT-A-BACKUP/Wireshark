@@ -11,6 +11,7 @@
  */
 
 #include "config.h"
+#define WS_LOG_DOMAIN LOG_DOMAIN_EPAN
 
 #include "sequence_analysis.h"
 
@@ -163,7 +164,7 @@ sequence_analysis_info_new(void)
 {
     seq_analysis_info_t *sainfo = g_new0(seq_analysis_info_t, 1);
 
-    /* SEQ_ANALYSIS_DEBUG("adding new item"); */
+    ws_noisy("adding new item");
     sainfo->items = g_queue_new();
     sainfo->ht= g_hash_table_new(g_direct_hash, g_direct_equal);
     return sainfo;
@@ -173,7 +174,7 @@ void sequence_analysis_info_free(seq_analysis_info_t *sainfo)
 {
     if (!sainfo) return;
 
-    /* SEQ_ANALYSIS_DEBUG("%d items", g_queue_get_length(sainfo->items)); */
+    ws_noisy("%d items", g_queue_get_length(sainfo->items));
     sequence_analysis_list_free(sainfo);
 
     g_queue_free(sainfo->items);
@@ -234,7 +235,7 @@ void
 sequence_analysis_list_free(seq_analysis_info_t *sainfo)
 {
     if (!sainfo) return;
-    /* SEQ_ANALYSIS_DEBUG("%d items", g_queue_get_length(sainfo->items)); */
+    ws_noisy("%d items", g_queue_get_length(sainfo->items));
 
     /* free the graph data items */
 
@@ -627,11 +628,11 @@ sequence_analysis_dump_to_file(FILE  *of, seq_analysis_info_t *sainfo, unsigned 
         fprintf(of, "%s\n", tmp_str->str);
     }
 
-    g_string_free(label_string, true);
-    g_string_free(empty_line, true);
-    g_string_free(separator_line, true);
-    g_string_free(tmp_str, true);
-    g_string_free(tmp_str2, true);
+    g_string_free(label_string, TRUE);
+    g_string_free(empty_line, TRUE);
+    g_string_free(separator_line, TRUE);
+    g_string_free(tmp_str, TRUE);
+    g_string_free(tmp_str2, TRUE);
 }
 
 /*
