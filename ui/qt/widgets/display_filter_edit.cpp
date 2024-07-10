@@ -89,16 +89,20 @@ DisplayFilterEdit::DisplayFilterEdit(QWidget *parent, DisplayFilterEditType type
     setCompleter(new QCompleter(completion_model_, this));
     setCompletionTokenChars(fld_abbrev_chars_);
 
+    // Add a margin so that the QLineEdit border is visible even with a
+    // non-transparent background (to block the Syntax color highlighting.)
+    int frameWidth = style()->pixelMetric(QStyle::PM_DefaultFrameWidth);
     QString buttonStyle = QString(
         "QToolButton {"
         "  border: none;"
-        "  background: transparent;" // Disables platform style on Windows.
-        "  padding: 0 0 0 0;"
+        "  background: palette(base);"
+        //"  background: transparent;" // Disables platform style on Windows.
+        "  margin: %1px;"
         "}"
         "QToolButton::menu-indicator {"
         "  image: none;"
         "}"
-    );
+    ).arg(frameWidth);
 
     leftAlignActions_ = recent.gui_geometry_leftalign_actions;
 
@@ -110,6 +114,8 @@ DisplayFilterEdit::DisplayFilterEdit(QWidget *parent, DisplayFilterEditType type
     bookmark_button_->setStyleSheet(buttonStyle);
     bookmark_button_->setVisible(false);
     bookmarks_enabled_ = true;
+
+    connect(bookmark_button_->menu(), &QMenu::aboutToShow, this, &DisplayFilterEdit::updateBookmarkMenu);
 
     // DisplayFilterToApply - the Main Window FilterComboBox
     // (always created before the app is initialized)
@@ -135,14 +141,9 @@ DisplayFilterEdit::DisplayFilterEdit(QWidget *parent, DisplayFilterEditType type
     }
 
     connect(this, &DisplayFilterEdit::textChanged, this,
-            static_cast<void (DisplayFilterEdit::*)(const QString &)>(&DisplayFilterEdit::checkFilter));
+            QOverload<const QString &>::of(&DisplayFilterEdit::checkFilter));
 
-    if (mainApp->isInitialized()) {
-        updateBookmarkMenu();
-    } else {
-        connect(mainApp, &MainApplication::appInitialized, this, &DisplayFilterEdit::updateBookmarkMenu);
-    }
-    connect(mainApp, &MainApplication::displayFilterListChanged, this, &DisplayFilterEdit::updateBookmarkMenu);
+    connect(mainApp, &MainApplication::displayFilterListChanged, this, [=](){ checkFilter(); });
     connect(mainApp, &MainApplication::preferencesChanged, this, [=](){ checkFilter(); });
 }
 
@@ -230,8 +231,16 @@ void DisplayFilterEdit::alignActionButtons()
         rightPadding = 0;
     }
 
+    // The border color is to match the divider line drawn below.
+    // Some platform styles have different QLineEdit borders for
+    // normal and selected, which this disables.
     SyntaxLineEdit::setStyleSheet(style_sheet_ + QString(
             "SyntaxLineEdit {"
+#ifdef Q_OS_MAC
+            "  border: 1px solid gray;"
+#else
+            "  border: 1px solid palette(shadow);"
+#endif
             "  padding-left: %1px;"
             "  padding-right: %2px;"
             "}"
@@ -345,7 +354,7 @@ void DisplayFilterEdit::paintEvent(QPaintEvent *evt) {
         }
 
         painter.drawLine(left_xpos, cr.top(), left_xpos, cr.bottom() + 1);
-        if (!text().isEmpty())
+        if (!text().isEmpty() && (clear_button_ || apply_button_))
             painter.drawLine(right_xpos, cr.top(), right_xpos, cr.bottom() + 1);
     }
 }
@@ -756,7 +765,7 @@ void DisplayFilterEdit::removeFilter()
         model.saveList();
     }
 
-    updateBookmarkMenu();
+    mainApp->emitAppSignal(MainApplication::DisplayFilterListChanged);
 }
 
 void DisplayFilterEdit::showFilters()
