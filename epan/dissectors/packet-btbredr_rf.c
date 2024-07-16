@@ -63,8 +63,8 @@ static int hf_packet_header_type_esco_br;
 static int hf_packet_header_type_esco_edr;
 static int hf_packet_header_type_acl_br;
 static int hf_packet_header_type_acl_edr;
-static int hf_packet_header_type_csb_br;
-static int hf_packet_header_type_csb_edr;
+static int hf_packet_header_type_cpb_br;
+static int hf_packet_header_type_cpb_edr;
 static int hf_packet_header_flow_control;
 static int hf_packet_header_acknowledge_indication;
 static int hf_packet_header_sequence_number;
@@ -77,8 +77,8 @@ static int hf_packet_header_broken_type_esco_br;
 static int hf_packet_header_broken_type_esco_edr;
 static int hf_packet_header_broken_type_acl_br;
 static int hf_packet_header_broken_type_acl_edr;
-static int hf_packet_header_broken_type_csb_br;
-static int hf_packet_header_broken_type_csb_edr;
+static int hf_packet_header_broken_type_cpb_br;
+static int hf_packet_header_broken_type_cpb_edr;
 static int hf_packet_header_broken_flow_control;
 static int hf_packet_header_broken_acknowledge_indication;
 static int hf_packet_header_broken_sequence_number;
@@ -184,8 +184,8 @@ static dissector_table_t  packet_type_esco_br_table;
 static dissector_table_t  packet_type_esco_edr_table;
 static dissector_table_t  packet_type_acl_br_table;
 static dissector_table_t  packet_type_acl_edr_table;
-static dissector_table_t  packet_type_csb_br_table;
-static dissector_table_t  packet_type_csb_edr_table;
+static dissector_table_t  packet_type_cpb_br_table;
+static dissector_table_t  packet_type_cpb_edr_table;
 
 static dissector_handle_t btlmp_handle;
 static dissector_handle_t btl2cap_handle;
@@ -203,8 +203,8 @@ typedef struct _device_info_t {
     int8_t   dir;
 } device_info_t;
 
-#define BDADDR_MASTER  0
-#define BDADDR_SLAVE   1
+#define BDADDR_CENTRAL  0
+#define BDADDR_PERIPHERAL   1
 
 typedef struct _btbredr_frame_info_t {
     unsigned retransmit : 1;      /* 0 = No, 1 = Retransmitted frame */
@@ -253,7 +253,7 @@ static const value_string payload_transport_rate_transport_vals[] = {
     { 0x01, "SCO" },
     { 0x02, "eSCO" },
     { 0x03, "ACL" },
-    { 0x04, "CSB" },
+    { 0x04, "CPB" },
     { 0,    NULL }
 };
 
@@ -261,7 +261,7 @@ static const value_string payload_transport_rate_transport_vals[] = {
 #define TRANSPORT_SCO   0x10
 #define TRANSPORT_eSCO  0x20
 #define TRANSPORT_ACL   0x30
-#define TRANSPORT_CSB   0x40
+#define TRANSPORT_CPB   0x40
 
 
 static const value_string payload_transport_rate_payload_vals[] = {
@@ -404,7 +404,7 @@ static const value_string packet_type_acl_edr_vals[] = {
     { 0,    NULL }
 };
 
-static const value_string packet_type_csb_br_vals[] = {
+static const value_string packet_type_cpb_br_vals[] = {
     { 0x00, "NULL" },
     { 0x01, "reserved" },
     { 0x02, "reserved" },
@@ -424,7 +424,7 @@ static const value_string packet_type_csb_br_vals[] = {
     { 0,    NULL }
 };
 
-static const value_string packet_type_csb_edr_vals[] = {
+static const value_string packet_type_cpb_edr_vals[] = {
     { 0x00, "NULL" },
     { 0x01, "reserved" },
     { 0x02, "reserved" },
@@ -560,7 +560,7 @@ lookup_connection_info(uint32_t interface_id, uint32_t adapter_id, uint32_t lap,
     if (!cinfo)
         return NULL;
     if (cinfo->interface_id != interface_id || cinfo->adapter_id != adapter_id ||
-        extract_lap(cinfo->bd_addr[BDADDR_MASTER]) != lap || cinfo->lt_addr != ltaddr)
+        extract_lap(cinfo->bd_addr[BDADDR_CENTRAL]) != lap || cinfo->lt_addr != ltaddr)
         return NULL;
     return cinfo;
 }
@@ -573,10 +573,10 @@ btbredr_rf_add_esco_link(connection_info_t *cinfo, packet_info *pinfo, uint8_t h
     wmem_tree_key_t key[6];
     if (!cinfo || !pinfo || ltaddr >= 8 || !ltaddr)
         return NULL;
-    lap = extract_lap(cinfo->bd_addr[BDADDR_MASTER]);
+    lap = extract_lap(cinfo->bd_addr[BDADDR_CENTRAL]);
     ecinfo = lookup_connection_info(cinfo->interface_id, cinfo->adapter_id, lap, ltaddr, pinfo->num);
-    if (ecinfo && (memcmp(cinfo->bd_addr[BDADDR_MASTER], ecinfo->bd_addr[BDADDR_MASTER], 6) ||
-                   memcmp(cinfo->bd_addr[BDADDR_SLAVE], ecinfo->bd_addr[BDADDR_SLAVE], 6) ||
+    if (ecinfo && (memcmp(cinfo->bd_addr[BDADDR_CENTRAL], ecinfo->bd_addr[BDADDR_CENTRAL], 6) ||
+                   memcmp(cinfo->bd_addr[BDADDR_PERIPHERAL], ecinfo->bd_addr[BDADDR_PERIPHERAL], 6) ||
                    !ecinfo->esco || ecinfo->escohandle != handle || ecinfo->escosize[0] != pktszms ||
                    ecinfo->escosize[1] != pktszsm))
         ecinfo = NULL;
@@ -588,8 +588,8 @@ btbredr_rf_add_esco_link(connection_info_t *cinfo, packet_info *pinfo, uint8_t h
     ecinfo->lt_addr        = ltaddr;
     ecinfo->timestamp      = cinfo->timestamp;
     ecinfo->btclock        = cinfo->btclock;
-    memcpy(ecinfo->bd_addr[BDADDR_MASTER], cinfo->bd_addr[BDADDR_MASTER], 6);
-    memcpy(ecinfo->bd_addr[BDADDR_SLAVE], cinfo->bd_addr[BDADDR_SLAVE], 6);
+    memcpy(ecinfo->bd_addr[BDADDR_CENTRAL], cinfo->bd_addr[BDADDR_CENTRAL], 6);
+    memcpy(ecinfo->bd_addr[BDADDR_PERIPHERAL], cinfo->bd_addr[BDADDR_PERIPHERAL], 6);
     ecinfo->escosize[0] = pktszms;
     ecinfo->escosize[1] = pktszsm;
     ecinfo->escohandle = handle;
@@ -618,13 +618,13 @@ btbredr_rf_remove_esco_link(connection_info_t *cinfo, packet_info *pinfo, uint8_
     wmem_tree_key_t key[6];
     if (!cinfo || !pinfo)
         return;
-    lap = extract_lap(cinfo->bd_addr[BDADDR_MASTER]);
+    lap = extract_lap(cinfo->bd_addr[BDADDR_CENTRAL]);
     for (uint32_t ltaddr = 1; ltaddr < 8; ++ltaddr) {
         ecinfo = lookup_connection_info(cinfo->interface_id, cinfo->adapter_id, lap, ltaddr, pinfo->num);
         if (!ecinfo)
             continue;
-        if (memcmp(cinfo->bd_addr[BDADDR_MASTER], ecinfo->bd_addr[BDADDR_MASTER], 6) ||
-            memcmp(cinfo->bd_addr[BDADDR_SLAVE], ecinfo->bd_addr[BDADDR_SLAVE], 6) ||
+        if (memcmp(cinfo->bd_addr[BDADDR_CENTRAL], ecinfo->bd_addr[BDADDR_CENTRAL], 6) ||
+            memcmp(cinfo->bd_addr[BDADDR_PERIPHERAL], ecinfo->bd_addr[BDADDR_PERIPHERAL], 6) ||
             !ecinfo->esco || ecinfo->escohandle != handle)
             continue;
         key[0].length = 1;
@@ -768,7 +768,7 @@ dissect_btbredr_rf(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *da
     }
 
     if (device_info) {
-        direction = (device_info->dir == pinfo->p2p_dir) ? BDADDR_MASTER : BDADDR_SLAVE;
+        direction = (device_info->dir == pinfo->p2p_dir) ? BDADDR_CENTRAL : BDADDR_PERIPHERAL;
         uap = device_info->bd_addr[2];
     }
 
@@ -855,18 +855,18 @@ dissect_btbredr_rf(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *da
             packet_type = (tvb_get_guint8(tvb, offset + 1) >> 3) & 0xF;
             packet_type_str = val_to_str_const(packet_type, packet_type_acl_edr_vals, "Unknown");
             packet_type_table = packet_type_acl_edr_table;
-        } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_BR)) {
-            proto_tree_add_item(header_tree, hf_packet_header_broken_type_csb_br, tvb, offset, 4, ENC_LITTLE_ENDIAN);
+        } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_BR)) {
+            proto_tree_add_item(header_tree, hf_packet_header_broken_type_cpb_br, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
             packet_type = (tvb_get_guint8(tvb, offset + 1) >> 3) & 0xF;
-            packet_type_str = val_to_str_const(packet_type, packet_type_csb_br_vals, "Unknown");
-            packet_type_table = packet_type_csb_br_table;
-        } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
-            proto_tree_add_item(header_tree, hf_packet_header_broken_type_csb_edr, tvb, offset, 4, ENC_LITTLE_ENDIAN);
+            packet_type_str = val_to_str_const(packet_type, packet_type_cpb_br_vals, "Unknown");
+            packet_type_table = packet_type_cpb_br_table;
+        } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
+            proto_tree_add_item(header_tree, hf_packet_header_broken_type_cpb_edr, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
             packet_type = (tvb_get_guint8(tvb, offset + 1) >> 3) & 0xF;
-            packet_type_str = val_to_str_const(packet_type, packet_type_csb_edr_vals, "Unknown");
-            packet_type_table = packet_type_csb_edr_table;
+            packet_type_str = val_to_str_const(packet_type, packet_type_cpb_edr_vals, "Unknown");
+            packet_type_table = packet_type_cpb_edr_table;
         } else if ((payload_and_transport >> 4) == TRANSPORT_ANY) {
             proto_tree_add_item(header_tree, hf_packet_header_broken_type_any, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
@@ -920,18 +920,18 @@ dissect_btbredr_rf(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *da
             packet_type = (tvb_get_guint8(tvb, offset) >> 3) & 0xF;
             packet_type_str = val_to_str_const(packet_type, packet_type_acl_edr_vals, "Unknown");
             packet_type_table = packet_type_acl_edr_table;
-        } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_BR)) {
-            proto_tree_add_item(header_tree, hf_packet_header_type_csb_br, tvb, offset, 4, ENC_LITTLE_ENDIAN);
+        } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_BR)) {
+            proto_tree_add_item(header_tree, hf_packet_header_type_cpb_br, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
             packet_type = (tvb_get_guint8(tvb, offset) >> 3) & 0xF;
-            packet_type_str = val_to_str_const(packet_type, packet_type_csb_br_vals, "Unknown");
-            packet_type_table = packet_type_csb_br_table;
-        } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
-            proto_tree_add_item(header_tree, hf_packet_header_type_csb_edr, tvb, offset, 4, ENC_LITTLE_ENDIAN);
+            packet_type_str = val_to_str_const(packet_type, packet_type_cpb_br_vals, "Unknown");
+            packet_type_table = packet_type_cpb_br_table;
+        } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
+            proto_tree_add_item(header_tree, hf_packet_header_type_cpb_edr, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
             packet_type = (tvb_get_guint8(tvb, offset) >> 3) & 0xF;
-            packet_type_str = val_to_str_const(packet_type, packet_type_csb_edr_vals, "Unknown");
-            packet_type_table = packet_type_csb_edr_table;
+            packet_type_str = val_to_str_const(packet_type, packet_type_cpb_edr_vals, "Unknown");
+            packet_type_table = packet_type_cpb_edr_table;
         } else if ((payload_and_transport >> 4) == TRANSPORT_ANY) {
             proto_tree_add_item(header_tree, hf_packet_header_type_any, tvb, offset, 4, ENC_LITTLE_ENDIAN);
 
@@ -1355,7 +1355,7 @@ dissect_btbredr_rf(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *da
        default:
            break;
        }
-   } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_BR)) {
+   } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_BR)) {
        switch (packet_type) {
        case 0: // NULL
            isochronous_length = 0;
@@ -1416,7 +1416,7 @@ dissect_btbredr_rf(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *da
        default:
            break;
        }
-   } else if (payload_and_transport == (TRANSPORT_CSB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
+   } else if (payload_and_transport == (TRANSPORT_CPB | PAYLOAD_EDR_2) || payload_and_transport == (TRANSPORT_ACL | PAYLOAD_EDR_3)) {
        switch (packet_type) {
        case 0: // NULL
            isochronous_length = 0;
@@ -1907,8 +1907,8 @@ dissect_btbredr_fhs(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *d
         connection_info = lookup_connection_info(interface_id, adapter_id, lap, ltaddr, pinfo->num);
         if (!pinfo->fd->visited) {
             if (connection_info && fhs_data->device_info &&
-                !memcmp(connection_info->bd_addr[BDADDR_SLAVE], null_bd_addr, 6))
-                memcpy(connection_info->bd_addr[BDADDR_SLAVE], fhs_data->device_info->bd_addr, 6);
+                !memcmp(connection_info->bd_addr[BDADDR_PERIPHERAL], null_bd_addr, 6))
+                memcpy(connection_info->bd_addr[BDADDR_PERIPHERAL], fhs_data->device_info->bd_addr, 6);
             if (!connection_info && device_info) {
                 wmem_tree_key_t key[6];
                 key[0].length = 1;
@@ -1929,9 +1929,9 @@ dissect_btbredr_fhs(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *d
                 connection_info->lt_addr        = ltaddr;
                 connection_info->timestamp      = pinfo->abs_ts;
                 connection_info->btclock        = (ltaddr_clk_pgscan >> 3) & 0x3ffffff;
-                memcpy(connection_info->bd_addr[BDADDR_MASTER], device_info->bd_addr, 6);
+                memcpy(connection_info->bd_addr[BDADDR_CENTRAL], device_info->bd_addr, 6);
                 if (fhs_data->device_info)
-                    memcpy(connection_info->bd_addr[BDADDR_SLAVE], fhs_data->device_info->bd_addr, 6);
+                    memcpy(connection_info->bd_addr[BDADDR_PERIPHERAL], fhs_data->device_info->bd_addr, 6);
                 wmem_tree_insert32_array(connection_info_tree, key, connection_info);
              }
         }
@@ -2100,14 +2100,14 @@ proto_register_btbredr_rf(void)
             FT_UINT32, BASE_HEX, VALS(packet_type_acl_edr_vals), 0x00000078,
             NULL, HFILL }
         },
-        {  &hf_packet_header_type_csb_br,
+        {  &hf_packet_header_type_cpb_br,
             { "Type",                                           "btbredr_rf.packet_header.type",
-            FT_UINT32, BASE_HEX, VALS(packet_type_csb_br_vals), 0x00000078,
+            FT_UINT32, BASE_HEX, VALS(packet_type_cpb_br_vals), 0x00000078,
             NULL, HFILL }
         },
-        {  &hf_packet_header_type_csb_edr,
+        {  &hf_packet_header_type_cpb_edr,
             { "Type",                                           "btbredr_rf.packet_header.type",
-            FT_UINT32, BASE_HEX, VALS(packet_type_csb_edr_vals), 0x00000078,
+            FT_UINT32, BASE_HEX, VALS(packet_type_cpb_edr_vals), 0x00000078,
             NULL, HFILL }
         },
         {  &hf_packet_header_flow_control,
@@ -2175,14 +2175,14 @@ proto_register_btbredr_rf(void)
             FT_UINT32, BASE_HEX, VALS(packet_type_acl_edr_vals), 0x00007800,
             NULL, HFILL }
         },
-        {  &hf_packet_header_broken_type_csb_br,
+        {  &hf_packet_header_broken_type_cpb_br,
             { "Type",                                           "btbredr_rf.packet_header.type",
-            FT_UINT32, BASE_HEX, VALS(packet_type_csb_br_vals), 0x00007800,
+            FT_UINT32, BASE_HEX, VALS(packet_type_cpb_br_vals), 0x00007800,
             NULL, HFILL }
         },
-        {  &hf_packet_header_broken_type_csb_edr,
+        {  &hf_packet_header_broken_type_cpb_edr,
             { "Type",                                           "btbredr_rf.packet_header.type",
-            FT_UINT32, BASE_HEX, VALS(packet_type_csb_edr_vals), 0x00007800,
+            FT_UINT32, BASE_HEX, VALS(packet_type_cpb_edr_vals), 0x00007800,
             NULL, HFILL }
         },
         {  &hf_packet_header_broken_flow_control,
@@ -2521,8 +2521,8 @@ proto_register_btbredr_rf(void)
     packet_type_esco_edr_table = register_dissector_table("btbredr_rf.packet_type.esco.edr", "BT Packet Type for eSCO EDR", proto_btbredr_rf, FT_UINT8, BASE_HEX);
     packet_type_acl_br_table   = register_dissector_table("btbredr_rf.packet_type.acl.br",   "BT Packet Type for ACL BR",   proto_btbredr_rf, FT_UINT8, BASE_HEX);
     packet_type_acl_edr_table  = register_dissector_table("btbredr_rf.packet_type.acl.edr",  "BT Packet Type for ACL EDR",  proto_btbredr_rf, FT_UINT8, BASE_HEX);
-    packet_type_csb_br_table   = register_dissector_table("btbredr_rf.packet_type.csb.br",   "BT Packet Type for CSB BR",   proto_btbredr_rf, FT_UINT8, BASE_HEX);
-    packet_type_csb_edr_table  = register_dissector_table("btbredr_rf.packet_type.csb.edr",  "BT Packet Type for CSB EDR",  proto_btbredr_rf, FT_UINT8, BASE_HEX);
+    packet_type_cpb_br_table   = register_dissector_table("btbredr_rf.packet_type.cpb.br",   "BT Packet Type for CPB BR",   proto_btbredr_rf, FT_UINT8, BASE_HEX);
+    packet_type_cpb_edr_table  = register_dissector_table("btbredr_rf.packet_type.cpb.edr",  "BT Packet Type for CPB EDR",  proto_btbredr_rf, FT_UINT8, BASE_HEX);
 
     expert_module = expert_register_protocol(proto_btbredr_rf);
     expert_register_field_array(expert_module, ei, array_length(ei));
