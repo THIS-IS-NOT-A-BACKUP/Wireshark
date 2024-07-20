@@ -21,7 +21,11 @@
 #ifndef __TVBUFF_H__
 #define __TVBUFF_H__
 
+#include <ws_symbol_export.h>
+#include <ws_attributes.h>
+
 #include <glib.h>
+#include <ws_attributes.h>
 #include <epan/guid-utils.h>
 #include <epan/wmem_scopes.h>
 
