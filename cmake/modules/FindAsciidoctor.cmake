@@ -196,6 +196,7 @@ if(ASCIIDOCTOR_EXECUTABLE)
     FIND_PROGRAM(ASCIIDOCTOR_PDF_EXECUTABLE
         NAMES
             asciidoctorj
+            asciidoctor-pdf.bat
             asciidoctor-pdf
         PATHS
             /bin
@@ -227,7 +228,7 @@ if(ASCIIDOCTOR_EXECUTABLE)
                     --out-file "${_output_pdf}"
                     -a pdf-fontsdir=${CMAKE_SOURCE_DIR}/resources/fonts
                     -a pdf-themesdir=${CMAKE_SOURCE_DIR}/doc/asciidoctor-themes
-                    --theme wsug
+                    -a pdf-theme=wsug
                     ${CMAKE_CURRENT_SOURCE_DIR}/${_asciidocsource}
             DEPENDS
                     ${CMAKE_SOURCE_DIR}/doc/attributes.adoc
@@ -251,6 +252,7 @@ if(ASCIIDOCTOR_EXECUTABLE)
     FIND_PROGRAM(ASCIIDOCTOR_EPUB_EXECUTABLE
         NAMES
             asciidoctorj
+            asciidoctor-epub3.bat
             asciidoctor-epub3
         PATHS
             /bin

@@ -42,6 +42,8 @@ type_map = {
     'gpointer': 'void *',
     'gconstpointer ': 'const void *', # 'void *foo' instead of 'void * foo'
     'gconstpointer': 'const void *',
+    'gintptr': 'intptr_t',
+    'guintptr': 'uintptr_t',
     # Is gsize the same as size_t on the platforms we support?
     # https://gitlab.gnome.org/GNOME/glib/-/issues/2493
     'gsize': 'size_t',
@@ -82,7 +84,7 @@ format_spec_map = {
     'G_GUINT64_FORMAT': 'PRIu64',
 }
 
-tvb_api_map = {
+api_map = {
     'tvb_get_guint8': 'tvb_get_uint8',
     'tvb_get_gint8': 'tvb_get_int8',
     'tvb_get_guint16': 'tvb_get_uint16',
@@ -99,12 +101,20 @@ tvb_api_map = {
     'tvb_get_gint56': 'tvb_get_int56',
     'tvb_get_guint64': 'tvb_get_uint64',
     'tvb_get_gint64': 'tvb_get_int64',
+    'tvb_find_guint8': 'tvb_find_uint8',
+    'tvb_find_guint16': 'tvb_find_uint16',
+    'tvb_ws_mempbrk_pattern_guint8': 'tvb_ws_mempbrk_pattern_uint8',
+    'guint32_to_str_buf': 'uint32_to_str_buf',
+    'guint64_to_str_buf': 'uint64_to_str_buf',
+    'get_nonzero_guint32': 'get_nonzero_uint32',
+    'get_guint32': 'get_uint32',
+    'guint8_to_hex': 'uint8_to_hex',
 }
 
 def convert_file(file):
     lines = ''
     try:
-        with open(file, 'r', encoding='utf-8') as f:
+        with open(file, 'r') as f:
             lines = f.read()
             for glib_type, c99_type in padded_type_map.items():
                 lines = lines.replace(glib_type, c99_type)
@@ -116,7 +126,7 @@ def convert_file(file):
                 lines = re.sub(rf'\b{glib_tf_define}\b([^\'"])', rf'{c99_define}\1', lines, flags=re.MULTILINE)
             for glib_fmt_spec, c99_fmt_spec in format_spec_map.items():
                 lines = re.sub(rf'\b{glib_fmt_spec}\b', rf'{c99_fmt_spec}', lines, flags=re.MULTILINE)
-            for glib_api, c99_api in tvb_api_map.items():
+            for glib_api, c99_api in api_map.items():
                 lines = re.sub(rf'\b{glib_api}\b', rf'{c99_api}', lines, flags=re.MULTILINE)
     except IsADirectoryError:
         sys.stderr.write(f'{file} is a directory.\n')
