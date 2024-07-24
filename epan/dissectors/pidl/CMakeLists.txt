@@ -12,11 +12,9 @@ set(PIDL_DISSECTOR_NAMES
 	browser
 	clusapi
 	dfs
-	dnsserver
 	drsuapi
 	dssetup
 	efs
-	eventlog
 	frsrpc
 	frstrans
 	fsrvp
@@ -26,29 +24,39 @@ set(PIDL_DISSECTOR_NAMES
 	iwbemloginclientidex
 	iwbemservices
 	lsa
-	mapi
 	mdssvc
 	misc
-	nspi
 	rfr
 	samr
 	srvsvc
 	svcctl
 	winreg
-	winspool
 	witness
 	wkssvc
 	wzcsvc
 )
 
+#
+# These cannot be built using from source:
+#
+# dnsserver - "dnsserver.idl:159: error: Inline arrays not supported"
+# eventlog - "eventlog.idl:54: error: Inline arrays not supported"
+# nspi - "nspi.idl:154: error: Syntax error near '/'"
+# mapi - includes nspi.idl, so it gets the above error
+# winspool - it requires spoolss.idl, and we don't have that.
+#
+
 set(PIDL_DISSECTOR_browser_EXTRA_DEPS
 	srvsvc/srvsvc.idl
 )
 set(PIDL_DISSECTOR_clusapi_EXTRA_DEPS
-	clusapi/clusapi.idl
+	winreg/winreg.idl
+	misc/misc.idl
 )
 set(PIDL_DISSECTOR_drsuapi_EXTRA_DEPS
 	misc/misc.idl
+	lsa/lsa.idl
+	samr/samr.idl
 )
 set(PIDL_DISSECTOR_dssetup_EXTRA_DEPS
 	misc/misc.idl
@@ -88,6 +96,7 @@ set(PIDL_DISSECTOR_lsa_EXTRA_DEPS
 )
 set(PIDL_DISSECTOR_mapi_EXTRA_DEPS
 	idl_types.h
+	nspi/nspi.idl
 	mapicodes_enum.h
 	mapitags_enum.h
 )
@@ -108,6 +117,7 @@ set(PIDL_DISSECTOR_rfr_EXTRA_DEPS
 )
 set(PIDL_DISSECTOR_samr_EXTRA_DEPS
 	idl_types.h
+	misc/misc.idl
 	lsa/lsa.idl
 )
 set(PIDL_DISSECTOR_srvsvc_EXTRA_DEPS
@@ -119,6 +129,8 @@ set(PIDL_DISSECTOR_winreg_EXTRA_DEPS
 set(PIDL_DISSECTOR_winspool_EXTRA_DEPS
 	idl_types.h
 	misc/misc.idl
+	winreg/winreg.idl
+	spoolss/spoolss.idl
 )
 set(PIDL_DISSECTOR_witness_EXTRA_DEPS
 	misc/misc.idl
@@ -133,13 +145,32 @@ set(PIDL_DISSECTOR_wkssvc_EXTRA_DEPS
 set(PIDL_DISSECTOR_TARGETS)
 
 foreach(PROTOCOL_NAME IN LISTS PIDL_DISSECTOR_NAMES)
+	#
+	# Construct, from the list of extra dependencies for
+	# this dissector, a list of --includedir options
+	# for all the directories in which those dependencies
+	# reside. We add --includedir .. for all targets.
+	#
+	set(INCLUDE_DIRS "")
+	list(APPEND INCLUDE_DIRS --includedir ..)
+	foreach(DEPENDENCY in ${PIDL_DISSECTOR_${PROTOCOL_NAME}_EXTRA_DEPS})
+		get_filename_component(PARENT_DIR ${DEPENDENCY} DIRECTORY)
+		if (NOT PARENT_DIR STREQUAL "")
+			list(APPEND INCLUDE_DIRS  --includedir ../${PARENT_DIR})
+		endif()
+	endforeach()
+	#
+	# COMMAND_EXPAND_LISTS is required to cause the list
+	# INCLUDE_DIRS to be expanded into a set of individual
+	# arguments to the pidl command.
+	#
 	add_custom_command(
 		OUTPUT packet-dcerpc-${PROTOCOL_NAME}-stamp
 		COMMAND "${PERL_EXECUTABLE}"
 			"${CMAKE_SOURCE_DIR}/tools/pidl/pidl"
 			--ws-parser
 			--outputdir ../..
-			--includedir ..
+			${INCLUDE_DIRS}
 			--
 			${PROTOCOL_NAME}.idl
 		COMMAND
@@ -152,6 +183,7 @@ foreach(PROTOCOL_NAME IN LISTS PIDL_DISSECTOR_NAMES)
 			${PROTOCOL_NAME}/${PROTOCOL_NAME}.cnf
 			${PIDL_DISSECTOR_${PROTOCOL_NAME}_EXTRA_DEPS}
 		VERBATIM
+		COMMAND_EXPAND_LISTS
 	)
 	add_custom_target(generate_dissector-dcerpc-${PROTOCOL_NAME}
 		DEPENDS packet-dcerpc-${PROTOCOL_NAME}-stamp
