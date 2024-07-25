@@ -11,10 +11,12 @@ set(PIDL_DISSECTOR_NAMES
 	atsvc
 	browser
 	clusapi
+	dnsserver
 	dfs
 	drsuapi
 	dssetup
 	efs
+	eventlog
 	frsrpc
 	frstrans
 	fsrvp
@@ -24,26 +26,38 @@ set(PIDL_DISSECTOR_NAMES
 	iwbemloginclientidex
 	iwbemservices
 	lsa
+	mapi
 	mdssvc
 	misc
+	nspi
 	rfr
 	samr
 	srvsvc
 	svcctl
 	winreg
+	winspool
 	witness
 	wkssvc
 	wzcsvc
 )
 
 #
-# These cannot be built using from source:
+# These can give some (not-fatal) errors building from source:
 #
 # dnsserver - "dnsserver.idl:159: error: Inline arrays not supported"
 # eventlog - "eventlog.idl:54: error: Inline arrays not supported"
 # nspi - "nspi.idl:154: error: Syntax error near '/'"
 # mapi - includes nspi.idl, so it gets the above error
-# winspool - it requires spoolss.idl, and we don't have that.
+# winspool - we have a hand-written spoolss dissector we use instead of spoolss.idl
+#
+# XXX - the "Syntax error near '/'" errors show up if cpp doesn't strip
+# C99/C++ comments and the file in question - nspi.idl - contains
+# C99/C++ comments, because the parser runs cpp, by default, to strip
+# comments and proccess #includes.  Those errors may cause
+# packet-dcerpc-nspi.c, and possibly packet-dcerpc-mapi.c not to be
+# generated.  GCC's cpp appears to strip them by default, but Xcode's
+# cpp, at least as of Xcode 15.2, does not - cc -E does, however,
+# strip them.  (Both of them strip "classic C" /* ... */ comments.)
 #
 
 set(PIDL_DISSECTOR_browser_EXTRA_DEPS
@@ -130,7 +144,8 @@ set(PIDL_DISSECTOR_winspool_EXTRA_DEPS
 	idl_types.h
 	misc/misc.idl
 	winreg/winreg.idl
-	spoolss/spoolss.idl
+	# Wireshark supplies the spoolss elements through a hand-written dissector
+	#spoolss/spoolss.idl
 )
 set(PIDL_DISSECTOR_witness_EXTRA_DEPS
 	misc/misc.idl
