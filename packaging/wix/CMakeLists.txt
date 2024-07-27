@@ -297,8 +297,9 @@ macro( ADD_WIX_PACKAGE_TARGET )
 			DEPENDS
 				${WIX_FILES}
 				copy_data_files
-				user_guide_html
 				faq_html
+				user_guide_html
+				release_notes_html
 		)
 		set_target_properties(wireshark_wix_prep PROPERTIES
 			FOLDER "Packaging"
@@ -335,7 +336,5 @@ set(CLEAN_FILES
 	RadiusDict.wxs
 	Diameter.wxs
 	QtTranslation.wxs
-	#NEWS.txt
-	#user-guide.chm
 	wireshark-${VERSION}-${WIRESHARK_TARGET_PLATFORM}.msi
 )

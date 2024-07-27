@@ -459,7 +459,7 @@ dissect_saprouter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 	}
 
 	/* Add the protocol to the column */
-	col_add_str(pinfo->cinfo, COL_PROTOCOL, "SAPROUTER");
+	col_set_str(pinfo->cinfo, COL_PROTOCOL, "SAPROUTER");
 
 	/* Add the main SAP Router subtree */
 	ti = proto_tree_add_item(tree, proto_saprouter, tvb, offset, -1, ENC_NA);
@@ -709,14 +709,14 @@ dissect_saprouter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 	/* Unknown Message Type */
 	} else {
 
-		col_add_fstr(pinfo->cinfo, COL_INFO, "Routed message");
+		col_set_str(pinfo->cinfo, COL_INFO, "Routed message");
 		proto_item_append_text(ti, ", Routed message");
 
 		/* If the session is protected with SNC, first dissect the SNC frame
 		 * and save the content for further dissection.
 		 */
 		if (session_state->route_snc_protected) {
-			col_append_fstr(pinfo->cinfo, COL_INFO, ", SNC protected");
+			col_append_str(pinfo->cinfo, COL_INFO, ", SNC protected");
 			proto_item_append_text(ti, ", SNC protected");
 			next_tvb = dissect_saprouter_snc_frame(tvb, pinfo, tree, offset);
 
@@ -745,7 +745,7 @@ dissect_saprouter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 
 			/* Route not accepted but some information available */
 			} else {
-				col_append_fstr(pinfo->cinfo, COL_INFO, ", to unknown destination");
+				col_append_str(pinfo->cinfo, COL_INFO, ", to unknown destination");
 				proto_item_append_text(ti, ", to unknown destination");
 			}
 
@@ -757,7 +757,7 @@ dissect_saprouter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 
 		} else {
 			/* No route information available */
-			col_append_fstr(pinfo->cinfo, COL_INFO, ", to unknown destination");
+			col_append_str(pinfo->cinfo, COL_INFO, ", to unknown destination");
 			proto_item_append_text(ti, ", to unknown destination");
 		}
 	}
