@@ -230,6 +230,20 @@ static int hf_oran_bfZe3dd;
 static int hf_oran_bfAzSl;
 static int hf_oran_bfZeSl;
 
+static int hf_oran_cmd_scope;
+static int hf_oran_number_of_st4_cmds;
+
+static int hf_oran_st4_cmd_header;
+static int hf_oran_st4_cmd_type;
+static int hf_oran_st4_cmd_len;
+static int hf_oran_st4_cmd_num_slots;
+static int hf_oran_st4_cmd_ack_nack_req_id;
+
+static int hf_oran_sleepmode;
+static int hf_oran_log2maskbits;
+static int hf_oran_num_slots_ext;
+static int hf_oran_antMask_trx_control;
+
 
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
@@ -263,6 +277,7 @@ static int ett_oran_prb_allocation;
 static int ett_oran_punc_pattern;
 static int ett_oran_bfacomphdr;
 static int ett_oran_modcomp_param_set;
+static int ett_oran_st4_cmd_header;
 
 
 /* Expert info */
@@ -371,6 +386,7 @@ static const range_string filter_indices[] = {
     {4, 4,  "UL filter for NPRACH 0, 1; min. passband 48 x 3.75KHz = 180 KHz"},
     {5, 5,  "UL filter for PRACH preamble formats"},
     {8, 8,  "UL filter NPUSCH"},
+    {9, 9,  "Mixed numerology and other channels except PRACH and NB-IoT"},
     {9, 15, "Reserved"},
     {0, 0, NULL}
 };
@@ -381,7 +397,7 @@ enum section_c_types {
     SEC_C_NORMAL = 1,
     SEC_C_RSVD2 = 2,
     SEC_C_PRACH = 3,
-    SEC_C_RSVD4 = 4,
+    SEC_C_SLOT_CONTROL = 4,
     SEC_C_UE_SCHED = 5,
     SEC_C_CH_INFO = 6,
     SEC_C_LAA = 7,
@@ -393,7 +409,7 @@ static const range_string section_types[] = {
     { SEC_C_NORMAL,            SEC_C_NORMAL,            "Most DL/UL radio channels" },
     { SEC_C_RSVD2,             SEC_C_RSVD2,             "Reserved for future use" },
     { SEC_C_PRACH,             SEC_C_PRACH,             "PRACH and mixed-numerology channels" },
-    { SEC_C_RSVD4,             SEC_C_RSVD4,             "Reserved for future use" },
+    { SEC_C_SLOT_CONTROL,      SEC_C_SLOT_CONTROL,      "Slot Configuration Control" },
     { SEC_C_UE_SCHED,          SEC_C_UE_SCHED,          "UE scheduling information (UE-ID assignment to section)" },
     { SEC_C_CH_INFO,           SEC_C_CH_INFO,           "Channel information" },
     { SEC_C_LAA,               SEC_C_LAA,               "LAA" },
@@ -406,7 +422,7 @@ static const range_string section_types_short[] = {
     { SEC_C_NORMAL,            SEC_C_NORMAL,            "(Most channels)" },
     { SEC_C_RSVD2,             SEC_C_RSVD2,             "(reserved)" },
     { SEC_C_PRACH,             SEC_C_PRACH,             "(PRACH/mixed-\u03bc)" },
-    { SEC_C_RSVD4,             SEC_C_RSVD4,             "(reserved)" },
+    { SEC_C_SLOT_CONTROL,      SEC_C_SLOT_CONTROL,      "(Slot info)" },
     { SEC_C_UE_SCHED,          SEC_C_UE_SCHED,          "(UE scheduling info)" },
     { SEC_C_CH_INFO,           SEC_C_CH_INFO,           "(Channel info)" },
     { SEC_C_LAA,               SEC_C_LAA,               "(LAA)" },
@@ -470,6 +486,7 @@ static const range_string subcarrier_spacings[] = {
     { 0, 0, NULL }
 };
 
+/* Table 7.5.3.14-1 laaMsgType definition */
 static const range_string laaMsgTypes[] = {
     {0, 0,  "LBT_PDSCH_REQ - lls - O-DU to O-RU request to obtain a PDSCH channel"},
     {1, 1,  "LBT_DRS_REQ - lls - O-DU to O-RU request to obtain the channel and send DRS"},
@@ -477,7 +494,7 @@ static const range_string laaMsgTypes[] = {
     {3, 3,  "LBT_DRS_RSP - O-RU to O-DU response, DRS sending success or failure"},
     {4, 4,  "LBT_Buffer_Error - O-RU to O-DU response, reporting buffer overflow"},
     {5, 5,  "LBT_CWCONFIG_REQ - O-DU to O-RU request, congestion window configuration"},
-    {6, 6,  "LBT_CWCONFIG_REQ - O-RU to O-DU request, congestion window config"},
+    {6, 6,  "LBT_CWCONFIG_RST - O-RU to O-DU request, congestion window config, response"},
     {8, 15, "reserved for future methods"},
     {0, 0, NULL}
 };
@@ -542,7 +559,7 @@ static const value_string bfw_comp_headers_comp_meth[] = {
     {0, NULL}
 };
 
-/* 7.7.6.2 */
+/* 7.7.6.2 rbgSize (resource block group size) */
 static const value_string rbg_size_vals[] = {
     {0,     "reserved"},
     {1,     "1"},
@@ -636,6 +653,46 @@ static const value_string ci_comp_opt_vals[] = {
     {1, "compression per PRB, one ciCompParam exists before the I/Q value of each PRB"},
     {0,   NULL}
 };
+
+static const range_string cmd_scope_vals[] = {
+    {0, 0,  "ARRAY-COMMAND"},
+    {1, 1,  "CARRIER-COMMAND"},
+    {2, 2,  "O-RU-COMMAND"},
+    {3, 15, "reserved"},
+    {0, 0,  NULL}
+};
+
+static const range_string st4_cmd_type_vals[] = {
+    {0, 0,   "reserved for future command types"},
+    {1, 1,   "TIME_DOMAIN_BEAM_CONFIG"},
+    {2, 2,   "TDD_CONFIG_PATTERN"},
+    {3, 3,   "TRX_CONTROL"},
+    {4, 4,   "ASM"},
+    {5, 255, "reserved for future command types"},
+    {0, 0,  NULL}
+};
+
+/* Table 7.5.3.51-1 */
+static const value_string log2maskbits_vals[] = {
+    {0,  "reserved"},
+    {1,  "min antMask size is 16 bits.."},
+    {2,  "min antMask size is 16 bits.."},
+    {3,  "min antMask size is 16 bits.."},
+    {4,  "16"},
+    {5,  "32"},
+    {6,  "64"},
+    {7,  "128"},
+    {8,  "256"},
+    {9,  "512"},
+    {10, "1024"},
+    {11, "2048"},
+    {12, "4096"},
+    {13, "8192"},
+    {14, "16384"},
+    {15, "reserved"},
+    {0,   NULL}
+};
+
 
 
 static const true_false_string tfs_sfStatus =
@@ -1287,7 +1344,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
     bool extension_flag = false;
 
     /* These sections are similar, so handle as common with per-type differences */
-    if (sectionType <= SEC_C_UE_SCHED) {
+    if ((sectionType <= SEC_C_UE_SCHED) && (sectionType != SEC_C_SLOT_CONTROL)) {
         /* sectionID */
         proto_item *ti = proto_tree_add_item_ret_uint(c_section_tree, hf_oran_section_id, tvb, offset, 2, ENC_BIG_ENDIAN, &sectionId);
         if (sectionId == 4095) {
@@ -1385,6 +1442,9 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
             default:
                 break;
         }
+    }
+    else if (sectionType == SEC_C_SLOT_CONTROL) { /* Section Type 4 */
+        /* TODO: ? */
     }
     else if (sectionType == SEC_C_CH_INFO) {  /* Section Type 6 */
         /* ef */
@@ -2753,13 +2813,26 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, v
     proto_item *pi = proto_tree_add_string(section_tree, hf_oran_refa, tvb, ref_a_offset, 3, id);
     proto_item_set_generated(pi);
 
+    /* Peek ahead at the section type */
+    uint32_t sectionType = 0;
+    sectionType = tvb_get_uint8(tvb, offset+1);
+
     /* numberOfSections */
     uint32_t nSections = 0;
-    proto_tree_add_item_ret_uint(section_tree, hf_oran_numberOfSections, tvb, offset, 1, ENC_NA, &nSections);
-    offset += 1;
+    if (sectionType != SEC_C_SLOT_CONTROL) {
+        proto_tree_add_item_ret_uint(section_tree, hf_oran_numberOfSections, tvb, offset, 1, ENC_NA, &nSections);
+        offset += 1;
+    }
+    else {
+        /* Slot Control has these fields instead */
+        /* reserved */
+        proto_tree_add_item(section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_NA);
+        /* cmdScope */
+        proto_tree_add_item(section_tree, hf_oran_cmd_scope, tvb, offset, 1, ENC_NA);
+        offset++;
+    }
 
     /* sectionType */
-    uint32_t sectionType = 0;
     proto_tree_add_item_ret_uint(section_tree, hf_oran_sectionType, tvb, offset, 1, ENC_NA, &sectionType);
     offset += 1;
 
@@ -2800,7 +2873,121 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, v
             offset += 1;
             break;
 
-        case SEC_C_PRACH:       /* Section Type 3 */
+        case SEC_C_SLOT_CONTROL: /* Section Type 4 */
+        {
+            /* numberOfST4Cmds */
+            uint32_t no_st4_cmds, st4_cmd_len, st4_cmd_type;
+            proto_tree_add_item_ret_uint(section_tree, hf_oran_number_of_st4_cmds, tvb, offset, 1, ENC_NA, &no_st4_cmds);
+            offset += 1;
+            /* reserved (1 byte) */
+            proto_tree_add_bits_item(section_tree, hf_oran_reserved, tvb, (offset*8), 8, ENC_BIG_ENDIAN);
+            offset += 1;
+
+            /* Loop over commands.  Each is 8-byte common header, followed by cmd-specific payload */
+            unsigned command_start_offset = offset;
+            for (uint32_t n=0; n < no_st4_cmds; n++) {
+                /* Table 7.4.6-2: Section Type 4 Command common header format */
+                proto_item *hdr_ti = proto_tree_add_string_format(section_tree, hf_oran_st4_cmd_header,
+                                                                  tvb, offset, 1, "",
+                                                                  "Type 4 Command common header");
+                proto_tree *hdr_tree = proto_item_add_subtree(hdr_ti, ett_oran_st4_cmd_header);
+
+                /* st4CmdType */
+                proto_tree_add_item_ret_uint(hdr_tree, hf_oran_st4_cmd_type, tvb, offset, 1, ENC_NA, &st4_cmd_type);
+                offset += 1;
+                /* st4CmdLen */
+                proto_tree_add_item_ret_uint(hdr_tree, hf_oran_st4_cmd_len, tvb, offset, 2, ENC_NA, &st4_cmd_len);
+                offset += 2;
+                /* numSlots */
+                proto_tree_add_item(hdr_tree, hf_oran_st4_cmd_num_slots, tvb, offset, 1, ENC_NA);
+                offset += 1;
+                /* ackNackReqId */
+                proto_tree_add_item(hdr_tree, hf_oran_st4_cmd_ack_nack_req_id, tvb, offset, 2, ENC_NA);
+                offset += 2;
+                /* reserved */
+                proto_tree_add_bits_item(hdr_tree, hf_oran_reserved, tvb, (offset*8), 16, ENC_BIG_ENDIAN);
+                offset += 2;
+                /* Set summary */
+                proto_item_append_text(hdr_ti, " (cmd=%s, len=%u words)",
+                                       rval_to_str_const(st4_cmd_type, st4_cmd_type_vals, "Unknown"),
+                                       st4_cmd_len);
+
+                /* TODO: add format accoding to cmd Type */
+                /* TODO: add in own subtrees? */
+                switch (st4_cmd_type) {
+                    case 1:  /* TIME_DOMAIN_BEAM_CONFIG */
+                        break;
+                    case 2:  /* TDD_CONFIG_PATTERN */
+                        break;
+                    case 3:  /* TRX_CONTROL */
+                        /* reserved */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* log2MaskBits (4 bits) */
+                        proto_tree_add_item(section_tree, hf_oran_log2maskbits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* sleepMode */
+                        proto_tree_add_item(section_tree, hf_oran_sleepmode, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        offset += 1;
+
+                        /* reserved (4 bits) */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* numSlotsExt */
+                        proto_tree_add_item(section_tree, hf_oran_num_slots_ext, tvb, offset, 3, ENC_BIG_ENDIAN);
+                        offset += 3;
+
+                        /* reserved (2 bits) */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* symbolMask */
+                        proto_tree_add_item(section_tree, hf_oran_symbolMask, tvb, offset, 2, ENC_BIG_ENDIAN);
+                        offset += 2;
+
+                        /* antMask (2-2048 bytes).
+                           will assume that it occupies the remainder of the command length.. */
+                        unsigned remaining = st4_cmd_len - (offset-command_start_offset);
+                        proto_tree_add_item(section_tree, hf_oran_antMask_trx_control, tvb, offset, remaining, ENC_NA);
+                        offset += remaining;
+
+                        /* [padding] */
+                        break;
+                    case 4:  /* ASM (advanced sleep mode) */
+                        /* reserved */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* reserved */
+                        /* sleepMode */
+                        proto_tree_add_item(section_tree, hf_oran_sleepmode, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        offset += 1;
+
+                        /* reserved (4 bits) */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* numSlotsExt */
+                        proto_tree_add_item(section_tree, hf_oran_num_slots_ext, tvb, offset, 3, ENC_BIG_ENDIAN);
+                        offset += 3;
+
+                        /* reserved (2 bits) */
+                        proto_tree_add_item(section_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                        /* symbolMask */
+                        proto_tree_add_item(section_tree, hf_oran_symbolMask, tvb, offset, 2, ENC_BIG_ENDIAN);
+                        offset += 2;
+
+                        /* reserved (2 bytes) */
+                        proto_tree_add_bits_item(section_tree, hf_oran_reserved, tvb, (offset*8), 16, ENC_BIG_ENDIAN);
+                        offset += 2;
+
+                        /* [padding] */
+                        break;
+
+                    default:
+                        /* ERROR! */
+                        break;
+                }
+
+                /* Advance by signalled length (needs to be aligned on 4-byte boundary) */
+                offset = command_start_offset + (st4_cmd_len * 4);
+            }
+
+            break;
+        }
+
+        case SEC_C_PRACH:        /* Section Type 3 */
             /* timeOffset */
             proto_tree_add_item(section_tree, hf_oran_timeOffset, tvb, offset, 2, ENC_BIG_ENDIAN);
             offset += 2;
@@ -3235,7 +3422,7 @@ proto_register_oran(void)
           HFILL}
         },
 
-        /* Section 7.5.2.2 */
+        /* Section 7.5.2.3 */
         {&hf_oran_filter_index,
          {"Filter Index", "oran_fh_cus.filterIndex",
           FT_UINT8, BASE_DEC | BASE_RANGE_STRING,
@@ -4489,7 +4676,99 @@ proto_register_oran(void)
           VALS(sidelobe_suppression_vals), 0x38,
           "beamforming zenith sidelobe parameter",
           HFILL}
-        }
+        },
+
+        /* 7.5.2.17 */
+        {&hf_oran_cmd_scope,
+         {"cmdScope", "oran_fh_cus.cmdScope",
+          FT_UINT8, BASE_DEC | BASE_RANGE_STRING,
+          RVALS(cmd_scope_vals), 0x0f,
+          "command scope",
+          HFILL}
+        },
+        /* 7.5.2.18 */
+        {&hf_oran_number_of_st4_cmds,
+         {"numberOfST4Cmds", "oran_fh_cus.numberOfST4Cmds",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "Number of Section Type 4 commands",
+          HFILL}
+        },
+
+        {&hf_oran_st4_cmd_header,
+         {"Command common header", "oran_fh_cus.st4CmdCommonHeader",
+          FT_STRING, BASE_NONE,
+          NULL, 0x0,
+          NULL,
+          HFILL}
+        },
+
+        /* 7.5.3.38 */
+        {&hf_oran_st4_cmd_type,
+         {"st4CmdType", "oran_fh_cus.st4CmdType",
+          FT_UINT8, BASE_DEC | BASE_RANGE_STRING,
+          RVALS(st4_cmd_type_vals), 0x0,
+          NULL,
+          HFILL}
+        },
+        /* 7.5.3.39 */
+        {&hf_oran_st4_cmd_len,
+         {"st4CmdLen", "oran_fh_cus.st4CmdLen",
+          FT_UINT16, BASE_DEC,
+          NULL, 0x0,
+          "Length of command in 32-bit words",
+          HFILL}
+        },
+        /* 7.5.3.40 */
+        {&hf_oran_st4_cmd_num_slots,
+         {"numSlots", "oran_fh_cus.st4NumSlots",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "Contiguous slots for which command is applicable",
+          HFILL}
+        },
+        /* 7.5.3.41 */
+        {&hf_oran_st4_cmd_ack_nack_req_id,
+         {"ackNackReqId", "oran_fh_cus.ackNackReqId",
+          FT_UINT16, BASE_DEC,
+          NULL, 0x0,
+          "ACK/NACK Request Id",
+          HFILL}
+        },
+
+        /* 7.5.3.52 */
+        {&hf_oran_sleepmode,
+         {"sleepMode", "oran_fh_cus.sleepMode",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x03,
+          NULL,
+          HFILL}
+        },
+        /* 7.5.3.51 */
+        {&hf_oran_log2maskbits,
+         {"log2MaskBits", "oran_fh_cus.log2MaskBits",
+          FT_UINT8, BASE_HEX,
+          VALS(log2maskbits_vals), 0x3c,
+          NULL,
+          HFILL}
+        },
+        /* 7.5.3.53 */
+        {&hf_oran_num_slots_ext,
+         {"numSlotsExt", "oran_fh_cus.numSlotsExt",
+          FT_UINT24, BASE_DEC,
+          NULL, 0x0fffff,
+          NULL,
+          HFILL}
+        },
+        /* 7.5.3.54 */
+        {&hf_oran_antMask_trx_control,
+         {"antMask", "oran_fh_cus.antMask",
+          FT_BYTES, BASE_NONE,
+          NULL, 0x0,
+          NULL,
+          HFILL}
+        },
+
     };
 
     /* Setup protocol subtree array */
@@ -4520,7 +4799,8 @@ proto_register_oran(void)
         &ett_oran_prb_allocation,
         &ett_oran_punc_pattern,
         &ett_oran_bfacomphdr,
-        &ett_oran_modcomp_param_set
+        &ett_oran_modcomp_param_set,
+        &ett_oran_st4_cmd_header
     };
 
     expert_module_t* expert_oran;
