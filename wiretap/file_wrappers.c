@@ -15,6 +15,9 @@
  */
 
 #include "config.h"
+
+#define WS_LOG_DOMAIN LOG_DOMAIN_WIRETAP
+
 #include "file_wrappers.h"
 
 #include <assert.h>
@@ -50,6 +53,9 @@ typedef zng_stream zlib_stream;
 #if LZ4_VERSION_NUMBER >= 10703
 #define USE_LZ4
 #include <lz4frame.h>
+#ifndef LZ4F_BLOCK_HEADER_SIZE /* Added in LZ4_VERSION_NUMBER 10902 */
+#define LZ4F_BLOCK_HEADER_SIZE 4
+#endif /* LZ4F_BLOCK_HEADER_SIZE */
 #endif /* LZ4_VERSION_NUMBER >= 10703 */
 #endif /* HAVE_LZ4 */
 
@@ -119,6 +125,7 @@ wtap_get_all_compression_type_extensions_list(void)
 
 /* #define GZBUFSIZE 8192 */
 #define GZBUFSIZE 4096
+#define LZ4BUFSIZE 4194304 // 4MiB, maximum block size
 
 /* values for wtap_reader compression */
 typedef enum {
@@ -199,6 +206,8 @@ struct wtap_reader {
 #endif /* HAVE_ZSTD */
 #ifdef USE_LZ4
     LZ4F_dctx *lz4_dctx;
+    LZ4F_frameInfo_t lz4_info;
+    unsigned char lz4_hdr[LZ4F_HEADER_SIZE_MAX];
 #endif /* USE_LZ4 */
 
     /* fast seeking */
@@ -293,6 +302,7 @@ fill_in_buffer(FILE_T state)
 }
 
 #define ZLIB_WINSIZE 32768
+#define  LZ4_WINSIZE 65536
 
 struct fast_seek_point {
     int64_t out;         /* corresponding offset in uncompressed data */
@@ -310,6 +320,15 @@ struct fast_seek_point {
             uint32_t adler;
             uint32_t total_out;
         } zlib;
+#ifdef USE_LZ4
+        struct {
+            LZ4F_frameInfo_t lz4_info;
+            unsigned char lz4_hdr[LZ4F_HEADER_SIZE_MAX];
+#if 0
+            unsigned char window[LZ4_WINSIZE]; /* preceding 64K of uncompressed data */
+#endif
+        } lz4;
+#endif
     } data;
 };
 
@@ -355,31 +374,80 @@ fast_seek_header(FILE_T file, int64_t in_pos, int64_t out_pos,
     if (file->fast_seek->len != 0)
         item = (struct fast_seek_point *)file->fast_seek->pdata[file->fast_seek->len - 1];
 
+    /* fast_seek_header always adds a fast seek point, even if less than
+     * SPAN from the last one. That is because it used for new streams
+     * (including concatenated streams) where the compression type
+     * or, for LZ4, compression options, may change.
+     */
     if (!item || item->out < out_pos) {
         struct fast_seek_point *val = g_new(struct fast_seek_point,1);
         val->in = in_pos;
         val->out = out_pos;
         val->compression = compression;
 
+#ifdef USE_LZ4
+        if (compression == LZ4) {
+            val->data.lz4.lz4_info = file->lz4_info;
+            memcpy(val->data.lz4.lz4_hdr, file->lz4_hdr, LZ4F_HEADER_SIZE_MAX);
+        }
+#endif /* USE_LZ4 */
         g_ptr_array_add(file->fast_seek, val);
     }
 }
 
 static void
-fast_seek_reset(
-#ifdef HAVE_ZLIB
-    FILE_T state)
-#else /* HAVE_ZLIB */
-    FILE_T state _U_)
-#endif /* HAVE_ZLIB */
+fast_seek_reset(FILE_T state)
 {
-#ifdef HAVE_ZLIB
-    if (state->compression == ZLIB && state->fast_seek_cur != NULL) {
-        struct zlib_cur_seek_point *cur = (struct zlib_cur_seek_point *) state->fast_seek_cur;
+    switch (state->compression) {
 
-        cur->have = 0;
+    case UNKNOWN:
+        break;
+
+    case UNCOMPRESSED:
+        /* Nothing to do */
+        break;
+
+    case ZLIB:
+#ifdef USE_ZLIB_OR_ZLIBNG
+        if (state->fast_seek_cur != NULL) {
+            struct zlib_cur_seek_point *cur = (struct zlib_cur_seek_point *) state->fast_seek_cur;
+
+            cur->have = 0;
+        }
+#else
+        /* This "cannot happen" */
+        ws_assert_not_reached();
+#endif /* USE_ZLIB_OR_ZLIBNG */
+        break;
+
+    case GZIP_AFTER_HEADER:
+        break;
+
+    case ZSTD:
+#ifdef HAVE_ZSTD
+        /* Anything to do? */
+#else
+        /* This "cannot happen" */
+        ws_assert_not_reached();
+#endif /* HAVE_ZSTD */
+        break;
+
+    case LZ4:
+#ifdef HAVE_LZ4
+        /* Anything to do? */
+#else
+        /* This "cannot happen" */
+        ws_assert_not_reached();
+#endif /* HAVE_LZ4 */
+        break;
+
+    /* Add other compression types here */
+
+    default:
+        /* This "cannot happen" */
+        ws_assert_not_reached();
+        break;
     }
-#endif /* HAVE_ZLIB */
 }
 
 static bool
@@ -389,13 +457,6 @@ uncompressed_fill_out_buffer(FILE_T state)
         return false;
     return true;
 }
-
-/*
- * Gzipped files, using compression from zlib or zlib-ng.
- *
- * https://tools.ietf.org/html/rfc1952 (RFC 1952)
- */
-#ifdef USE_ZLIB_OR_ZLIBNG
 
 /* Get next byte from input, or -1 if end or error.
  *
@@ -412,6 +473,14 @@ uncompressed_fill_out_buffer(FILE_T state)
 #define GZ_GETC() ((state->in.avail == 0 && fill_in_buffer(state) == -1) ? -1 : \
                    (state->in.avail == 0 ? -1 :                         \
                     (state->in.avail--, *(state->in.next)++)))
+
+
+/*
+ * Gzipped files, using compression from zlib or zlib-ng.
+ *
+ * https://tools.ietf.org/html/rfc1952 (RFC 1952)
+ */
+#ifdef USE_ZLIB_OR_ZLIBNG
 
 /* Get a one-byte integer and return 0 on success and the value in *ret.
    Otherwise -1 is returned, state->err is set, and *ret is not modified. */
@@ -958,6 +1027,45 @@ check_for_zstd_compression(FILE_T state)
  * https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
  */
 #ifdef USE_LZ4
+static void
+lz4_fast_seek_add(FILE_T file, struct zlib_cur_seek_point *point _U_, int64_t in_pos, int64_t out_pos)
+{
+    if (!file->fast_seek) {
+        return;
+    }
+
+    struct fast_seek_point *item = NULL;
+
+    if (file->fast_seek->len != 0)
+        item = (struct fast_seek_point *)file->fast_seek->pdata[file->fast_seek->len - 1];
+
+    /* As of Glib 2.68 GTree has g_tree_upper_bound, or we could use a
+     * wmem_tree. However, since our initial read is usually sequential
+     * only adding seek points at the end of the ptr array is fast and fine.
+     */
+
+    /* don't bother adding jump points between very small blocks (min SPAN) */
+    if (!item || item->out + SPAN < out_pos) {
+        struct fast_seek_point *val = g_new(struct fast_seek_point,1);
+        val->in = in_pos;
+        val->out = out_pos;
+        val->compression = LZ4;
+#if 0
+        if (point->pos != 0) {
+            unsigned int left = LZ4_WINSIZE - point->pos;
+
+            memcpy(val->data.zlib.window, point->window + point->pos, left);
+            memcpy(val->data.zlib.window + left, point->window, point->pos);
+        } else
+            memcpy(val->data.zlib.window, point->window, ZZ4_WINSIZE);
+#endif
+
+        val->data.lz4.lz4_info = file->lz4_info;
+        memcpy(val->data.lz4.lz4_hdr, file->lz4_hdr, LZ4F_HEADER_SIZE_MAX);
+        g_ptr_array_add(file->fast_seek, val);
+    }
+}
+
 static bool
 lz4_fill_out_buffer(FILE_T state)
 {
@@ -966,29 +1074,203 @@ lz4_fill_out_buffer(FILE_T state)
     if (state->in.avail == 0 && fill_in_buffer(state) == -1)
         return false;
 
-    size_t outBufSize = state->size << 1;
-    size_t inBufSize = state->in.avail;
-    const size_t ret = LZ4F_decompress(state->lz4_dctx, state->out.buf, &outBufSize, state->in.next, &inBufSize, NULL);
-    if (LZ4F_isError(ret)) {
-        state->err = WTAP_ERR_DECOMPRESS;
-        state->err_info = LZ4F_getErrorName(ret);
+    /*
+     * We should be at the start of a block. First, determine the size of
+     * the block. We tell LZ4F_decompress that there's no room to put
+     * the decompressed block; this will make it read the block size
+     * header and stop, returning the size of the block (plus next
+     * header) as hint of how much input to hand next.
+     */
+
+    size_t outBufSize = 0; // Zero so we don't actually consume the block
+    size_t inBufSize;
+
+    size_t compressedSize = 0;
+
+    do {
+        /* get more input for decompress() */
+        if (state->in.avail == 0 && fill_in_buffer(state) == -1)
+            break;
+        if (state->eof) {
+            state->err = WTAP_ERR_SHORT_READ;
+            state->err_info = NULL;
+            break;
+        }
+
+        inBufSize = state->in.avail;
+        compressedSize = LZ4F_decompress(state->lz4_dctx, state->out.buf, &outBufSize, state->in.next, &inBufSize, NULL);
+
+        if (LZ4F_isError(compressedSize)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = LZ4F_getErrorName(compressedSize);
+            return false;
+        }
+
+        state->in.next  += inBufSize;
+        state->in.avail -= inBufSize;
+
+        if (compressedSize == 0) {
+            /* End of Frame */
+            state->last_compression = state->compression;
+            state->compression = UNKNOWN;
+            return true;
+        }
+
+        ws_assert(outBufSize == 0);
+
+    } while (compressedSize < LZ4F_BLOCK_HEADER_SIZE);
+
+    /*
+     * We don't want to add a fast seek point for the end of frame,
+     * especially if there's another frame or other stream after it,
+     * which would have the same out position. So add it after the
+     * reading the block size - but point to where the block size
+     * is so that we'll fast seek to the block size again.
+     */
+    if (state->lz4_info.blockMode == LZ4F_blockIndependent) {
+        /*
+         * XXX - If state->lz4_info.blockMode == LZ4F_blockLinked, it doesn't
+         * seem like the LZ4 Frame API can handle this, we would need to use
+         * the low level Block API and pass the last 64KiB window of data to
+         * LZ4_setStreamDecode and use LZ4_decompress_safe_continue (similar
+         * to gzip). So for now we can't do fast seek with it (we do add one
+         * header at the frame beginning so that concatenated frames and other
+         * decompression streams work.)
+         */
+        lz4_fast_seek_add(state, NULL, state->raw_pos - state->in.avail - LZ4F_BLOCK_HEADER_SIZE, state->pos);
+    }
+
+    // Now actually read the entire next block - but not the next header
+    compressedSize -= LZ4F_BLOCK_HEADER_SIZE;
+    state->out.next = state->out.buf;
+
+    if (compressedSize > state->size) {
+        /*
+         * What is this? Either bogus, or some new variant of LZ4 Frames with
+         * a larger block size we don't support. We could have a buffer
+         * overrun if we try to process it.
+         *
+         * TODO - We could realloc here.
+         */
+        state->err = WTAP_ERR_DECOMPRESSION_NOT_SUPPORTED;
+        state->err_info = "lz4 compressed block size too large";
         return false;
+    }
+
+    size_t ret;
+    do {
+        /* get more input for decompress() */
+        if (state->in.avail == 0 && fill_in_buffer(state) == -1)
+            break;
+        if (state->eof) {
+            state->err = WTAP_ERR_SHORT_READ;
+            state->err_info = NULL;
+            break;
+        }
+
+        outBufSize = (state->size << 1) - offset_in_buffer(&state->out);
+        inBufSize = MIN(state->in.avail, compressedSize);
+        ret = LZ4F_decompress(state->lz4_dctx, state->out.next, &outBufSize, state->in.next, &inBufSize, NULL);
+
+        if (LZ4F_isError(ret)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = LZ4F_getErrorName(ret);
+            return false;
+        }
+        state->in.next  += inBufSize;
+        state->in.avail -= inBufSize;
+        compressedSize -= inBufSize;
+
+        state->out.next += outBufSize;
+        state->out.avail += outBufSize;
+    } while (compressedSize != 0);
+
+    state->out.next  = state->out.buf;
+
+#if 0
+    /* This is an alternative implementation using the lower-level
+     * LZ4 Block API. Doing something like this might be necessary
+     * to handle linked blocks, because the Frame API doesn't have
+     * a method to reset the dictionary / window.
+     */
+    int outBufSize = state->size << 1;
+    uint32_t compressedSize;
+    if (gz_next4(state, &compressedSize) == -1) {
+        return false;
+    }
+    if (compressedSize == 0) {
+        /* EndMark */
+        if (state->lz4_info.contentChecksumFlag) {
+            uint32_t xxHash;
+            if (gz_next4(state, &xxHash) == -1) {
+                return false;
+            }
+            /* XXX - check hash? */
+        }
+        state->last_compression = state->compression;
+        state->compression = UNKNOWN;
+        return true;
+    }
+    bool uncompressed = compressedSize >> 31;
+    compressedSize &= 0x7FFFFFFF;
+    if (compressedSize > state->size) {
+        // TODO - we could realloc here
+        state->err = WTAP_ERR_DECOMPRESSION_NOT_SUPPORTED;
+        state->err_info = "lz4 compressed block size too large";
+        return false;
+    }
+
+    /*
+     * We have to read an entire block as we're using the low-level
+     * Block API instead of the LZ4 Frame API.
+     */
+    if (compressedSize > (unsigned)state->in.avail) {
+        memmove(state->in.buf, state->in.next, state->in.avail);
+        state->in.next = state->in.buf;
+        while ((unsigned)state->in.avail < compressedSize) {
+            if (state->eof) {
+                state->err = WTAP_ERR_SHORT_READ;
+                state->err_info = NULL;
+                return false;
+            }
+            if (fill_in_buffer(state) == -1) {
+                return false;
+            }
+        }
+    }
+
+    int decompressedSize;
+    if (uncompressed) {
+        memcpy(state->out.buf, state->in.buf, compressedSize);
+        decompressedSize = compressedSize;
+    } else {
+        decompressedSize = LZ4_decompress_safe(state->in.next, state->out.buf, compressedSize, outBufSize);
+        //const size_t ret = LZ4F_decompress(state->lz4_dctx, state->out.buf, &outBufSize, state->in.next, &inBufSize, NULL);
+        if (LZ4F_isError(decompressedSize)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = LZ4F_getErrorName(decompressedSize);
+            return false;
+        }
     }
 
     /*
      * We assume LZ4F_decompress() will not set inBufSize to a
      * value > state->in.avail.
      */
-    state->in.next = state->in.next + inBufSize;
-    state->in.avail -= (unsigned)inBufSize;
+    state->in.next  += compressedSize;
+    state->in.avail -= compressedSize;
 
-    state->out.next = state->out.buf;
-    state->out.avail = (unsigned)outBufSize;
+    state->out.next  = state->out.buf;
+    state->out.avail = (unsigned)decompressedSize;
 
-    if (ret == 0) {
-        state->last_compression = state->compression;
-        state->compression = UNKNOWN;
+    if (state->lz4_info.blockChecksumFlag == LZ4F_blockChecksumEnabled) {
+        uint32_t xxHash;
+        if (gz_next4(state, &xxHash) == -1) {
+            return false;
+        }
+        /* XXX - check hash? */
     }
+#endif
     return true;
 }
 #endif /* USE_LZ4 */
@@ -1018,6 +1300,59 @@ check_for_lz4_compression(FILE_T state)
             return -1;
         }
 #endif /* LZ4_VERSION_NUMBER >= 10800 */
+        size_t headerSize = LZ4F_HEADER_SIZE_MAX;
+#if LZ4_VERSION_NUMBER >= 10900
+        /*
+         * In 1.9.0+ we can handle a silly edge case of a tiny valid
+         * frame at the end of a file that is smaller than the maximum
+         * header size.
+         */
+        while (state->in.avail < LZ4F_MIN_SIZE_TO_KNOW_HEADER_LENGTH) {
+            if (fill_in_buffer(state) == -1) {
+                return -1;
+            }
+            if (state->eof) {
+                state->err = WTAP_ERR_SHORT_READ;
+                state->err_info = NULL;
+                return 0;
+            }
+        }
+        headerSize = LZ4F_headerSize(state->in.next, state->in.avail);
+        if (LZ4F_isError(headerSize)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = LZ4F_getErrorName(headerSize);
+            return -1;
+        }
+#endif /* LZ4_VERSION_NUMBER >= 10900 */
+        while (state->in.avail < headerSize) {
+            if (fill_in_buffer(state) == -1) {
+                return -1;
+            }
+            if (state->eof) {
+                state->err = WTAP_ERR_SHORT_READ;
+                state->err_info = NULL;
+                return 0;
+            }
+        }
+        size_t inBufSize = state->in.avail;
+        memcpy(state->lz4_hdr, state->in.next, headerSize);
+        const LZ4F_errorCode_t err = LZ4F_getFrameInfo(state->lz4_dctx, &state->lz4_info, state->in.next, &inBufSize);
+        if (LZ4F_isError(err)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = LZ4F_getErrorName(err);
+            return -1;
+        }
+
+        /*
+         * XXX - We could check state->lz4_info.blockSizeID here, and
+         * only realloc the buffers to a larger value if the max
+         * block size is bigger than state->size. Also we could fail
+         * on unknown values?
+         */
+        state->in.avail -= inBufSize;
+        state->in.next += inBufSize;
+
+        fast_seek_header(state, state->raw_pos - state->in.avail, state->pos, LZ4);
         state->compression = LZ4;
         state->is_compressed = true;
         return 1;
@@ -1047,6 +1382,21 @@ static compression_type_test const compression_type_tests[] = {
 static int
 check_for_compression(FILE_T state)
 {
+    /*
+     * If this isn't the first frame / compressed stream, ensure that
+     * we're starting at the beginning of the buffer. This shouldn't
+     * get called much.
+     *
+     * This is to avoid edge cases where a previous frame finished but
+     * state->in.next is close to the end of the buffer so there isn't
+     * much room to put the start of the next frame.
+     * This also lets us put back bytes if things go wrong.
+     */
+    if (state->in.next != state->in.buf) {
+        memmove(state->in.buf, state->in.next, state->in.avail);
+        state->in.next = state->in.buf;
+    }
+
     /* get some data in the input buffer */
     if (state->in.avail == 0) {
         if (fill_in_buffer(state) == -1)
@@ -1343,6 +1693,16 @@ file_fdopen(int fd)
             want = MAX_READ_BUF_SIZE;
     }
 #endif /* HAVE_ZSTD */
+#ifdef USE_LZ4
+    if (LZ4BUFSIZE > want) {
+        if (LZ4BUFSIZE <= MAX_READ_BUF_SIZE) {
+            want = LZ4BUFSIZE;
+        } else {
+            goto err;
+        }
+    }
+#endif /* USE_LZ4 */
+
     /* allocate buffers */
     state->in.buf = (unsigned char *)g_try_malloc(want);
     state->in.next = state->in.buf;
@@ -1572,10 +1932,13 @@ file_seek(FILE_T file, int64_t offset, int whence, int *err)
      * outside the span for compressed files or is this an uncompressed
      * file?
      *
+     * For LZ4, we need to use the fast seek data even if we're within
+     * a SPAN in the case where the LZ4F_frameInfo data changed.
+     *
      * XXX, profile
      */
     if ((here = fast_seek_find(file, file->pos + offset)) &&
-        (offset < 0 || offset > SPAN || here->compression == UNCOMPRESSED)) {
+        (offset < 0 || offset > SPAN || here->compression == UNCOMPRESSED || here->compression == LZ4)) {
         int64_t off, off2;
 
         /*
@@ -1597,6 +1960,13 @@ file_seek(FILE_T file, int64_t offset, int whence, int *err)
             off2 = here->out;
         } else
 #endif /* USE_ZLIB_OR_ZLIBNG */
+#ifdef USE_LZ4
+        if (here->compression == LZ4) {
+            ws_debug("fast seek lz4");
+            off = here->in;
+            off2 = here->out;
+        } else
+#endif /* USE_LZ4 */
         {
             off2 = (file->pos + offset);
             off = here->in + (off2 - here->out);
@@ -1647,11 +2017,44 @@ file_seek(FILE_T file, int64_t offset, int whence, int *err)
             file->compression = ZLIB;
         } else
 #endif /* USE_ZLIB_OR_ZLIBNG */
+#ifdef USE_LZ4
+        if (here->compression == LZ4) {
+            /* If the frame information seems to have changed (i.e., we fast
+             * seeked into a different frame that also has different flags
+             * and options), then reset the context and re-read it.
+             * Unfortunately the API doesn't provide a method to set the
+             * context options explicitly based on an already read
+             * LZ4F_frameInfo_t.
+             */
+            if (memcmp(&file->lz4_info, &here->data.lz4.lz4_info, sizeof(LZ4F_frameInfo_t)) != 0) {
+#if LZ4_VERSION_NUMBER >= 10800
+                LZ4F_resetDecompressionContext(file->lz4_dctx);
+#else /* LZ4_VERSION_NUMBER >= 10800 */
+                LZ4F_freeDecompressionContext(file->lz4_dctx);
+                const LZ4F_errorCode_t ret = LZ4F_createDecompressionContext(&file->lz4_dctx, LZ4F_VERSION);
+                if (LZ4F_isError(ret)) {
+                    file->err = WTAP_ERR_INTERNAL;
+                    file->err_info = LZ4F_getErrorName(ret);
+                    return -1;
+                }
+#endif /* LZ4_VERSION_NUMBER >= 10800 */
+                size_t hdr_size = LZ4F_HEADER_SIZE_MAX;
+                const LZ4F_errorCode_t frame_err = LZ4F_getFrameInfo(file->lz4_dctx, &file->lz4_info, here->data.lz4.lz4_hdr, &hdr_size);
+                if (LZ4F_isError(frame_err)) {
+                    file->err = WTAP_ERR_DECOMPRESS;
+                    file->err_info = LZ4F_getErrorName(frame_err);
+                    return -1;
+                }
+            }
+            file->lz4_info = here->data.lz4.lz4_info;
+            file->compression = LZ4;
+        } else
+#endif /* USE_LZ4 */
             file->compression = here->compression;
 
         offset = (file->pos + offset) - off2;
         file->pos = off2;
-        /* g_print("OK! %ld\n", offset); */
+        ws_debug("Fast seek OK! %"PRId64, offset);
 
         if (offset) {
             /* Don't skip forward yet, wait until we want to read from
@@ -2399,6 +2802,240 @@ gzwfile_geterr(GZWFILE_T state)
 }
 #endif /* USE_ZLIB_OR_ZLIBNG */
 
+#ifdef USE_LZ4
+/* internal lz4 file state data structure for writing */
+struct lz4_writer {
+    int fd;                 /* file descriptor */
+    int64_t pos;            /* current position in uncompressed data */
+    int64_t pos_out;
+    size_t size_out;      /* buffer size, zero if not allocated yet */
+    size_t want;          /* requested buffer size, default is LZ4BUFSIZE */
+    size_t want_out;      /* requested output buffer size, determined from want */
+    unsigned char *out; /* output buffer, containing uncompressed data */
+    int err;                /* error code */
+    const char *err_info;   /* additional error information string for some errors */
+    LZ4F_preferences_t lz4_prefs;
+    LZ4F_cctx *lz4_cctx;
+};
+
+LZ4WFILE_T
+lz4wfile_open(const char *path)
+{
+    int fd;
+    LZ4WFILE_T state;
+    int save_errno;
+
+    fd = ws_open(path, O_BINARY|O_WRONLY|O_CREAT|O_TRUNC, 0666);
+    if (fd == -1)
+        return NULL;
+    state = lz4wfile_fdopen(fd);
+    if (state == NULL) {
+        save_errno = errno;
+        ws_close(fd);
+        errno = save_errno;
+    }
+    return state;
+}
+
+LZ4WFILE_T
+lz4wfile_fdopen(int fd)
+{
+    LZ4WFILE_T state;
+
+    /* allocate wtap_writer structure to return */
+    state = (LZ4WFILE_T)g_try_malloc(sizeof *state);
+    if (state == NULL)
+        return NULL;
+    state->fd = fd;
+    state->size_out = 0;         /* no buffer allocated yet */
+    state->want = LZ4BUFSIZE;    /* max input size (a block) */
+    state->want_out = LZ4F_compressBound(state->want, &state->lz4_prefs);
+    /*
+     * This size guarantees that we will always have enough room to
+     * write the result of LZ4F_compressUpdate (or Flush or End),
+     * so long as the output buffer is empty (i.e., we immediately
+     * write to the output file anything the compressor hands back
+     * instead of buffering.)
+     */
+
+    memset(&state->lz4_prefs, 0, sizeof(LZ4F_preferences_t));
+    /* Use the same prefs as the lz4 command line utility defaults. */
+    state->lz4_prefs.frameInfo.blockMode = LZ4F_blockIndependent; /* Allows fast seek */
+    state->lz4_prefs.frameInfo.contentChecksumFlag = 1;
+    state->lz4_prefs.frameInfo.blockSizeID = LZ4F_max4MB;
+    /* XXX - What should we set state->lz4_prefs.compressionLevel to?
+     * The command line utility uses 1, recommends 9 as another option, and
+     * also there's 12 (max).
+     *
+     * We could provide an API call or perhaps two or three preset options.
+     */
+    state->lz4_prefs.compressionLevel = 1;
+
+    /* initialize stream */
+    state->err = 0;              /* clear error */
+    state->err_info = NULL;         /* clear additional error information */
+    state->pos = 0;                 /* no uncompressed data yet */
+    state->pos_out = 0;
+
+    /* return stream */
+    return state;
+}
+
+/* Writes len bytes from the output buffer to the file.
+ * Return true on success; returns false and sets state->err on failure.
+ */
+static bool
+lz4_write_out(LZ4WFILE_T state, size_t len)
+{
+    if (len > 0) {
+        ssize_t got = ws_write(state->fd, state->out, len);
+        if (got < 0) {
+            state->err = errno;
+            return false;
+        }
+        if ((unsigned)got != len) {
+            state->err = WTAP_ERR_SHORT_WRITE;
+            return false;
+        }
+        state->pos_out += got;
+    }
+    return true;
+}
+
+/* Initialize state for writing an lz4 file.  Mark initialization by setting
+   state->size to non-zero.  Return -1, and set state->err and possibly
+   state->err_info, on failure; return 0 on success. */
+static int
+lz4_init(LZ4WFILE_T state)
+{
+    LZ4F_errorCode_t ret;
+
+    /* create Compression context */
+    ret = LZ4F_createCompressionContext(&state->lz4_cctx, LZ4F_VERSION);
+    if (LZ4F_isError(ret)) {
+        state->err = WTAP_ERR_CANT_WRITE; // XXX - WTAP_ERR_COMPRESS?
+        state->err_info = LZ4F_getErrorName(ret);
+        return -1;
+    }
+
+    /* allocate buffer */
+    state->out = (unsigned char *)g_try_malloc(state->want_out);
+    if (state->out == NULL) {
+        g_free(state->out);
+        LZ4F_freeCompressionContext(state->lz4_cctx);
+        state->err = ENOMEM;
+        return -1;
+    }
+
+    ret = LZ4F_compressBegin(state->lz4_cctx, state->out, state->want_out, &state->lz4_prefs);
+    if (LZ4F_isError(ret)) {
+        state->err = WTAP_ERR_CANT_WRITE; // XXX - WTAP_ERR_COMPRESS?
+        state->err_info = LZ4F_getErrorName(ret);
+        return -1;
+    }
+    if (!lz4_write_out(state, ret)) {
+        return -1;
+    }
+
+    /* mark state as initialized */
+    state->size_out = state->want_out;
+
+    return 0;
+}
+
+/* Write out len bytes from buf.  Return 0, and set state->err, on
+   failure or on an attempt to write 0 bytes (in which case state->err
+   is 0); return the number of bytes written on success. */
+size_t
+lz4wfile_write(LZ4WFILE_T state, const void *buf, size_t len)
+{
+    size_t to_write;
+    size_t put = len;
+
+    /* check that there's no error */
+    if (state->err != 0)
+        return 0;
+
+    /* if len is zero, avoid unnecessary operations */
+    if (len == 0)
+        return 0;
+
+    /* allocate memory if this is the first time through */
+    if (state->size_out == 0 && lz4_init(state) == -1)
+        return 0;
+
+    do {
+        to_write = MIN(len, state->want);
+        size_t bytesWritten = LZ4F_compressUpdate(state->lz4_cctx, state->out, state->size_out,
+            buf, to_write, NULL);
+        if (LZ4F_isError(bytesWritten)) {
+            state->err = WTAP_ERR_CANT_WRITE; // XXX - WTAP_ERR_COMPRESS?
+            state->err_info = LZ4F_getErrorName(bytesWritten);
+            return 0;
+        }
+        if (!lz4_write_out(state, bytesWritten)) {
+            return 0;
+        }
+        state->pos += to_write;
+        len -= to_write;
+    } while (len);
+
+    /* input was all buffered or compressed */
+    return put;
+}
+
+/* Flush out what we've written so far.  Returns -1, and sets state->err,
+   on failure; returns 0 on success. */
+int
+lz4wfile_flush(LZ4WFILE_T state)
+{
+    size_t bytesWritten;
+    /* check that there's no error */
+    if (state->err != 0)
+        return -1;
+
+    bytesWritten = LZ4F_flush(state->lz4_cctx, state->out, state->size_out, NULL);
+    if (LZ4F_isError(bytesWritten)) {
+        // Should never happen if size_out >= LZ4F_compressBound(0, prefsPtr)
+        state->err = WTAP_ERR_INTERNAL;
+        return -1;
+    }
+    if (!lz4_write_out(state, bytesWritten)) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Flush out all data written, and close the file.  Returns a Wiretap
+   error on failure; returns 0 on success. */
+int
+lz4wfile_close(LZ4WFILE_T state)
+{
+    int ret = 0;
+
+    /* flush, free memory, and close file */
+    size_t bytesWritten = LZ4F_compressEnd(state->lz4_cctx, state->out, state->size_out, NULL);
+    if (LZ4F_isError(bytesWritten)) {
+        // Should never happen if size_out >= LZ4F_compressBound(0, prefsPtr)
+        ret = WTAP_ERR_INTERNAL;
+    }
+    if (!lz4_write_out(state, bytesWritten)) {
+        ret = state->err;
+    }
+    g_free(state->out);
+    LZ4F_freeCompressionContext(state->lz4_cctx);
+    if (ws_close(state->fd) == -1 && ret == 0)
+        ret = errno;
+    g_free(state);
+    return ret;
+}
+
+int
+lz4wfile_geterr(LZ4WFILE_T state)
+{
+    return state->err;
+}
+#endif /* USE_LZ4 */
 /*
  * Editor modelines  -  https://www.wireshark.org/tools/modelines.html
  *
