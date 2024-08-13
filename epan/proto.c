@@ -18,6 +18,9 @@
 #include <inttypes.h>
 #include <errno.h>
 
+#include <epan/tfs.h>
+#include <epan/unit_strings.h>
+
 #include <wsutil/array.h>
 #include <wsutil/bits_ctz.h>
 #include <wsutil/bits_count_ones.h>
@@ -11300,7 +11303,10 @@ every_finfo(proto_node *node, void * data)
 	return false;
 }
 
-/* Return GPtrArray* of field_info pointers containing all hfindexes that appear in a tree. */
+/* Return GPtrArray* of field_info pointers containing all hfindexes that appear in a tree.
+ * The caller does need to free the returned GPtrArray with
+ * g_ptr_array_free(<array>, true).
+ */
 GPtrArray *
 proto_all_finfos(proto_tree *tree)
 {

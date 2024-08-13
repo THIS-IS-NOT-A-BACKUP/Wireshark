@@ -42,7 +42,12 @@ CompressionGroupBox::CompressionGroupBox(QWidget *parent) :
 
     setLayout(vbox);
 
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     connect(bg_, &QButtonGroup::idToggled, [=] { emit stateChanged(); });
+#else
+    connect(bg_, QOverload<int, bool>::of(&QButtonGroup::buttonToggled), [=] { emit stateChanged(); });
+#endif
+
 }
 
 CompressionGroupBox::~CompressionGroupBox()
