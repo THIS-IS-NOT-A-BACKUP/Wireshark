@@ -674,9 +674,20 @@ else() # ! MSVC
 		# -O<X> and -g get set by the CMAKE_BUILD_TYPE
 		-Wall
 		-Wextra
+		-Wformat
+		-Wformat=2
+		-Wno-format-nonliteral	# TODO https://gitlab.com/wireshark/wireshark/-/issues/19995
+		#-Wconversion			# TODO see above
+		#-Wsign-conversion		# TODO see above
+		-Wtrampolines			# Enable warnings about trampolines that require executable stacks
+		if((CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "12.0"))
+		   -Wbidi-chars=any
+		endif()
 		-Wpointer-arith
 		-Wformat-security
-		-fno-strict-overflow
+		-Werror=format-security
+		-Werror=incompatible-pointer-types
+		-Werror=int-conversion
 		-fexcess-precision=fast	# GCC-only
 		-Wvla
 		-Wattributes
@@ -688,6 +699,20 @@ else() # ! MSVC
 		-Wunreachable-code	# Clang-only
 		-Wdocumentation		# Clang-only
 		-Wlogical-op		# GCC-only
+
+		# Run-time protections mechanisms
+		-fstrict-flex-arrays=3			# Consider a trailing array in a struct as a flexible array if declared as []
+		-fstack-clash-protection		# Increased reliability of stack overflow detection
+		-fcf-protection=full		# Enable control flow protection to counter Return Oriented Programming (ROP) and Jump Oriented Programming (JOP) attacks on many x86 architectures
+		-mbranch-protection=standard	# Enable branch protection to counter Return Oriented Programming (ROP) and Jump Oriented Programming (JOP) attacks on AArch64
+		-D_GLIBCXX_ASSERTIONS				# Precondition checks for C++ standard library calls. Can impact performance.
+		-fstack-protector-strong			# Stack smashing protector
+		-fno-delete-null-pointer-checks		# Force retention of null pointer checks
+		-fno-strict-overflow				# Integer overflow may occur
+		-fno-strict-aliasing				# Do not assume strict aliasing
+		-ftrivial-auto-var-init			# Perform trivial auto variable initialization
+		-fexceptions						# Enable exception propagation to harden multi-threaded C code
+
 		#
 		# Disable errors unconditionally for some static analysis warnings
 		# that are dormant at lower optimizations levels or active only in
@@ -697,7 +722,7 @@ else() # ! MSVC
 		# priority target for action. That is very disruptive
 		# with -Werror enabled (the default on the master branch).
 		#
-		-Wno-error=stringop-overflow=
+		#-Wno-error=stringop-overflow=
 		#
 		# XXX Now that we have a CI job with Release build type (using
 		# -O3 optimization level) the dormancy issue should be ameliorated
@@ -710,8 +735,29 @@ else() # ! MSVC
 		# We want to be able to build with -Werror in that case. New
 		# code should not introduce new deprecations in any case.
 		#
-		-Wno-error=deprecated-declarations
+		#-Wno-error=deprecated-declarations
 	)
+
+	if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+		# _FORTIFY_SOURCE requires -O1 or higher, and the Debug
+		# build type has no optimization
+		list(APPEND WIRESHARK_COMMON_FLAGS
+		# and the Debug build type is without optimization
+		-U_FORTIFY_SOURCE	# Run-time buffer overflow detection. For dist like Ubuntu, U_FORTIFY_SOURCE must be input before D_FORTIFY_SOURCE
+		-D_FORTIFY_SOURCE=3				# Fortify sources with compile- and run-time checks for unsafe libc usage and buffer overflows. Requires -O1 or higher
+		)
+	endif()
+
+	# test_compiler_flag doesn't seem to test that a flag is supported on
+	# a cross-compiled target, only for the native architecture. (Thus
+	# conversely it does work to verify that -mbranch-protection=standard
+	# doesn't work on x64 when compiling natively.)
+	# TODO: Check that this approach works.
+	#if(NOT CMAKE_CROSSCOMPILING)
+	#	list(APPEND WIRESHARK_COMMON_FLAGS
+	#	-fhardened					# Enable pre-determined set of hardening options in GCC. Currently, -fhardened is only supported on GNU/Linux targets
+	#	)
+	#endif()
 
 	if((NOT ENABLE_ASAN) AND (NOT ENABLE_TSAN) AND (NOT ENABLE_UBSAN) AND (NOT DISABLE_FRAME_LARGER_THAN_WARNING))
 		#
@@ -3015,7 +3061,10 @@ if(BUILD_logray AND QT_FOUND)
 		BUNDLE DESTINATION ${CMAKE_INSTALL_BINDIR}
 	)
 
-	if(QT_WINDEPLOYQT_EXECUTABLE)
+	# The build can fail if the copy_logray_qt_dlls target is run at
+	# the same time as the copy_qt_dlls target, so just assume that
+	# copy_qt_dlls will provide everything we need for now.
+	if(QT_WINDEPLOYQT_EXECUTABLE AND NOT BUILD_wireshark)
 		add_custom_target(copy_logray_qt_dlls ALL)
 		set_target_properties(copy_logray_qt_dlls PROPERTIES FOLDER "Copy Tasks")
 		# Will we ever need to use --debug? Windeployqt seems to
@@ -3037,7 +3086,7 @@ if(BUILD_logray AND QT_FOUND)
 			\"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/Logray.exe\")"
 		)
 
-	endif(QT_WINDEPLOYQT_EXECUTABLE)
+	endif(QT_WINDEPLOYQT_EXECUTABLE AND NOT BUILD_wireshark)
 endif()
 
 if (BUILD_logray AND FALCO_PLUGINS)
