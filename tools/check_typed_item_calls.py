@@ -792,6 +792,27 @@ class RangeString:
             if val.min != val.max:
                 could_use_value_string = False
                 break
+
+        # Look for gaps
+        gaps = []    # N.B. could become huge if added every number, so only record first number inside each gap
+        current = None
+        for val in self.parsed_vals:
+            if current:
+                if val.min > current+1:
+                    gaps.append(current+1)
+            current = val.max
+
+        # Check whether each gap is actually covered.
+        for n in gaps:
+            covered = False
+            for val in self.parsed_vals:
+                if n >= val.min and n <= val.max:
+                    covered = True
+                    break
+            if not covered:
+                print('Warning:', self.file, ': range_string', self.name, 'value', str(n) + '-?', '(' + str(hex(n)) +'-?)', 'not covered by any entries')
+                warnings_found += 1
+
         if could_use_value_string:
             print('Warning:', self.file, ': range_string', self.name, 'could be value_string instead!')
             warnings_found += 1
@@ -987,7 +1008,7 @@ class ExpertEntries:
     def __init__(self, filename):
         self.filename = filename
         self.entries = []
-        self.labels = set()
+        self.labels = set()  # key is (name, severity)
 
     def AddEntry(self, entry):
         self.entries.append(entry)
@@ -996,10 +1017,10 @@ class ExpertEntries:
 
         # If these are not unique, can't tell apart from expert window (need to look into frame to see details)
         # TODO: Maybe ok if have different severities?
-        if entry.label in self.labels:
+        if (entry.label, entry.severity) in self.labels:
             print('Warning:', self.filename, 'label', '"' + entry.label + '"', 'has already been seen (now in', entry.name+')')
             warnings_found += 1
-        self.labels.add(entry.label)
+        self.labels.add((entry.label, entry.severity))
 
 
 
