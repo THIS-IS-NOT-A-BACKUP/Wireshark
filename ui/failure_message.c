@@ -69,6 +69,21 @@ write_failure_message(const char *filename, int err)
                filename, g_strerror(err));
 }
 
+/*
+ * Error message for a failed attempt to rename a file other than
+ * a capture file.
+ * "old_filename" is the name of the file being renamed; "new_filename"
+ * is the name to which it's being renamed; "err" is assumed to be a
+ * UNIX-style errno.
+ */
+void
+rename_failure_message(const char *old_filename, const char *new_filename,
+                       int err)
+{
+    cmdarg_err("An error occurred while renaming the file \"%s\" to \"%s\": %s.",
+               old_filename, new_filename, g_strerror(err));
+}
+
 static char *
 input_file_description(const char *fname)
 {
@@ -546,4 +561,27 @@ cfile_close_failure_message(const char *filename, int err, char *err_info)
         break;
     }
     g_free(file_string);
+}
+
+/*
+ * Register these routines with the report_message mechanism.
+ */
+void
+init_report_failure_message(const char *friendly_program_name)
+{
+    static const struct report_message_routines report_failure_routines = {
+        failure_message,
+        failure_message,
+        open_failure_message,
+        read_failure_message,
+        write_failure_message,
+        rename_failure_message,
+        cfile_open_failure_message,
+        cfile_dump_open_failure_message,
+        cfile_read_failure_message,
+        cfile_write_failure_message,
+        cfile_close_failure_message
+    };
+
+    init_report_message(friendly_program_name, &report_failure_routines);
 }
