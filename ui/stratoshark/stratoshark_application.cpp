@@ -1,35 +1,35 @@
-/* logray_application.cpp
+/* stratoshark_application.cpp
  *
- * Logray - Event log analyzer
+ * Stratoshark - System call and event log analyzer
  * By Gerald Combs <gerald@wireshark.org>
  * Copyright 1998 Gerald Combs
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#include "logray_application.h"
+#include "stratoshark_application.h"
 
 #include "extcap.h"
 #include "ui/iface_lists.h"
 #include "ui/ws_ui_util.h"
 
-LograyApplication *lwApp;
+StratosharkApplication *ssApp;
 
-LograyApplication::LograyApplication(int &argc, char **argv) :
+StratosharkApplication::StratosharkApplication(int &argc, char **argv) :
     MainApplication(argc, argv)
 {
-    lwApp = this;
+    ssApp = this;
     Q_INIT_RESOURCE(lricon);
     setApplicationName("Logray");
     setDesktopFileName(QStringLiteral("org.wireshark.Logray"));
 }
 
-LograyApplication::~LograyApplication()
+StratosharkApplication::~StratosharkApplication()
 {
-    lwApp = NULL;
+    ssApp = NULL;
 }
 
-void LograyApplication::refreshLocalInterfaces()
+void StratosharkApplication::refreshLocalInterfaces()
 {
     extcap_clear_interfaces();
 
@@ -54,7 +54,7 @@ void LograyApplication::refreshLocalInterfaces()
 #endif
 }
 
-void LograyApplication::initializeIcons()
+void StratosharkApplication::initializeIcons()
 {
     // Do this as late as possible in order to allow time for
     // MimeDatabaseInitThread to do its work.
