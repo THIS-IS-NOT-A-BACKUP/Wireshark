@@ -19,9 +19,9 @@ StratosharkApplication::StratosharkApplication(int &argc, char **argv) :
     MainApplication(argc, argv)
 {
     ssApp = this;
-    Q_INIT_RESOURCE(lricon);
-    setApplicationName("Logray");
-    setDesktopFileName(QStringLiteral("org.wireshark.Logray"));
+    Q_INIT_RESOURCE(ssicon);
+    setApplicationName("Stratoshark");
+    setDesktopFileName(QStringLiteral("org.wireshark.Stratoshark"));
 }
 
 StratosharkApplication::~StratosharkApplication()
@@ -41,7 +41,7 @@ void StratosharkApplication::refreshLocalInterfaces()
     filter_list = g_list_append(filter_list, GUINT_TO_POINTER((unsigned) IF_EXTCAP));
 
     // We don't need to (re)start the stats (which calls dumpcap) because
-    // Logray only uses extcaps now. If that changes, do the below instead.
+    // Stratoshark only uses extcaps now. If that changes, do the below instead.
 #if 0
     emit scanLocalInterfaces(filter_list);
 #endif
@@ -60,9 +60,9 @@ void StratosharkApplication::initializeIcons()
     // MimeDatabaseInitThread to do its work.
     QList<int> icon_sizes = QList<int>() << 16 << 24 << 32 << 48 << 64 << 128 << 256 << 512 << 1024;
     foreach (int icon_size, icon_sizes) {
-        QString icon_path = QString(":/lricon/lricon%1.png").arg(icon_size);
+        QString icon_path = QString(":/ssicon/ssicon%1.png").arg(icon_size);
         normal_icon_.addFile(icon_path);
-        icon_path = QString(":/lricon/lriconcap%1.png").arg(icon_size);
+        icon_path = QString(":/ssicon/ssiconcap%1.png").arg(icon_size);
         capture_icon_.addFile(icon_path);
     }
 }
