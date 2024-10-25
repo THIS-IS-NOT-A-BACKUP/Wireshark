@@ -303,6 +303,8 @@ static int hf_oran_beamid_ap1;
 static int hf_oran_beamid_ap2;
 static int hf_oran_beamid_ap3;
 
+static int hf_oran_port_list_index;
+
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
 static int hf_oran_refa;
@@ -490,7 +492,10 @@ enum section_c_types {
     SEC_C_UE_SCHED = 5,
     SEC_C_CH_INFO = 6,
     SEC_C_LAA = 7,
-    SEC_C_ACK_NACK_FEEDBACK = 8
+    SEC_C_ACK_NACK_FEEDBACK = 8,
+    SEC_C_SINR_REPORTING = 9,
+    SEC_C_RRM_MEAS_REPORTS = 10,
+    SEC_C_REQUEST_RRM_MEAS = 11
 };
 
 static const range_string section_types[] = {
@@ -503,7 +508,10 @@ static const range_string section_types[] = {
     { SEC_C_CH_INFO,           SEC_C_CH_INFO,           "Channel information" },
     { SEC_C_LAA,               SEC_C_LAA,               "LAA (License Assisted Access)" },
     { SEC_C_ACK_NACK_FEEDBACK, SEC_C_ACK_NACK_FEEDBACK, "ACK/NACK Feedback" },
-    { 9,                       255,                     "Reserved for future use" },
+    { SEC_C_SINR_REPORTING,    SEC_C_SINR_REPORTING,    "SINR Reporting" },
+    { SEC_C_RRM_MEAS_REPORTS,  SEC_C_RRM_MEAS_REPORTS,  "RRM Measurement Reports" },
+    { SEC_C_REQUEST_RRM_MEAS,  SEC_C_REQUEST_RRM_MEAS,  "Request RRM Measurements" },
+    { 12,                      255,                     "Reserved for future use" },
     { 0, 0, NULL} };
 
 static const range_string section_types_short[] = {
@@ -516,7 +524,10 @@ static const range_string section_types_short[] = {
     { SEC_C_CH_INFO,           SEC_C_CH_INFO,           "(Channel info)      " },
     { SEC_C_LAA,               SEC_C_LAA,               "(LAA)               " },
     { SEC_C_ACK_NACK_FEEDBACK, SEC_C_ACK_NACK_FEEDBACK, "(ACK/NACK)          " },
-    { 9,                       255,                     "Reserved for future use" },
+    { SEC_C_SINR_REPORTING,    SEC_C_SINR_REPORTING,    "(SINR Reporting)    " },
+    { SEC_C_RRM_MEAS_REPORTS,  SEC_C_RRM_MEAS_REPORTS,  "(RRM Meas Reports)  " },
+    { SEC_C_REQUEST_RRM_MEAS,  SEC_C_REQUEST_RRM_MEAS,  "(Req RRM Meas)      " },
+    { 12,                      255,                     "Reserved for future use" },
     { 0, 0, NULL }
 };
 
@@ -613,46 +624,58 @@ static const value_string exttype_vals[] = {
     {21,    "Variable PRB group size for channel information"},
     {22,    "ACK/NACK request"},
     {23,    "Multiple symbol modulation compression parameters"},
+    {24,    "PUSCH DMRS configuration"},
+    {25,    "Symbol reordering for DMRS-BF"},
+    {26,    "Frequency offset feedback"},
+    {27,    "O-DU controlled dimensionality reduction"},
     {0, NULL}
 };
 
 /**************************************************************************************/
 /* Keep track for each Section Extension, which section types are allowed to carry it */
-#define HIGHEST_EXTTYPE 23
+#define HIGHEST_EXTTYPE 27
 typedef struct {
     bool ST0;
     bool ST1;
     bool ST3;
     bool ST5;
     bool ST6;
+    bool ST10;
+    bool ST11;
 } AllowedCTs_t;
 
 
 static AllowedCTs_t ext_cts[HIGHEST_EXTTYPE] = {
-    /* ST0    ST1    ST3    ST5    ST6     */
-    { false, true,  true,  false, false },  // SE 1      (1,3)
-    { false, true,  true,  false, false },  // SE 2      (1,3)
-    { false, true,  true,  false, false },  // SE 3      (1,3)
-    { false, true,  true,  true,  false },  // SE 4      (1,3,5)
-    { false, true,  true,  true,  false },  // SE 5      (1,3,5)
-    { false, true,  true,  true,  false },  // SE 6      (1,3,5)
-    { true,  false, false, false, false },  // SE 7      (0)
-    { false, false, false, true,  false },  // SE 8      (5)
-    { true,  true,  true,  true,  true  },  // SE 9      (all)
-    { false, true,  true,  true,  false },  // SE 10     (1,3,5)
-    { false, true,  true,  false, false },  // SE 11     (1,3)
-    { false, true,  true,  true,  false },  // SE 12     (1,3,5)
-    { false, true,  true,  true,  false },  // SE 13     (1,3,5)
-    { false, false, false, true,  false },  // SE 14     (5)
-    { false, false, false, true,  true  },  // SE 15     (5,6)
-    { false, false, false, true,  false },  // SE 16     (5)
-    { false, false, false, true,  false },  // SE 17     (5)
-    { false, true,  true,  true,  false },  // SE 18     (1,3,5)
-    { false, true,  true,  false, false },  // SE 19     (1,3)
-    { true,  true,  true,  true,  true  },  // SE 20     (all)
-    { false, false, false, true,  true  },  // SE 21     (5,6)
-    { true,  true,  true,  true,  true  },  // SE 22     (all?)
-    { false, true,  true,  true,  false },  // SE 23     (1,3,5)
+    /* ST0    ST1    ST3    ST5    ST6   ST10    ST11 */
+    { false, true,  true,  false, false, false, false},   // SE 1      (1,3)
+    { false, true,  true,  false, false, false, false},   // SE 2      (1,3)
+    { false, true,  true,  false, false, false, false},   // SE 3      (1,3)
+    { false, true,  true,  true,  false, false, false},   // SE 4      (1,3,5)
+    { false, true,  true,  true,  false, false, false},   // SE 5      (1,3,5)
+    { false, true,  true,  true,  false, false, false},   // SE 6      (1,3,5)
+    { true,  false, false, false, false, false, false},   // SE 7      (0)
+    { false, false, false, true,  false, false, false},   // SE 8      (5)
+    { true,  true,  true,  true,  true,  true,  true },   // SE 9      (all)
+    { false, true,  true,  true,  false, false, false},   // SE 10     (1,3,5)
+    { false, true,  true,  false, false, false, false},   // SE 11     (1,3)
+    { false, true,  true,  true,  false, false, false},   // SE 12     (1,3,5)
+    { false, true,  true,  true,  false, false, false},   // SE 13     (1,3,5)
+    { false, false, false, true,  false, false, false},   // SE 14     (5)
+    { false, false, false, true,  true,  false, false},   // SE 15     (5,6)
+    { false, false, false, true,  false, false, false},   // SE 16     (5)
+    { false, false, false, true,  false, false, false},   // SE 17     (5)
+    { false, true,  true,  true,  false, false, false},   // SE 18     (1,3,5)
+    { false, true,  true,  false, false, false, false},   // SE 19     (1,3)
+    { true,  true,  true,  true,  true,  false, false},   // SE 20     (0,1,3,5)
+    { false, false, false, true,  true,  false, false},   // SE 21     (5,6)
+    { true,  true,  true,  true,  true,  true,  true },   // SE 22     (all)
+    { false, true,  true,  true,  false, false, false},   // SE 23     (1,3,5)
+    { false, false, false, true,  false, false, false },  // SE 24     (5)
+    { false, false, false, true,  false, false, false },  // SE 25     (5)
+    { false, false, false, true,  false, false, false },  // SE 26     (5)
+    { false, false, false, true,  false, false, false },  // SE 27     (5)
+
+
 };
 
 static bool se_allowed_in_st(unsigned se, unsigned ct)
@@ -737,7 +760,7 @@ static const value_string beam_group_type_vals[] = {
     {0x0, "common beam"},
     {0x1, "beam matrix indication"},
     {0x2, "beam vector listing"},
-    {0x3, "reserved"},
+    {0x3, "beamId/ueId listing with associated port-list index"},
     {0, NULL}
 };
 
@@ -2116,6 +2139,8 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
             break;
         }
 
+        bool ext_unhandled = false;
+
         switch (exttype) {
 
             case 1:  /* SE 1: Beamforming Weights */
@@ -2563,10 +2588,38 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                             proto_item_append_text(extension_ti, "%u ", id);
                         }
-                        proto_item_append_text(extension_ti, "]");
 
+                        proto_item_append_text(extension_ti, "]");
                         break;
                     }
+                    case 0x3: /* beamId/ueId listing with associated port-list index */
+                    {
+                        proto_item_append_text(extension_ti, " [ ");
+
+                        for (n=0; n < numPortc; n++) {
+                            /* postListIndex */
+                            uint32_t port_list_index;
+                            proto_tree_add_item_ret_uint(extension_tree, hf_oran_port_list_index, tvb,
+                                                         offset, 1, ENC_BIG_ENDIAN, &port_list_index);
+                            offset += 1;
+
+                            /* 1 reserved bit */
+                            proto_tree_add_item(extension_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+
+                            /* port beam ID (or UEID) */
+                            uint32_t id;
+                            proto_item *beamid_or_ueid_ti = proto_tree_add_item_ret_uint(extension_tree, hf_oran_beamId,
+                                                                                         tvb, offset, 2, ENC_BIG_ENDIAN, &id);
+                            proto_item_append_text(beamid_or_ueid_ti, " port #%u beam ID (or UEId) %u", n, id);
+                            offset += 2;
+
+                            proto_item_append_text(extension_ti, "%u:%u ", port_list_index, id);
+                        }
+
+                        proto_item_append_text(extension_ti, "]");
+                        break;
+                    }
+
 
                     default:
                         /* Warning for unsupported/reserved value */
@@ -3223,12 +3276,13 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 expert_add_info_format(pinfo, exttype_ti, &ei_oran_unhandled_se,
                                        "SE %u (%s) not supported by dissector",
                                        exttype, val_to_str_const(exttype, exttype_vals, "Reserved"));
+                ext_unhandled = true;
                 break;
         }
 
         /* Check offset compared with extlen.  There should be 0-3 bytes of padding */
         int num_padding_bytes = (extension_start_offset + (extlen*4) - offset);
-        if ((num_padding_bytes<0) || (num_padding_bytes>3)) {
+        if (!ext_unhandled && ((num_padding_bytes<0) || (num_padding_bytes>3))) {
             expert_add_info_format(pinfo, extlen_ti, &ei_oran_extlen_wrong,
                                    "extlen signalled %u bytes (+ 0-3 bytes padding), but %u were dissected",
                                    extlen*4, offset-extension_start_offset);
@@ -6306,7 +6360,17 @@ proto_register_oran(void)
           NULL, 0x7f,
           "beam id to be used for antenna port 3",
           HFILL}
+        },
+
+        /* 7.7.10.3a */
+        {&hf_oran_port_list_index,
+         {"portListIndex", "oran_fh_cus.portListIndex",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "the index of an eAxC_ID in the port-list",
+          HFILL}
         }
+
     };
 
     /* Setup protocol subtree array */
