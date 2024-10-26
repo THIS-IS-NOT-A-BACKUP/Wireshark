@@ -304,6 +304,29 @@ static int hf_oran_beamid_ap2;
 static int hf_oran_beamid_ap3;
 
 static int hf_oran_port_list_index;
+static int hf_oran_alpn_per_sym;
+static int hf_oran_ant_dmrs_snr;
+static int hf_oran_user_group_size;
+static int hf_oran_user_group_id;
+static int hf_oran_entry_type;
+static int hf_oran_dmrs_port_number;
+static int hf_oran_ueid_reset;
+static int hf_oran_dmrs_symbol_mask;
+static int hf_oran_scrambling;
+static int hf_oran_nscid;
+static int hf_oran_dtype;
+static int hf_oran_cmd_without_data;
+static int hf_oran_lambda;
+static int hf_oran_first_prb;
+static int hf_oran_last_prb;
+static int hf_oran_low_papr_type;
+static int hf_oran_hopping_mode;
+
+static int hf_oran_tx_win_for_on_air_symbol_l;
+static int hf_oran_tx_win_for_on_air_symbol_r;
+
+static int hf_oran_num_fo_fb;
+static int hf_oran_freq_offset_fb;
 
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
@@ -597,6 +620,18 @@ static const range_string laaMsgTypes[] = {
     {7, 15, "reserved for future methods"},
     {0, 0, NULL}
 };
+
+static const range_string freq_offset_fb_values[] = {
+    {0,      0,        "no frequency offset"},
+    {8000,   8000,     "value not provided"},
+    {1,      30000,    "positive frequency offset, (0, +0.5] subcarrier"},
+    {0x8ad0, 0xffff,   "negative frequency offset, [-0.5, 0) subcarrier"},
+    {0x0,    0xffff,   "reserved"},
+    {0, 0, NULL}
+};
+
+
+
 
 /* Table 7.6.1-1 */
 static const value_string exttype_vals[] = {
@@ -3269,6 +3304,142 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 }
                 break;
             }
+
+            case 24:   /* SE 24: PUSCH DMRS configuration */
+            {
+                /* alpnPerSym (1 bit) */
+                proto_tree_add_item(extension_tree, hf_oran_alpn_per_sym, tvb, offset, 1, ENC_BIG_ENDIAN);
+                /* antDmrsSnr (1 bit) */
+                proto_tree_add_item(extension_tree, hf_oran_ant_dmrs_snr, tvb, offset, 1, ENC_BIG_ENDIAN);
+                /* reserved (1 bit */
+                /* userGroupSize (5 bits) */
+                uint32_t user_group_size;
+                proto_tree_add_item_ret_uint(extension_tree, hf_oran_user_group_size, tvb, offset, 1, ENC_BIG_ENDIAN, &user_group_size);
+
+                offset += 1;
+                /* userGroupId */
+                uint32_t user_group_id;
+                proto_tree_add_item_ret_uint(extension_tree, hf_oran_user_group_id, tvb, offset, 1, ENC_BIG_ENDIAN, &user_group_id);
+                offset += 1;
+
+                /* Dissect each entry.  Not sure how this works with padding bytes though... */
+                while (offset < (extension_start_offset + extlen*4)) {
+
+                    /* entryType (3 bits) */
+                    uint32_t entry_type;
+                    proto_item *entry_type_ti;
+                    entry_type_ti = proto_tree_add_item_ret_uint(extension_tree, hf_oran_entry_type, tvb, offset, 1, ENC_BIG_ENDIAN, &entry_type);
+                    if (entry_type > 3) {
+                        proto_item_append_text(entry_type_ti, " (reserved)");
+                    }
+
+                    /* dmrsPortNumber (5 bits) */
+                    proto_tree_add_item(extension_tree, hf_oran_dmrs_port_number, tvb, offset, 1, ENC_BIG_ENDIAN);
+                    offset += 1;
+
+                    /* What follows depends upon entryType */
+                    switch (entry_type) {
+                        case 0:
+                        case 1:
+                            /* No further fields for these */
+                            break;
+
+                        case 2:
+                        case 3:
+                            /* Type 2/3 are very similar.. */
+
+                            /* ueIdReset (1 bit) */
+                            proto_tree_add_item(extension_tree, hf_oran_ueid_reset, tvb, offset, 1, ENC_BIG_ENDIAN);
+                            /* reserved (1 bit) */
+                            /* dmrsSymbolMask (14 bits) */
+                            proto_tree_add_item(extension_tree, hf_oran_dmrs_symbol_mask, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            offset += 2;
+
+                            /* scrambling */
+                            proto_tree_add_item(extension_tree, hf_oran_scrambling, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            offset += 2;
+
+                            /* nscid (1 bit) */
+                            proto_tree_add_item(extension_tree, hf_oran_nscid, tvb, offset, 1, ENC_BIG_ENDIAN);
+
+                            if (entry_type == 2) {
+                                /* dType (1 bit) */
+                                proto_tree_add_item(extension_tree, hf_oran_dtype, tvb, offset, 1, ENC_BIG_ENDIAN);
+                                /* cdmWithoutData (2 bits) */
+                                proto_tree_add_item(extension_tree, hf_oran_cmd_without_data, tvb, offset, 1, ENC_BIG_ENDIAN);
+                                /* lambda (2 bits) */
+                                proto_tree_add_item(extension_tree, hf_oran_lambda, tvb, offset, 1, ENC_BIG_ENDIAN);
+                            }
+                            else {                        /* type 3 */
+                                /* reserved (1 bit) */
+                                /* lowPaprType (2 bits) */
+                                proto_tree_add_item(extension_tree, hf_oran_low_papr_type, tvb, offset, 1, ENC_BIG_ENDIAN);
+                                /* hoppingMode (2 bits) */
+                                proto_tree_add_item(extension_tree, hf_oran_hopping_mode, tvb, offset, 1, ENC_BIG_ENDIAN);
+                            }
+
+                            /* firstPrb (9 bits) */
+                            proto_tree_add_item(extension_tree, hf_oran_first_prb, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            offset += 1;
+                            /* lastPrb (9 bits) */
+                            proto_tree_add_item(extension_tree, hf_oran_last_prb, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            offset += 1;
+                            /* Reserved (16 bits) */
+                            offset += 2;
+
+                            break;
+                        default:
+                            /* reserved - expert info */
+                            break;
+                    }
+                }
+                break;
+            }
+
+            case 25:  /* Symbol reordering for DMRS-BF */
+                /* Just dissect each available block of 7 bytes as the 14 symbols for a layer,
+                   where each layer could be one or apply to all layers. Could place layer under a subtree? */
+                while (offset+7 <= (extension_start_offset + extlen*4)) {
+                    /* All 14 symbols for a layer (or all layers) */
+                    for (unsigned s=0; s < 14; s++) {
+                        proto_item *sym_ti;
+                        sym_ti = proto_tree_add_item(extension_tree,
+                                                     (s % 2) ? hf_oran_tx_win_for_on_air_symbol_r : hf_oran_tx_win_for_on_air_symbol_l,
+                                                     tvb, offset, 1, ENC_BIG_ENDIAN);
+                        proto_item_append_text(sym_ti, " (sym %u)", s);
+                        if (s % 2) {
+                            offset += 1;
+                        }
+                    }
+                }
+                break;
+
+            case 26:  /* Frequency offset feedback */
+                /* Reserved (8 bits). N.B., added after draft? */
+                proto_tree_add_item(extension_tree, hf_oran_reserved_8bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                offset += 1;
+
+                /* Reserved (1 bit) */
+                proto_tree_add_item(extension_tree, hf_oran_reserved_1bit, tvb, offset, 1, ENC_BIG_ENDIAN);
+                /* numFoFb (7 bits) */
+                unsigned num_fo_fb;
+                proto_tree_add_item_ret_uint(extension_tree, hf_oran_num_fo_fb, tvb, offset, 1, ENC_BIG_ENDIAN, &num_fo_fb);
+                offset += 1;
+
+                /* Add each freqOffsetFb value */
+                for (unsigned n=0; n < num_fo_fb; n++) {
+                    unsigned freq_offset_fb;
+                    proto_item *offset_ti = proto_tree_add_item_ret_uint(extension_tree, hf_oran_freq_offset_fb,
+                                                                         tvb, offset, 2, ENC_BIG_ENDIAN, &freq_offset_fb);
+                    /* Show if maps onto a -ve number */
+                    if ((freq_offset_fb >= 0x8ad0) && (freq_offset_fb <= 0xffff)) {
+                        proto_item_append_text(offset_ti, "(value %d)", -1 - (0xffff-freq_offset_fb));
+                    }
+                    proto_item_append_text(offset_ti, " [#%u]", n+1);
+                    offset += 2;
+                }
+
+                break;
 
 
             default:
@@ -6369,8 +6540,177 @@ proto_register_oran(void)
           NULL, 0x0,
           "the index of an eAxC_ID in the port-list",
           HFILL}
-        }
+        },
 
+        {&hf_oran_alpn_per_sym,
+         {"alpnPerSym", "oran_fh_cus.alpnPerSym",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x80,
+          NULL,
+          HFILL}
+        },
+        {&hf_oran_ant_dmrs_snr,
+         {"antDmrsSnr", "oran_fh_cus.antDmrsSnr",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x40,
+          NULL,
+          HFILL}
+        },
+
+
+
+        /* 7.7.24.6 */
+        {&hf_oran_user_group_size,
+         {"userGroupSize", "oran_fh_cus.userGroupSize",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x1f,
+          "number of UE data layers in the user group identified by userGroupId",
+          HFILL}
+        },
+        /* 7.7.24.7 */
+        {&hf_oran_user_group_id,
+         {"userGroupId", "oran_fh_cus.userGroupId",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0,
+          "number of UE data layers in the user group identified by userGroupId",
+          HFILL}
+        },
+        /* 7.7.24.8 */
+        {&hf_oran_entry_type,
+         {"entryType", "oran_fh_cus.entryType",
+          FT_UINT8, BASE_DEC,
+          NULL, 0xe0,
+          "indicates format of the entry",
+          HFILL}
+        },
+        /* 7.7.24.9 */
+        {&hf_oran_dmrs_port_number,
+         {"dmrsPortNumber", "oran_fh_cus.dmrsPortNumber",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x1f,
+          "DMRS antenna port number for the associated ueId",
+          HFILL}
+        },
+        /* 7.7.24.10 */
+        {&hf_oran_ueid_reset,
+         {"ueidReset", "oran_fh_cus.ueidReset",
+          FT_BOOLEAN, 8,
+          NULL, 0x80,
+          "same UEID as the previous slot",
+          HFILL}
+        },
+        /* 7.7.24.11 */
+        {&hf_oran_dmrs_symbol_mask,
+         {"dmrsSymbolMask", "oran_fh_cus.dmrsSymbolMask",
+          FT_UINT16, BASE_HEX,
+          NULL, 0x3fff,
+          "symbols within the slot containing DMRS",
+          HFILL}
+        },
+        /* 7.7.24.12 */
+        {&hf_oran_scrambling,
+         {"scrambling", "oran_fh_cus.scrambling",
+          FT_UINT16, BASE_HEX,
+          NULL, 0x0,
+          "used to calculate the seed value required to initialize pseudo-random generator",
+          HFILL}
+        },
+        /* 7.7.24.13 */
+        {&hf_oran_nscid,
+         {"nscid", "oran_fh_cus.nscid",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x80,
+          "used to calculate the seed value for pseudo-random generator",
+          HFILL}
+        },
+        /* 7.7.24.14 */
+        {&hf_oran_dtype,
+         {"dType", "oran_fh_cus.dType",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x40,
+          "PUSCH DMRS configuration type",
+          HFILL}
+        },
+        /* 7.7.24.15 */
+        {&hf_oran_cmd_without_data,
+         {"cmdWithoutData", "oran_fh_cus.cmdWithoutData",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x30,
+          "number of DMRS CDM groups without data",
+          HFILL}
+        },
+        /* 7.7.24.16 */
+        {&hf_oran_lambda,
+         {"lambda", "oran_fh_cus.lambda",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x0c,
+          NULL,
+          HFILL}
+        },
+        /* 7.7.24.19 */
+        {&hf_oran_first_prb,
+         {"firstPrb", "oran_fh_cus.firstPrb",
+          FT_UINT16, BASE_HEX,
+          NULL, 0x03fe,
+          NULL,
+          HFILL}
+        },
+        /* 7.7.24.20 */
+        {&hf_oran_last_prb,
+         {"lastPrb", "oran_fh_cus.lastPrb",
+          FT_UINT16, BASE_HEX,
+          NULL, 0x01ff,
+          NULL,
+          HFILL}
+        },
+
+        /* 7.7.24.17 */
+        {&hf_oran_low_papr_type,
+         {"lowPaprType", "oran_fh_cus.lowPaprType",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x30,
+          NULL,
+          HFILL}
+        },
+        /* 7.7.24.18 */
+        {&hf_oran_hopping_mode,
+         {"hoppingMode", "oran_fh_cus.hoppingMode",
+          FT_UINT8, BASE_HEX,
+          NULL, 0x0c,
+          NULL,
+          HFILL}
+        },
+
+        {&hf_oran_tx_win_for_on_air_symbol_l,
+         {"txWinForOnAirSymbol", "oran_fh_cus.txWinForOnAirSymbol",
+          FT_UINT8, BASE_DEC,
+          NULL, 0xf0,
+          NULL,
+          HFILL}
+        },
+        {&hf_oran_tx_win_for_on_air_symbol_r,
+         {"txWinForOnAirSymbol", "oran_fh_cus.txWinForOnAirSymbol",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x0f,
+          NULL,
+          HFILL}
+        },
+        /* 7.7.26.2 */
+        {&hf_oran_num_fo_fb,
+         {"numFoFb", "oran_fh_cus.numFoFb",
+          FT_UINT8, BASE_DEC,
+          NULL, 0x7f,
+          "number of frequency offset feedback",
+          HFILL}
+        },
+        /* 7.7.26.3 */
+        {&hf_oran_freq_offset_fb,
+         {"freqOffsetFb", "oran_fh_cus.freqOffsetFb",
+          FT_UINT16, BASE_HEX_DEC | BASE_RANGE_STRING,
+          RVALS(freq_offset_fb_values), 0x0,
+          "UE frequency offset feedback",
+          HFILL}
+        }
     };
 
     /* Setup protocol subtree array */
