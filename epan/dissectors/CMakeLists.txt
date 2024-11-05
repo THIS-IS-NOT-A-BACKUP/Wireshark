@@ -174,6 +174,7 @@ set(CLEAN_ASN1_DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-q932-ros.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-qsig.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-ranap.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-rc-v3.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rnsap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-roon_discovery.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-ros.c
@@ -844,7 +845,9 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_evt.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_iso.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_sco.c
-	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_vendor.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_vendor_android.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_vendor_broadcom.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthci_vendor_intel.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthcrp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthfp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bthid.c

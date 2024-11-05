@@ -231,10 +231,10 @@ bool WiresharkMainWindow::openCaptureFile(QString cf_path, QString read_filter, 
             /* Not valid.  Tell the user, and go back and run the file
                selection box again once they dismiss the alert. */
                //bad_dfilter_alert_box(top_level, read_filter->str);
-            QMessageBox::warning(this, tr("Invalid Display Filter"),
-                    QStringLiteral("The filter expression ") +
+            QMessageBox::warning(this, tr("Invalid Read Filter"),
+                    QStringLiteral("The filter expression \"") +
                     read_filter +
-                    QStringLiteral(" isn't a valid display filter. (") +
+                    QStringLiteral("\" isn't a valid read filter.\n(") +
                     df_err->msg + QStringLiteral(")."),
                     QMessageBox::Ok);
             df_error_free(&df_err);
@@ -3018,6 +3018,12 @@ void WiresharkMainWindow::connectGoMenuActions()
     connect(main_ui_->actionGoPreviousConversationPacket, &QAction::triggered, this,
             [this]() { goToConversationFrame(false); });
 
+    connect(main_ui_->actionGoFirstConversationPacket, &QAction::triggered, this,
+        [this]() { goToConversationFrame(true, false); });
+
+    connect(main_ui_->actionGoLastConversationPacket, &QAction::triggered, this,
+        [this]() { goToConversationFrame(false, false); });
+
     connect(main_ui_->actionGoNextHistoryPacket, &QAction::triggered,
             packet_list_, &PacketList::goNextHistoryPacket);
 
@@ -3037,7 +3043,7 @@ void WiresharkMainWindow::connectGoMenuActions()
             [this](bool checked) { packet_list_->setVerticalAutoScroll(checked); });
 }
 
-void WiresharkMainWindow::goToConversationFrame(bool go_next) {
+void WiresharkMainWindow::goToConversationFrame(bool go_next, bool start_current) {
     char      *filter       = NULL;
     dfilter_t *dfcode       = NULL;
     bool       found_packet = false;
@@ -3065,7 +3071,7 @@ void WiresharkMainWindow::goToConversationFrame(bool go_next) {
         return;
     }
 
-    found_packet = cf_find_packet_dfilter(capture_file_.capFile(), dfcode, go_next ? SD_FORWARD : SD_BACKWARD);
+    found_packet = cf_find_packet_dfilter(capture_file_.capFile(), dfcode, go_next ? SD_FORWARD : SD_BACKWARD, start_current);
 
     if (!found_packet) {
         /* We didn't find a packet */
