@@ -744,6 +744,7 @@ static value_string_ext tag_num_vals_ext = VALUE_STRING_EXT_INIT(ie_tag_num_vals
 #define ETAG_MLO_LINK_INFORMATION                       133
 #define ETAG_AID_BITMAP                                 134
 #define ETAG_BANDWIDTH_INDICATION                       135
+#define ETAG_NONAP_STA_REGULATORY_CONNECT               137
 
 
 static const value_string tag_num_vals_eid_ext[] = {
@@ -809,6 +810,7 @@ static const value_string tag_num_vals_eid_ext[] = {
   { ETAG_MLO_LINK_INFORMATION,                "MLO Link Information (802.11be D3.0)" },
   { ETAG_AID_BITMAP,                          "AID Bitmap (802.11be D3.0)" },
   { ETAG_BANDWIDTH_INDICATION,                "Bandwidth Indication (802.11be D3.0)" },
+  { ETAG_NONAP_STA_REGULATORY_CONNECT,        "Non-AP STA Regulatory Connectivity" },
   { 0, NULL }
 };
 static value_string_ext tag_num_vals_eid_ext_ext = VALUE_STRING_EXT_INIT(tag_num_vals_eid_ext);
@@ -4731,6 +4733,7 @@ static int hf_ieee80211_eht_mac_capa_eht_trs_support;
 static int hf_ieee80211_eht_mac_capa_txop_return_support_txop_sha_mode;
 static int hf_ieee80211_eht_mac_capa_two_bqrs_support;
 static int hf_ieee80211_eht_mac_capa_eht_link_adaptation_support;
+static int hf_ieee80211_eht_mac_capa_unsolicited_epcs_update;
 static int hf_ieee80211_eht_mac_capa_reserved;
 static int hf_ieee80211_eht_phy_bits_0_15;
 static int hf_ieee80211_eht_phy_bits_0_15_reserved;
@@ -8099,6 +8102,13 @@ static int hf_ieee80211_tag_rsnx_reserved;
 static int hf_ieee80211_wfa_rsn_selection;
 static int hf_ieee80211_wfa_rsn_or_link_kde_link_id;
 
+static int hf_ieee80211_nonap_sta_regulatory_conn;
+static int hf_ieee80211_nonap_sta_regu_conn_indoor_ap_valid;
+static int hf_ieee80211_nonap_sta_regu_conn_indoor_ap;
+static int hf_ieee80211_nonap_sta_regu_conn_sp_ap_valid;
+static int hf_ieee80211_nonap_sta_regu_conn_sp_ap;
+static int hf_ieee80211_nonap_sta_regu_conn_reserved;
+
 /* ************************************************************************* */
 /*                              RFC 8110 fields                              */
 /* ************************************************************************* */
@@ -8689,6 +8699,8 @@ static int ett_rnr_mld_params_tree;
 
 static int ett_ff_fils_req_params;
 static int ett_ff_fils_req_params_fils_criteria;
+
+static int ett_nonap_sta_regulatory_conn;
 
 /* Generic address HF list for proto_tree_add_mac48_detail() */
 static const mac_hf_list_t mac_addr = {
@@ -18735,6 +18747,8 @@ static const value_string ieee80211_rsn_keymgmt_vals[] = {
   {0, NULL}
 };
 
+#define OUIBASELEN (MAXNAMELEN + 12)
+
 static void
 oui_base_custom(char *result, uint32_t oui)
 {
@@ -18745,22 +18759,23 @@ oui_base_custom(char *result, uint32_t oui)
   p_oui[1] = oui >> 8 & 0xFF;
   p_oui[2] = oui & 0xFF;
 
+  static_assert(OUIBASELEN <= ITEM_LABEL_LENGTH, "Buffer size mismatch!");
   /* Attempt an OUI lookup. */
   manuf_name = uint_get_manuf_name_if_known(oui);
   if (manuf_name == NULL) {
     /* Could not find an OUI. */
-    snprintf(result, ITEM_LABEL_LENGTH, "%02x:%02x:%02x", p_oui[0], p_oui[1], p_oui[2]);
+    snprintf(result, OUIBASELEN, "%02x:%02x:%02x", p_oui[0], p_oui[1], p_oui[2]);
   }
   else {
    /* Found an address string. */
-    snprintf(result, ITEM_LABEL_LENGTH, "%02x:%02x:%02x (%s)", p_oui[0], p_oui[1], p_oui[2], manuf_name);
+    snprintf(result, OUIBASELEN, "%02x:%02x:%02x (%.*s)", p_oui[0], p_oui[1], p_oui[2], MAXNAMELEN, manuf_name);
   }
 }
 
 static void
 rsn_gcs_base_custom(char *result, uint32_t gcs)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -18773,7 +18788,7 @@ rsn_gcs_base_custom(char *result, uint32_t gcs)
 static void
 rsn_pcs_base_custom(char *result, uint32_t pcs)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -18786,7 +18801,7 @@ rsn_pcs_base_custom(char *result, uint32_t pcs)
 static void
 rsn_akms_base_custom(char *result, uint32_t akms)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -18823,7 +18838,7 @@ rsn_akms_return(wmem_allocator_t *scope, uint32_t akms)
 static void
 rsn_gmcs_base_custom(char *result, uint32_t gmcs)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -18994,7 +19009,7 @@ static const val64_string ieee80211_ranging_ltf_total_vals[] = {
 static void
 wpa_mcs_base_custom(char *result, uint32_t mcs)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -19007,7 +19022,7 @@ wpa_mcs_base_custom(char *result, uint32_t mcs)
 static void
 wpa_ucs_base_custom(char *result, uint32_t ucs)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -19019,7 +19034,7 @@ wpa_ucs_base_custom(char *result, uint32_t ucs)
 static void
 wpa_akms_base_custom(char *result, uint32_t akms)
 {
-  char oui_result[SHORT_STR];
+  char oui_result[OUIBASELEN];
   char *tmp_str;
 
   oui_result[0] = '\0';
@@ -28796,6 +28811,7 @@ static int * const eht_mac_capa_hdrs[] = {
   &hf_ieee80211_eht_mac_capa_txop_return_support_txop_sha_mode,
   &hf_ieee80211_eht_mac_capa_two_bqrs_support,
   &hf_ieee80211_eht_mac_capa_eht_link_adaptation_support,
+  &hf_ieee80211_eht_mac_capa_unsolicited_epcs_update,
   &hf_ieee80211_eht_mac_capa_reserved,
   NULL
 };
@@ -29421,6 +29437,26 @@ dissect_bandwidth_indication(tvbuff_t *tvb, packet_info *pinfo _U_,
     }
     proto_item_append_text(item, " (%s)", bitmap_binary);
   }
+}
+
+static int *const eht_nonap_sta_regu_conn_hdrs[] = {
+  &hf_ieee80211_nonap_sta_regu_conn_indoor_ap_valid,
+  &hf_ieee80211_nonap_sta_regu_conn_indoor_ap,
+  &hf_ieee80211_nonap_sta_regu_conn_sp_ap_valid,
+  &hf_ieee80211_nonap_sta_regu_conn_sp_ap,
+  &hf_ieee80211_nonap_sta_regu_conn_reserved,
+  NULL
+};
+
+static void
+dissect_nonap_sta_regulatory_connect(tvbuff_t *tvb, packet_info *pinfo _U_,
+                                     proto_tree *tree, int offset, int len _U_)
+{
+  proto_tree_add_bitmask(tree, tvb, offset,
+                         hf_ieee80211_nonap_sta_regulatory_conn,
+                         ett_nonap_sta_regulatory_conn,
+                         eht_nonap_sta_regu_conn_hdrs,
+                         ENC_NA);
 }
 
 static void
@@ -35171,6 +35207,9 @@ ieee80211_tag_element_id_extension(tvbuff_t *tvb, packet_info *pinfo, proto_tree
       break;
     case ETAG_BANDWIDTH_INDICATION:
       dissect_bandwidth_indication(tvb, pinfo, tree, offset, ext_tag_len);
+      break;
+    case ETAG_NONAP_STA_REGULATORY_CONNECT:
+      dissect_nonap_sta_regulatory_connect(tvb, pinfo, tree, offset, ext_tag_len);
       break;
     default:
       proto_tree_add_item(tree, hf_ieee80211_ext_tag_data, tvb, offset, ext_tag_len, ENC_NA);
@@ -59058,10 +59097,15 @@ proto_register_ieee80211(void)
       "wlan.eht.mac_capabilities.eht_link_adaptation_support",
       FT_UINT16, BASE_DEC, VALS(eht_link_adaptation_vals), 0x3000, NULL, HFILL }},
 
+    {&hf_ieee80211_eht_mac_capa_unsolicited_epcs_update,
+     {"Unsolicited EPCS Priority Access Parameter Update",
+      "wlan.eht.mac_capabilities.unsolicited_epcs_prio_access_para_update",
+      FT_UINT16, BASE_DEC, NULL, 0x4000, NULL, HFILL }},
+
     {&hf_ieee80211_eht_mac_capa_reserved,
      {"Reserved",
       "wlan.eht.mac_capabilities.reserved",
-      FT_UINT16, BASE_HEX, NULL, 0xc000, NULL, HFILL }},
+      FT_UINT16, BASE_HEX, NULL, 0x8000, NULL, HFILL }},
 
     {&hf_ieee80211_eht_phy_bits_0_15,
      {"EHT PHY Bits 0-15", "wlan.eht.phy_capabilities.bits_0_15",
@@ -59779,6 +59823,30 @@ proto_register_ieee80211(void)
     {&hf_ieee80211_wfa_rsn_or_link_kde_link_id,
      {"Link ID", "wlan.wfa_rsn_or_link_kde.link_id",
       FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regulatory_conn,
+     {"Regulatory Connectivity", "wlan.nonap_sta_regulatory_connect",
+      FT_UINT8, BASE_HEX, NULL, 0, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regu_conn_indoor_ap_valid,
+     {"Connectivity With Indoor AP Valid", "wlan.nonap_sta_regulatory_connect.indoor_ap_valid",
+      FT_UINT8, BASE_HEX, NULL, 0x01, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regu_conn_indoor_ap,
+     {"Connectivity With Indoor AP", "wlan.nonap_sta_regulatory_connect.indoor_ap",
+      FT_UINT8, BASE_HEX, NULL, 0x02, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regu_conn_sp_ap_valid,
+     {"Connectivity With SP AP Valid", "wlan.nonap_sta_regulatory_connect.sp_ap_valid",
+      FT_UINT8, BASE_HEX, NULL, 0x04, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regu_conn_sp_ap,
+     {"Connectivity With SP AP", "wlan.nonap_sta_regulatory_connect.sp_ap",
+      FT_UINT8, BASE_HEX, NULL, 0x08, NULL, HFILL }},
+
+    {&hf_ieee80211_nonap_sta_regu_conn_reserved,
+     {"Reserved", "wlan.nonap_sta_regulatory_connect.reserved",
+      FT_UINT8, BASE_HEX, NULL, 0xf0, NULL, HFILL }},
   };
 
   static hf_register_info aggregate_fields[] = {
@@ -60338,6 +60406,8 @@ proto_register_ieee80211(void)
 
     &ett_ff_fils_req_params,
     &ett_ff_fils_req_params_fils_criteria,
+
+    &ett_nonap_sta_regulatory_conn,
   };
 
   static ei_register_info ei[] = {
