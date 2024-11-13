@@ -4567,6 +4567,14 @@ static int hf_ieee80211_tag_ranging_max_sess_exp;
 static int hf_ieee80211_tag_ranging_passive_tb_ranging;
 static int hf_ieee80211_tag_ranging_tb_specific_reserved;
 
+/* az: FTM Ranging Secure HE-LTF subelement */
+static int hf_ieee80211_tag_ranging_secure_he_ltf;
+static int hf_ieee80211_tag_ranging_secure_he_ltf_version;
+static int hf_ieee80211_tag_ranging_secure_he_ltf_req;
+static int hf_ieee80211_tag_ranging_secure_he_ltf_r2i_tx_window;
+static int hf_ieee80211_tag_ranging_secure_he_ltf_i2r_tx_window;
+static int hf_ieee80211_tag_ranging_secure_he_ltf_reserved;
+
 /* az: PASN subelements etc. */
 static int hf_ieee80211_tag_pasn_parameters_control;
 static int hf_ieee80211_tag_pasn_params_comeback_info_present;
@@ -6060,6 +6068,14 @@ static int hf_ieee80211_tag_extended_capabilities_b95;
 
 static int hf_ieee80211_tag_extended_capabilities_b96;
 static int hf_ieee80211_tag_extended_capabilities_b97;
+static int hf_ieee80211_tag_extended_capabilities_b98;
+static int hf_ieee80211_tag_extended_capabilities_b99;
+static int hf_ieee80211_tag_extended_capabilities_b100;
+static int hf_ieee80211_tag_extended_capabilities_b101;
+static int hf_ieee80211_tag_extended_capabilities_b102;
+static int hf_ieee80211_tag_extended_capabilities_b103;
+static int hf_ieee80211_tag_extended_capabilities_b104;
+static int hf_ieee80211_tag_extended_capabilities_b105;
 static int hf_ieee80211_tag_extended_capabilities_reserved2;
 
 static int hf_ieee80211_tag_cisco_ccx1_unknown;
@@ -8312,6 +8328,7 @@ static int ett_ff_ftm_tod_err1;
 static int ett_ff_ftm_toa_err1;
 static int ett_tag_ranging;
 static int ett_tag_ranging_ntb;
+static int ett_tag_ranging_secure_he_ltf;
 
 static int ett_ranging_subelement_tree;
 
@@ -8400,6 +8417,7 @@ static int ett_tag_ex_cap10;
 static int ett_tag_ex_cap11;
 static int ett_tag_ex_cap12;
 static int ett_tag_ex_cap13;
+static int ett_tag_ex_cap14;
 
 static int ett_tag_rm_cap1;
 static int ett_tag_rm_cap2;
@@ -22151,6 +22169,18 @@ dissect_extended_capabilities_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
   static int * const ieee80211_tag_extended_capabilities_byte13[] = {
     &hf_ieee80211_tag_extended_capabilities_b96,
     &hf_ieee80211_tag_extended_capabilities_b97,
+    &hf_ieee80211_tag_extended_capabilities_b98,
+    &hf_ieee80211_tag_extended_capabilities_b99,
+    &hf_ieee80211_tag_extended_capabilities_b100,
+    &hf_ieee80211_tag_extended_capabilities_b101,
+    &hf_ieee80211_tag_extended_capabilities_b102,
+    &hf_ieee80211_tag_extended_capabilities_b103,
+    NULL
+  };
+
+  static int * const ieee80211_tag_extended_capabilities_byte14[] = {
+    &hf_ieee80211_tag_extended_capabilities_b104,
+    &hf_ieee80211_tag_extended_capabilities_b105,
     &hf_ieee80211_tag_extended_capabilities_reserved2,
     NULL
   };
@@ -22311,6 +22341,18 @@ dissect_extended_capabilities_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
                                     ieee80211_tag_extended_capabilities_byte13,
                                     ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
   proto_item_append_text(ti_ex_cap, " (octet 13)");
+  offset += 1;
+
+  if (offset >= tag_len) {
+    return offset;
+  }
+
+  ti_ex_cap = proto_tree_add_bitmask_with_flags(tree, tvb, offset,
+                                    hf_ieee80211_tag_extended_capabilities,
+                                    ett_tag_ex_cap14,
+                                    ieee80211_tag_extended_capabilities_byte14,
+                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
+  proto_item_append_text(ti_ex_cap, " (octet 14)");
   offset += 1;
 
   return offset;
@@ -29507,7 +29549,8 @@ dissect_ntb_specific(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int of
 static const range_string ranging_subelt_types[] = {
   { 0, 0, "Non-TB specific" },
   { 1, 1, "TB-specific" },
-  { 2, 220, "Reserved" },
+  { 2, 2, "Secure HE-LTF" },
+  { 3, 220, "Reserved" },
   { 221, 221, "Vendor Specific" },
   { 222, 255, "Reserved" },
   { 0, 0, NULL }
@@ -29540,10 +29583,19 @@ dissect_tb_specific(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     return offset;
 }
 
+static int * const ranging_subelement_secure_he_ltf_fields[] = {
+  &hf_ieee80211_tag_ranging_secure_he_ltf_version,
+  &hf_ieee80211_tag_ranging_secure_he_ltf_req,
+  &hf_ieee80211_tag_ranging_secure_he_ltf_r2i_tx_window,
+  &hf_ieee80211_tag_ranging_secure_he_ltf_i2r_tx_window,
+  &hf_ieee80211_tag_ranging_secure_he_ltf_reserved,
+  NULL};
+
 static void
 dissect_ranging_parameters(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, int len)
 {
   int tag_len = tvb_reported_length(tvb);
+  unsigned subelt = 0;
   static int * const ranging_params_fields[] = {
     &hf_ieee80211_tag_ranging_status_indication,
     &hf_ieee80211_tag_ranging_value,
@@ -29599,7 +29651,6 @@ dissect_ranging_parameters(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
     uint8_t sub_id, sub_length;
     proto_item *sub_elt_len, *rsti;
     proto_tree *sub_tree;
-    unsigned subelt = 0;
     unsigned start_offset = offset;
 
     sub_tree = proto_tree_add_subtree_format(tree, tvb, offset, -1,
@@ -29635,6 +29686,13 @@ dissect_ranging_parameters(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
       case 1: /* Ranging SUB_TB_SPECIFIC */
         /* TODO: Specify the acceptable tagged elements */
         offset = dissect_tb_specific(tvb, pinfo, tree, offset, sub_length);
+        break;
+      case 2: /* Secure HE-LTF */
+        proto_tree_add_bitmask_with_flags(sub_tree, tvb, offset,
+                        hf_ieee80211_tag_ranging_secure_he_ltf,
+                        ett_tag_ranging_secure_he_ltf,
+                        ranging_subelement_secure_he_ltf_fields,
+                        ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
         break;
       default:  /* skip unknown elements which may be defined in the future */
         break;
@@ -45599,11 +45657,11 @@ proto_register_ieee80211(void)
       FT_UINT32, BASE_HEX, NULL, 0x0000ffff, NULL, HFILL }},
 
     {&hf_ieee80211_tag_ranging_device_class,
-     {"Device Class", "wlan.tb.device_class",
+     {"Device Class", "wlan.ranging.tb.device_class",
       FT_UINT32, BASE_DEC, NULL, 0x00010000, NULL, HFILL }},
 
     {&hf_ieee80211_tag_ranging_full_bw_ul_mu_mimo,
-     {"Full Bandwidth UL MU-MIMO", "wlan.tb.full_bw_ul_mu_mimo",
+     {"Full Bandwidth UL MU-MIMO", "wlan.ranging.tb.full_bw_ul_mu_mimo",
       FT_UINT32, BASE_DEC, NULL, 0x00020000, NULL, HFILL }},
 
     {&hf_ieee80211_tag_ranging_trigger_frame_paddur,
@@ -45616,12 +45674,42 @@ proto_register_ieee80211(void)
       FT_UINT32, BASE_DEC, NULL, 0x00f00000, NULL, HFILL }},
 
     {&hf_ieee80211_tag_ranging_passive_tb_ranging,
-     {"Passive TB Ranging", "wlan.ftm.tb_specific.passive_tb_ranging",
+     {"Passive TB Ranging", "wlan.ranging.tb.passive_tb_ranging",
       FT_BOOLEAN, 32, NULL, 0x01000000, NULL, HFILL }},
 
     {&hf_ieee80211_tag_ranging_tb_specific_reserved,
-     {"Reserved", "wlan.ftm.tb_specific.reserved",
+     {"Reserved", "wlan.ranging.tb.reserved",
       FT_UINT32, BASE_HEX, NULL, 0xFE000000, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf,
+     {"Secure HE-LTF subelement", "wlan.ranging.secure_he_ltf",
+      FT_UINT8, BASE_HEX, NULL, 0x0,
+      NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf_version,
+     {"Protocol Version", "wlan.ranging.secure_he_ltf.version",
+      FT_UINT8, BASE_DEC, NULL, 0x07,
+      NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf_req,
+     {"Secure HE-LTF Req", "wlan.ranging.secure_he_ltf.req",
+      FT_UINT8, BASE_DEC, NULL, 0x08,
+      NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf_r2i_tx_window,
+     {"R2I Tx Window", "wlan.ranging.secure_he_ltf.r2i_tx_window",
+      FT_UINT8, BASE_DEC, NULL, 0x10,
+      NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf_i2r_tx_window,
+     {"I2R Tx Window", "wlan.ranging.secure_he_ltf.i2r_tx_window",
+      FT_UINT8, BASE_DEC, NULL, 0x20,
+      NULL, HFILL }},
+
+    {&hf_ieee80211_tag_ranging_secure_he_ltf_reserved,
+     {"Reserved", "wlan.ranging.secure_he_ltf.reserved",
+      FT_UINT8, BASE_HEX, NULL, 0xc0,
+      NULL, HFILL }},
 
     {&hf_ieee80211_tag_dirn_meas_results_aoa_results,
      {"AOA Results", "wlan.etag.direction_measurement_results.aoa_results",
@@ -52568,6 +52656,38 @@ proto_register_ieee80211(void)
 
     {&hf_ieee80211_tag_extended_capabilities_b97,
      {"I2R LMR Feedback Policy", "wlan.extcap.i2r_lmr_feedback_policy",
+      FT_BOOLEAN, 8, NULL, 0x02, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b98,
+     {"EBCS Support", "wlan.extcap.b98",
+      FT_BOOLEAN, 8, NULL, 0x04, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b99,
+     {"EBCS Relaying Support", "wlan.extcap.b99",
+      FT_BOOLEAN, 8, NULL, 0x08, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b100,
+     {"Peer-to-peer TWT Support", "wlan.extcap.b100",
+      FT_BOOLEAN, 8, NULL, 0x10, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b101,
+     {"Multiple BSSID Role Switch Support", "wlan.extcap.b101",
+      FT_BOOLEAN, 8, NULL, 0x20, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b102,
+     {"Known STA Identification Enabled", "wlan.extcap.b102",
+      FT_BOOLEAN, 8, NULL, 0x40, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b103,
+     {"Reserved", "wlan.extcap.b103",
+      FT_BOOLEAN, 8, NULL, 0x80, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b104,
+     {"Capability Notification Support", "wlan.extcap.b104",
+      FT_BOOLEAN, 8, NULL, 0x01, NULL, HFILL }},
+
+    {&hf_ieee80211_tag_extended_capabilities_b105,
+     {"GAS Query Request Fragmentation", "wlan.extcap.b105",
       FT_BOOLEAN, 8, NULL, 0x02, NULL, HFILL }},
 
     {&hf_ieee80211_tag_extended_capabilities_reserved2,
@@ -60073,6 +60193,7 @@ proto_register_ieee80211(void)
     &ett_ff_ftm_toa_err1,
     &ett_tag_ranging,
     &ett_tag_ranging_ntb,
+    &ett_tag_ranging_secure_he_ltf,
 
     &ett_ranging_subelement_tree,
 
@@ -60160,6 +60281,7 @@ proto_register_ieee80211(void)
     &ett_tag_ex_cap11,
     &ett_tag_ex_cap12,
     &ett_tag_ex_cap13,
+    &ett_tag_ex_cap14,
 
     &ett_tag_rm_cap1,
     &ett_tag_rm_cap2,
