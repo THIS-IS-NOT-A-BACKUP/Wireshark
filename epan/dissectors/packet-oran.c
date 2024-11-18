@@ -154,8 +154,26 @@ static int hf_oran_numPrbu;
 
 static int hf_oran_udCompParam;
 static int hf_oran_sReSMask;
+static int hf_oran_sReSMask_re12;
+static int hf_oran_sReSMask_re11;
+static int hf_oran_sReSMask_re10;
+static int hf_oran_sReSMask_re9;
+static int hf_oran_sReSMask_re8;
+static int hf_oran_sReSMask_re7;
+static int hf_oran_sReSMask_re6;
+static int hf_oran_sReSMask_re5;
+static int hf_oran_sReSMask_re4;
+static int hf_oran_sReSMask_re3;
+static int hf_oran_sReSMask_re2;
+static int hf_oran_sReSMask_re1;
+
 static int hf_oran_sReSMask1;
 static int hf_oran_sReSMask2;
+static int hf_oran_sReSMask1_2_re12;
+static int hf_oran_sReSMask1_2_re11;
+static int hf_oran_sReSMask1_2_re10;
+static int hf_oran_sReSMask1_2_re9;
+
 
 static int hf_oran_bfwCompParam;
 
@@ -353,6 +371,7 @@ static int hf_oran_ue_freq_offset;
 static int hf_oran_beam_type;
 static int hf_oran_meas_cmd_size;
 
+static int hf_oran_u_section;
 
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
@@ -395,6 +414,7 @@ static int ett_oran_st4_cmd_header;
 static int ett_oran_st4_cmd;
 static int ett_oran_sym_prb_pattern;
 static int ett_oran_measurement_report;
+static int ett_oran_sresmask;
 
 
 
@@ -434,6 +454,7 @@ static expert_field ei_oran_lastRbdid_out_of_range;
 static expert_field ei_oran_rbgMask_beyond_last_rbdid;
 static expert_field ei_oran_unexpected_measTypeId;
 static expert_field ei_oran_unsupported_compression_method;
+static expert_field ei_oran_ud_comp_len_wrong_size;
 
 
 /* These are the message types handled by this dissector */
@@ -3947,7 +3968,24 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
                                                          (for_sinr) ? "sinrCompHdr" : "udCompParam");
     proto_tree *udcompparam_tree = proto_item_add_subtree(udcompparam_ti, ett_oran_udcompparam);
 
-    uint32_t param_exponent, param_sresmask;
+    uint32_t param_exponent;
+    uint64_t param_sresmask;
+
+    static int * const  sres_mask_flags[] = {
+        &hf_oran_sReSMask_re12,
+        &hf_oran_sReSMask_re11,
+        &hf_oran_sReSMask_re10,
+        &hf_oran_sReSMask_re9,
+        &hf_oran_sReSMask_re8,
+        &hf_oran_sReSMask_re7,
+        &hf_oran_sReSMask_re6,
+        &hf_oran_sReSMask_re5,
+        &hf_oran_sReSMask_re4,
+        &hf_oran_sReSMask_re3,
+        &hf_oran_sReSMask_re2,
+        &hf_oran_sReSMask_re1,
+        NULL
+    };
 
     switch (comp_meth) {
         case COMP_BLOCK_FP:                    /* 1 */
@@ -3982,8 +4020,13 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
         {
             /* sReSMask (exponent in middle!) */
             proto_item *sresmask_ti;
-            sresmask_ti = proto_tree_add_item_ret_uint(udcompparam_tree, hf_oran_sReSMask,
-                                                       tvb, offset, 2, ENC_BIG_ENDIAN, &param_sresmask);
+            sresmask_ti = proto_tree_add_bitmask_ret_uint64(udcompparam_tree, tvb, offset,
+                                                            hf_oran_sReSMask,
+                                                            ett_oran_sresmask,
+                                                            sres_mask_flags,
+                                                            ENC_NA,
+                                                            &param_sresmask);
+
             /* Get rid of exponent-shaped gap */
             param_sresmask = ((param_sresmask >> 4) & 0x0f00) | (param_sresmask & 0xff);
             unsigned res = 0;
@@ -3992,12 +4035,12 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
                     res++;
                 }
             }
-            proto_item_append_text(sresmask_ti, "   (%u REs)", res);
+            proto_item_append_text(sresmask_ti, "   (%2u REs)", res);
 
             /* exponent */
             proto_tree_add_item_ret_uint(udcompparam_tree, hf_oran_exponent,
                                          tvb, offset, 1, ENC_BIG_ENDIAN, &param_exponent);
-            *sReSMask = param_sresmask;
+            *sReSMask = (uint16_t)param_sresmask;
             *exponent = param_exponent;
 
             proto_item_append_text(udcompparam_ti, " (exponent=%u, %u REs)", *exponent, res);
@@ -4007,10 +4050,16 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
 
         case MOD_COMPR_AND_SELECTIVE_RE:      /* 6 */
         {
-            /* sReSMask (reserved in middle!) */
+            /* sReSMask (exponent in middle!) */
             proto_item *sresmask_ti;
-            sresmask_ti = proto_tree_add_item_ret_uint(udcompparam_tree, hf_oran_sReSMask,
-                                                       tvb, offset, 2, ENC_BIG_ENDIAN, &param_sresmask);
+
+            sresmask_ti = proto_tree_add_bitmask_ret_uint64(udcompparam_tree, tvb, offset,
+                                                            hf_oran_sReSMask,
+                                                            ett_oran_sresmask,
+                                                            sres_mask_flags,
+                                                            ENC_NA,
+                                                            &param_sresmask);
+
             /* Get rid of reserved-shaped gap */
             param_sresmask = ((param_sresmask >> 4) & 0x0f00) | (param_sresmask & 0xff);
             unsigned res = 0;
@@ -4024,7 +4073,7 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
             /* reserved */
             proto_tree_add_item(udcompparam_tree, hf_oran_reserved_last_4bits,
                                          tvb, offset, 1, ENC_BIG_ENDIAN);
-            *sReSMask = param_sresmask;
+            *sReSMask = (uint16_t)param_sresmask;
 
             proto_item_append_text(udcompparam_ti, " (%u REs)", res);
             offset += 2;
@@ -5088,9 +5137,11 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
 
     /* Add each section (no count, just keep parsing until payload used) */
     do {
-        unsigned section_start_offet = offset;
-        proto_item *sectionHeading;
-        proto_tree *section_tree = proto_tree_add_subtree(oran_tree, tvb, offset, 0, ett_oran_u_section, &sectionHeading, "Section");
+        /* Section subtree */
+        unsigned section_start_offset = offset;
+        proto_item *sectionHeading = proto_tree_add_string_format(oran_tree, hf_oran_u_section,
+                                                                  tvb, offset, 0, "", "Section");
+        proto_tree *section_tree = proto_item_add_subtree(sectionHeading, ett_oran_u_section);
 
         /* Section Header fields (darker green part) */
 
@@ -5116,7 +5167,8 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
         proto_tree_add_item_ret_uint(section_tree, hf_oran_numPrbu, tvb, offset, 1, ENC_NA, &numPrbu);
         offset += 1;
 
-        proto_item *ud_comp_meth_item;
+        proto_item *ud_comp_meth_item, *ud_comp_len_ti=NULL;
+        uint32_t ud_comp_len;
 
         /* udCompHdr (if preferences indicate will be present) */
         if (includeUdCompHeader) {
@@ -5157,7 +5209,10 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
 
         /* udCompLen (when supported, methods 5,6,7,8) */
         if (pref_support_udcompLen && (compression >= BFP_AND_SELECTIVE_RE)) {
-            proto_tree_add_item(section_tree, hf_oran_udCompLen, tvb, offset, 2, ENC_NA);
+            ud_comp_len_ti = proto_tree_add_item_ret_uint(section_tree, hf_oran_udCompLen, tvb, offset, 2, ENC_NA, &ud_comp_len);
+            if (ud_comp_len <= 1) {
+                proto_item_append_text(ud_comp_len_ti, " (reserved)");
+            }
             offset += 2;
         }
 
@@ -5165,17 +5220,60 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
         if (compression == BFP_AND_SELECTIVE_RE_WITH_MASKS ||
             compression == MOD_COMPR_AND_SELECTIVE_RE_WITH_MASKS)
         {
+            static int * const  sres_mask1_2_flags[] = {
+                &hf_oran_sReSMask1_2_re12,
+                &hf_oran_sReSMask1_2_re11,
+                &hf_oran_sReSMask1_2_re10,
+                &hf_oran_sReSMask1_2_re9,
+                &hf_oran_sReSMask_re8,
+                &hf_oran_sReSMask_re7,
+                &hf_oran_sReSMask_re6,
+                &hf_oran_sReSMask_re5,
+                &hf_oran_sReSMask_re4,
+                &hf_oran_sReSMask_re3,
+                &hf_oran_sReSMask_re2,
+                &hf_oran_sReSMask_re1,
+                NULL
+            };
+
             /* reserved (4 bits) */
             proto_tree_add_item(section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_NA);
             /* sReSMask1 (12 bits) */
-            proto_tree_add_item(section_tree, hf_oran_sReSMask1, tvb, offset, 2, ENC_NA);
+            uint64_t sresmask;
+            proto_item *sresmask_ti;
+            sresmask_ti = proto_tree_add_bitmask_ret_uint64(section_tree, tvb, offset,
+                                                            hf_oran_sReSMask1,
+                                                            ett_oran_sresmask,
+                                                            sres_mask1_2_flags,
+                                                            ENC_NA,
+                                                            &sresmask);
             offset += 2;
+            unsigned res = 0;
+            for (unsigned n=0; n < 12; n++) {
+                if ((sresmask >> n) & 0x1) {
+                    res++;
+                }
+            }
+            proto_item_append_text(sresmask_ti, "   (%u REs)", res);
+
 
             /* reserved (4 bits) */
             proto_tree_add_item(section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_NA);
             /* sReSMask2 (12 bits) */
-            proto_tree_add_item(section_tree, hf_oran_sReSMask2, tvb, offset, 2, ENC_NA);
+            sresmask_ti = proto_tree_add_bitmask_ret_uint64(section_tree, tvb, offset,
+                                                            hf_oran_sReSMask2,
+                                                            ett_oran_sresmask,
+                                                            sres_mask1_2_flags,
+                                                            ENC_NA,
+                                                            &sresmask);
             offset += 2;
+            res = 0;
+            for (unsigned n=0; n < 12; n++) {
+                if ((sresmask >> n) & 0x1) {
+                    res++;
+                }
+            }
+            proto_item_append_text(sresmask_ti, "   (%u REs)", res);
         }
 
         write_section_info(sectionHeading, pinfo, protocol_item, sectionId, startPrbu, numPrbu, rb);
@@ -5217,7 +5315,9 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
                 }
             }
 
-            unsigned nBytesForSamples = (sample_bit_width * res_per_prb * 2) / 8;
+            /* N.B. bytes for samples may need to be padded out to next byte
+               (certainly where there aren't 12 REs in PRB..) */
+            unsigned nBytesForSamples = (sample_bit_width * res_per_prb * 2 + 7) / 8;
             nBytesPerPrb = nBytesForSamples + udcompparam_len;
 
             proto_tree_add_item(rb_tree, hf_oran_iq_user_data, tvb, offset, nBytesForSamples, ENC_NA);
@@ -5257,7 +5357,12 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
         }
 
         /* Set extent of section */
-        proto_item_set_len(sectionHeading, offset-section_start_offet);
+        proto_item_set_len(sectionHeading, offset-section_start_offset);
+        if (ud_comp_len_ti != NULL && ((offset-section_start_offset != ud_comp_len))) {
+            expert_add_info_format(pinfo, ud_comp_len_ti, &ei_oran_ud_comp_len_wrong_size,
+                                   "udCompLen indicates %u bytes in section, but dissected %u instead",
+                                   ud_comp_len, offset-section_start_offset);
+        }
 
         bytesLeft = tvb_captured_length(tvb) - offset;
         number_of_sections++;
@@ -6186,6 +6291,80 @@ proto_register_oran(void)
           NULL, 0xf0ff,
           "selective RE sending mask", HFILL}
         },
+
+        {&hf_oran_sReSMask_re12,
+         {"RE-12", "oran_fh_cus.sReSMask-re12",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x8000,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re11,
+         {"RE-11", "oran_fh_cus.sReSMask-re11",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x4000,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re10,
+         {"RE-10", "oran_fh_cus.sReSMask-re10",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x2000,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re9,
+         {"RE-9", "oran_fh_cus.sReSMask-re9",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x1000,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re8,
+         {"RE-8", "oran_fh_cus.sReSMask-re8",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0080,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re7,
+         {"RE-7", "oran_fh_cus.sReSMask-re7",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0040,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re6,
+         {"RE-6", "oran_fh_cus.sReSMask-re6",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0020,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re5,
+         {"RE-5", "oran_fh_cus.sReSMask-re5",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0010,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re4,
+         {"RE-4", "oran_fh_cus.sReSMask-re4",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0008,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re3,
+         {"RE-3", "oran_fh_cus.sReSMask-re3",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0004,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re2,
+         {"RE-2", "oran_fh_cus.sReSMask-re2",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0002,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask_re1,
+         {"RE-1", "oran_fh_cus.sReSMask-re1",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0001,
+          NULL, HFILL}
+        },
+
         /* 8.3.3.20 */
         {&hf_oran_sReSMask1,
          {"sReSMask1", "oran_fh_cus.sReSMask1",
@@ -6199,6 +6378,31 @@ proto_register_oran(void)
           FT_UINT16, BASE_HEX,
           NULL, 0x0fff,
           "selective RE sending mask 2", HFILL}
+        },
+
+        {&hf_oran_sReSMask1_2_re12,
+         {"RE-12", "oran_fh_cus.sReSMask-re12",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0800,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask1_2_re11,
+         {"RE-11", "oran_fh_cus.sReSMask-re11",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0400,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask1_2_re10,
+         {"RE-10", "oran_fh_cus.sReSMask-re10",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0200,
+          NULL, HFILL}
+        },
+        {&hf_oran_sReSMask1_2_re9,
+         {"RE-9", "oran_fh_cus.sReSMask-re9",
+          FT_BOOLEAN, 16,
+          TFS(&tfs_present_not_present), 0x0100,
+          NULL, HFILL}
         },
 
         /* Section 6.3.3.15 */
@@ -7413,6 +7617,14 @@ proto_register_oran(void)
           NULL, 0x0,
           NULL,
           HFILL}
+        },
+
+        {&hf_oran_u_section,
+         {"Section", "oran_fh_cus.u-plane.section",
+          FT_STRING, BASE_NONE,
+          NULL, 0x0,
+          NULL,
+          HFILL}
         }
     };
 
@@ -7447,7 +7659,9 @@ proto_register_oran(void)
         &ett_oran_modcomp_param_set,
         &ett_oran_st4_cmd_header,
         &ett_oran_st4_cmd,
-        &ett_oran_sym_prb_pattern
+        &ett_oran_sym_prb_pattern,
+        &ett_oran_measurement_report,
+        &ett_oran_sresmask
     };
 
     expert_module_t* expert_oran;
@@ -7487,7 +7701,8 @@ proto_register_oran(void)
         { &ei_oran_lastRbdid_out_of_range, { "oran_fh_cus.lastrbdid_out_of_range", PI_MALFORMED, PI_WARN, "SE 6 has bad rbgSize", EXPFILL }},
         { &ei_oran_rbgMask_beyond_last_rbdid, { "oran_fh_cus.rbgmask_beyond_lastrbdid", PI_MALFORMED, PI_WARN, "rbgMask has bits set beyond lastRbgId", EXPFILL }},
         { &ei_oran_unexpected_measTypeId, { "oran_fh_cus.unexpected_meastypeid", PI_MALFORMED, PI_WARN, "unexpected measTypeId", EXPFILL }},
-        { &ei_oran_unsupported_compression_method, { "oran_fh_cus.compression_type_unsupported", PI_UNDECODED, PI_WARN, "Unsupported compression type", EXPFILL }}
+        { &ei_oran_unsupported_compression_method, { "oran_fh_cus.compression_type_unsupported", PI_UNDECODED, PI_WARN, "Unsupported compression type", EXPFILL }},
+        { &ei_oran_ud_comp_len_wrong_size, { "oran_fh_cus.ud_comp_len_wrong_size", PI_MALFORMED, PI_WARN, "udCompLen does not match length of U-Plane section", EXPFILL }}
     };
 
     /* Register the protocol name and description */
