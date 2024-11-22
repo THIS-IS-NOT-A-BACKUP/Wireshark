@@ -5132,7 +5132,7 @@ prefs_set_pref(char *prefarg, char **errmsg)
     return ret;
 }
 
-unsigned prefs_get_uint_value_real(pref_t *pref, pref_source_t source)
+unsigned prefs_get_uint_value(pref_t *pref, pref_source_t source)
 {
     switch (source)
     {
@@ -5148,15 +5148,6 @@ unsigned prefs_get_uint_value_real(pref_t *pref, pref_source_t source)
     }
 
     return 0;
-}
-
-unsigned prefs_get_uint_value(const char *module_name, const char* pref_name)
-{
-    pref_t *pref = prefs_find_preference(prefs_find_module(module_name), pref_name);
-    if (pref == NULL) {
-        return 0;
-    }
-    return prefs_get_uint_value_real(pref, pref_current);
 }
 
 char* prefs_get_password_value(pref_t *pref, pref_source_t source)
