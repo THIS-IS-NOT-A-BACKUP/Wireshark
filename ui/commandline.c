@@ -69,7 +69,7 @@ commandline_print_usage(bool for_help_option) {
         output = stderr;
     }
     fprintf(output, "\n");
-    fprintf(output, "Usage: %s [options] ... [ <infile> ]\n", application_flavor_name_lower());
+    fprintf(output, "Usage: %s [options] ... [ <infile> ]\n", g_get_prgname());
     fprintf(output, "\n");
 
 #ifdef HAVE_LIBPCAP
@@ -99,6 +99,7 @@ commandline_print_usage(bool for_help_option) {
     fprintf(output, "  -L, --list-data-link-types\n");
     fprintf(output, "                           print list of link-layer types of iface and exit\n");
     fprintf(output, "  --list-time-stamp-types  print list of timestamp types for iface and exit\n");
+    fprintf(output, "  --update-interval        interval between updates with new packets, in milliseconds (def: %dms)\n", DEFAULT_UPDATE_INTERVAL);
     fprintf(output, "\n");
     fprintf(output, "Capture display:\n");
     fprintf(output, "  -k                       start capturing immediately (def: do nothing)\n");
@@ -647,7 +648,7 @@ void commandline_other_options(int argc, char *argv[], bool opt_reset)
                  part of a tap filter.  Instead, we just add the argument
                  to a list of stat arguments. */
                 if (strcmp("help", ws_optarg) == 0) {
-                    fprintf(stderr, "%s: The available statistics for the \"-z\" option are:\n", application_flavor_name_lower());
+                    fprintf(stderr, "%s: The available statistics for the \"-z\" option are:\n", g_get_prgname());
                     list_stat_cmd_args();
                     exit_application(0);
                 }
