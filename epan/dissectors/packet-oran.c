@@ -1324,7 +1324,7 @@ typedef struct {
     int      ul_ud_comp_hdr_compression;
 
     /* Modulation compression params */
-    /* TODO: incomplete (see SE5, SE SE23), and needs to be per section! */
+    /* TODO: incomplete (see SE4, SE5, SE23), and needs to be per section! */
     //bool     mod_compr_csf;
     //float    mod_compr_mod_comp_scaler;
 } flow_state_t;
@@ -5375,10 +5375,11 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _
             if (compression >= BFP_AND_SELECTIVE_RE) {
                 /* Work out which mask should be used */
                 if (compression==BFP_AND_SELECTIVE_RE || compression==MOD_COMPR_AND_SELECTIVE_RE) {
+                    /* Selective RE cases, use value from compModParam */
                     sresmask_to_use = (uint16_t)sresmask;
                 }
                 else {
-                    /* Choose between sresmask1 and sresmask2 */
+                    /* With masks (in section).  Choose between sresmask1 and sresmask2 */
                     if (rb==1 || (i%1)==0) {
                         /* Even values */
                         sresmask_to_use = (uint16_t)sresmask1;
