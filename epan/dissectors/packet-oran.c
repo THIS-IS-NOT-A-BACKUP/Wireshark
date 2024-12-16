@@ -540,7 +540,7 @@ static const enum_val_t ul_compression_options[] = {
 static const enum_val_t udcomp_support_options[] = {
     { "NOT_SUPPORTED",              "Not Supported",        0 },
     { "SUPPORTED",                  "Supported",            1 },
-    { "HEURISITC",                  "Attempt Heuristic",    2 },
+    { "HEURISTIC",                  "Attempt Heuristic",    2 },
     { NULL, NULL, 0 }
 };
 
@@ -7304,7 +7304,7 @@ proto_register_oran(void)
         },
         /* 7.5.3.54 */
         {&hf_oran_antMask_trx_control,
-         {"antMask", "oran_fh_cus.antMask",
+         {"antMask", "oran_fh_cus.trxControl.antMask",
           FT_BYTES, BASE_NONE,
           NULL, 0x0,
           "which antennas should sleep or wake-up",
