@@ -89,7 +89,10 @@ find_package(Python3 3.6 REQUIRED)
 
 # Strawberry is a web browser away from being its own operating system. Find
 # Perl before finding anything else so that we can avoid building with any of
-# of Strawberry's components.
+# of Strawberry's components. Adding Strawberry's "/c" subdirectory to
+# CMAKE_IGNORE_PREFIX_PATH should help us avoid pulling in libraries such as
+# zlib and executables such as xsltproc. CMake 3.29.1 and later ignores their
+# pkg-config: https://gitlab.kitware.com/cmake/cmake/-/merge_requests/9375
 find_package(Perl)
 if(WIN32 AND PERL_EXECUTABLE)
 	string(TOLOWER ${PERL_EXECUTABLE} lower_perl)
@@ -2169,6 +2172,7 @@ set(TSHARK_TAP_SRC
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-iostat.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-iousers.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-macltestat.c
+	${CMAKE_SOURCE_DIR}/ui/cli/tap-oran.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-protocolinfo.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-protohierstat.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-rlcltestat.c
@@ -3102,7 +3106,7 @@ endif()
 
 if (BUILD_stratoshark AND FALCO_PLUGINS)
 	add_custom_target(copy_falco_plugins)
-	add_custom_command(TARGET copy_falco_plugins
+	add_custom_command(TARGET copy_falco_plugins POST_BUILD
 		# XXX Falco plugins should probably be installed in a path that reflects
 		# the Falco version or its plugin API version.
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${STRATOSHARK_PLUGIN_DIR}/../falco
