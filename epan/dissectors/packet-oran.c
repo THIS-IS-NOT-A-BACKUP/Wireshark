@@ -393,6 +393,8 @@ static int hf_oran_ue_freq_offset;
 static int hf_oran_beam_type;
 static int hf_oran_meas_cmd_size;
 
+static int hf_oran_symbol_reordering_layer;
+
 static int hf_oran_c_section;
 static int hf_oran_u_section;
 
@@ -440,8 +442,7 @@ static int ett_oran_measurement_report;
 static int ett_oran_sresmask;
 static int ett_oran_c_section;
 static int ett_oran_remask;
-
-
+static int ett_oran_symbol_reordering_layer;
 
 
 /* Expert info */
@@ -482,6 +483,7 @@ static expert_field ei_oran_unexpected_measTypeId;
 static expert_field ei_oran_unsupported_compression_method;
 static expert_field ei_oran_ud_comp_len_wrong_size;
 static expert_field ei_oran_sresmask2_not_zero_with_rb;
+static expert_field ei_oran_st6_rb_shall_be_0;
 
 
 /* These are the message types handled by this dissector */
@@ -1994,7 +1996,12 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
         /* symInc (1 bit) */
         if (sectionType != SEC_C_RRM_MEAS_REPORTS &&     /* Section Type 10 */
             sectionType != SEC_C_REQUEST_RRM_MEAS) {     /* Section Type 11 */
-            proto_tree_add_item(c_section_tree, hf_oran_symInc, tvb, offset, 1, ENC_NA);
+            unsigned int sym_inc;
+            proto_item *sym_inc_ti = proto_tree_add_item_ret_uint(c_section_tree, hf_oran_symInc, tvb, offset, 1, ENC_NA, &sym_inc);
+            if (sym_inc !=0 && (sectionType == SEC_C_SINR_REPORTING)) {  /* Section Type 9 */
+                /* "0 shall be used" */
+                proto_item_append_text(sym_inc_ti, " (should be 0)");
+            }
         }
         else {
             /* reserved (1 bit) */
@@ -2050,7 +2057,11 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
             offset++;
             /* numSymbol */
             uint32_t numSymbol;
-            proto_tree_add_item_ret_uint(c_section_tree, hf_oran_numSymbol, tvb, offset, 1, ENC_NA, &numSymbol);
+            proto_item *numsymbol_ti = proto_tree_add_item_ret_uint(c_section_tree, hf_oran_numSymbol, tvb, offset, 1, ENC_NA, &numSymbol);
+            if ((sectionType == SEC_C_RRM_MEAS_REPORTS) && (numSymbol != 14)) {
+                proto_item_append_text(numsymbol_ti, " (for ST10, should be 14!)");
+                /* TODO: expert info? */
+            }
             offset++;
 
             /* [ef] (extension flag) */
@@ -2130,13 +2141,13 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
             case SEC_C_SINR_REPORTING:   /* Section Type 9 - SINR Reporting */
             {
-                unsigned bit_offset = offset+8;
+                unsigned bit_offset = offset*8;
 
                 /* TODO: alternates if 'rb' set? */
-                for (unsigned prb=startPrbu; prb < startPrbu+numPrbu; prb++) {
+                for (unsigned prb=0; prb < numPrbu; prb++) {
                     /* TODO: create a subtree for each PRB entry with good summary? */
 
-                    /* Each prb starts bit-aligned */
+                    /* Each prb starts byte-aligned */
                     bit_offset = ((bit_offset+7)/8) * 8;
 
                     /* N.B., using width/method from UL U-plane preferences, not certain that this is correct.. */
@@ -2144,24 +2155,27 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     /* sinrCompParam */
                     uint32_t exponent = 0;  /* N.B. init to silence warnings, but will always be set if read in COMP_BLOCK_FP case */
                     uint16_t sReSMask;
-                    offset = dissect_udcompparam(tvb, pinfo, c_section_tree, bit_offset/8,
-                                                 pref_iqCompressionUplink, &exponent, &sReSMask,
-                                                 true); /* last param is for_sinr */
+                    bit_offset = dissect_udcompparam(tvb, pinfo, c_section_tree, bit_offset/8,
+                                                     pref_iqCompressionUplink, &exponent, &sReSMask,
+                                                     true) * 8; /* last param is for_sinr */
 
-                    /* SINR Values for this PRB. TODO: subtree for each PRB? */
+                    /* sinrValues for this PRB. TODO: subtree for each PRB? */
+                    /* TODO: not sure how numSinrPerPrb interacts with rb==1... */
                     for (unsigned n=0; n < num_sinr_per_prb; n++) {
                         unsigned sinr_bits = tvb_get_bits(tvb, bit_offset, pref_sample_bit_width_uplink, ENC_BIG_ENDIAN);
 
-                        /* TODO: using uplink compression settings.  Is this right? */
+                        /* TODO: using uplink compression settings from preferences.  Is this right? */
                         float value = decompress_value(sinr_bits, pref_iqCompressionUplink, pref_sample_bit_width_uplink, exponent);
                         unsigned sample_len_in_bytes = ((bit_offset%8)+pref_sample_bit_width_uplink+7)/8;
                         proto_item *val_ti = proto_tree_add_float(c_section_tree, hf_oran_sinr_value, tvb,
                                                                    bit_offset/8, sample_len_in_bytes, value);
-                        proto_item_append_text(val_ti, "       (#%u for PRB=%u)", n+1, prb);
+                        /* TODO: could show here which REs/subcarriers share which values (they all divide 12..) */
+                        proto_item_append_text(val_ti, "       (#%u for PRB=%u)", n+1, startPrbu+(prb*(rb+1)));
 
                         bit_offset += pref_sample_bit_width_uplink;
                     }
                 }
+                offset = (bit_offset+7)/8;
                 break;
             }
             case SEC_C_REQUEST_RRM_MEAS:   /* Section Type 11 - Request RRM Measurements */
@@ -2174,7 +2188,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 break;
         }
     }
-    else if (sectionType == SEC_C_CH_INFO) {  /* Section Type 6 */
+    else if (sectionType == SEC_C_CH_INFO) {   /* Section Type 6 */
         /* ef */
         proto_tree_add_item_ret_boolean(c_section_tree, hf_oran_ef, tvb, offset, 1, ENC_BIG_ENDIAN, &extension_flag);
         /* ueId */
@@ -2185,8 +2199,13 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
         offset += 2;
         /* reserved (4 bits) */
         proto_tree_add_item(c_section_tree, hf_oran_reserved_4bits, tvb, offset, 1, ENC_NA);
-        /* rb */
-        proto_tree_add_item(c_section_tree, hf_oran_rb, tvb, offset, 1, ENC_NA);
+        /* rb ("Value=0 shall be set") */
+        uint32_t rb;
+        proto_item *rb_ti = proto_tree_add_item_ret_uint(c_section_tree, hf_oran_rb, tvb, offset, 1, ENC_NA, &rb);
+        if (rb != 0) {
+            proto_item_append_text(rb_ti, " (should be set to 0)");
+            expert_add_info(pinfo, rb_ti, &ei_oran_st6_rb_shall_be_0);
+        }
         /* symInc */
         proto_tree_add_item(c_section_tree, hf_oran_symInc, tvb, offset, 1, ENC_NA);
         /* startPrbc */
@@ -2452,7 +2471,8 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
             case 3: /* SE 3: TODO: DL precoding parameters */
             {
-                /* codebookindex */
+                /* codebookindex (8 bits) */
+                /* "This parameter is not used and shall be set to zero." */
                 proto_tree_add_item(extension_tree, hf_oran_codebook_index, tvb, offset, 1, ENC_BIG_ENDIAN);
                 offset += 1;
                 /* layerid */
@@ -3484,7 +3504,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 proto_tree_add_item_ret_uint(extension_tree, hf_oran_user_group_id, tvb, offset, 1, ENC_BIG_ENDIAN, &user_group_id);
                 offset += 1;
 
-                /* Dissect each entry.  Not sure how this works with padding bytes though... */
+                /* Dissect each entry (until run out of extlen bytes..). Not sure how this works with padding bytes though... */
                 while (offset < (extension_start_offset + extlen*4)) {
 
                     /* entryType (3 bits) */
@@ -3564,12 +3584,21 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
             case 25:  /* Symbol reordering for DMRS-BF */
                 /* Just dissect each available block of 7 bytes as the 14 symbols for a layer,
-                   where each layer could be one or apply to all layers. Could place layer under a subtree? */
+                   where each layer could be one or apply to all layers. */
+            {
+                unsigned layer = 0;
+                proto_item *layer_ti;
                 while (offset+7 <= (extension_start_offset + extlen*4)) {
+                    /* Layer subtree */
+                    layer_ti = proto_tree_add_string_format(extension_tree, hf_oran_symbol_reordering_layer,
+                                                            tvb, offset, 7, "",
+                                                            "Layer");
+                    proto_tree *layer_tree = proto_item_add_subtree(layer_ti, ett_oran_symbol_reordering_layer);
+
                     /* All 14 symbols for a layer (or all layers) */
                     for (unsigned s=0; s < 14; s++) {
                         proto_item *sym_ti;
-                        sym_ti = proto_tree_add_item(extension_tree,
+                        sym_ti = proto_tree_add_item(layer_tree,
                                                      (s % 2) ? hf_oran_tx_win_for_on_air_symbol_r : hf_oran_tx_win_for_on_air_symbol_l,
                                                      tvb, offset, 1, ENC_BIG_ENDIAN);
                         proto_item_append_text(sym_ti, " (sym %u)", s);
@@ -3577,8 +3606,15 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                             offset += 1;
                         }
                     }
+
+                    proto_item_append_text(layer_ti, " (layer %u)", ++layer);
+                }
+                /* Set layer subtree label */
+                if (layer == 1) {
+                    proto_item_append_text(layer_ti, " (all)");
                 }
                 break;
+            }
 
             case 26:  /* Frequency offset feedback */
                 /* Reserved (8 bits). N.B., added after draft? */
@@ -3595,6 +3631,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 /* Add each freqOffsetFb value */
                 for (unsigned n=0; n < num_fo_fb; n++) {
                     unsigned freq_offset_fb;
+                    /* freqOffsetFb (16 bits) */
                     proto_item *offset_ti = proto_tree_add_item_ret_uint(extension_tree, hf_oran_freq_offset_fb,
                                                                          tvb, offset, 2, ENC_BIG_ENDIAN, &freq_offset_fb);
                     /* Show if maps onto a -ve number */
@@ -3694,10 +3731,12 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 proto_tree_add_item_ret_uint(mr_tree, hf_oran_num_elements, tvb, offset, 1, ENC_BIG_ENDIAN, &num_elements);
             }
             else {
+                /* All other meas ids have a reserved byte */
                 proto_tree_add_item(mr_tree, hf_oran_reserved_8bits, tvb, offset, 1, ENC_BIG_ENDIAN);
             }
             offset += 1;
-            /* measDataSize. N.B. begins at mf field, i.e.  */
+
+            /* measDataSize (16 bits). N.B. begins at mf field, i.e. 2 bytes before this one  */
             unsigned meas_data_size;
             proto_item *meas_data_size_ti;
             meas_data_size_ti = proto_tree_add_item_ret_uint(mr_tree, hf_oran_meas_data_size, tvb, offset, 2, ENC_BIG_ENDIAN, &meas_data_size);
@@ -3761,12 +3800,17 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 }
                 case 4:
                 case 5:
-                    /* symbolMask */
+                    /* reserved (2 bits) */
+                    proto_tree_add_item(mr_tree, hf_oran_reserved_2bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+                    /* symbolMask (14 bits) */
+                    proto_tree_add_item(mr_tree, hf_oran_symbolMask, tvb, offset, 2, ENC_BIG_ENDIAN);
                     offset += 2;
+
                     /* 2 bytes for each PRB ipnPower */
                     for (unsigned n=0; n < numPrbc; n++) {
                         unsigned ipn_power;
                         proto_item *ipn_power_ti;
+                        /* ipnPower (2 bytes) */
                         ipn_power_ti = proto_tree_add_item_ret_uint(mr_tree, hf_oran_ipn_power, tvb, offset, 2, ENC_BIG_ENDIAN, &ipn_power);
                         proto_item_append_text(ipn_power_ti, " (PRB %3d)", startPrbc+n);
                         /* Show if maps onto a -ve number */
@@ -3782,6 +3826,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     for (unsigned n=0; n < num_elements; n++) {
                         unsigned snr_value;
                         proto_item *snr_value_ti;
+                        /* antDmrsSnrVal (2 bytes) */
                         snr_value_ti = proto_tree_add_item_ret_uint(mr_tree, hf_oran_ant_dmrs_snr_val, tvb, offset, 2, ENC_BIG_ENDIAN, &snr_value);
                         proto_item_append_text(snr_value_ti, " (elem %2u)", n+1);
                         /* Show if maps onto a -ve number */
@@ -4300,6 +4345,10 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
     else if (sectionType != SEC_C_LAA) {
          /* startSymbolId is in most section types */
         ssid_ti = proto_tree_add_item_ret_uint(section_tree, hf_oran_start_symbol_id, tvb, offset, 1, ENC_NA, &startSymbolId);
+        if (startSymbolId && (sectionType == SEC_C_RRM_MEAS_REPORTS)) {
+            proto_item_append_text(ssid_ti, " (should be 0 for ST10!)");
+            /* TODO: expert info? */
+        }
     }
     else {
         /* reserved (6 bits) */
@@ -4502,8 +4551,10 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
             break;
 
         case SEC_C_SINR_REPORTING:     /* Section Type 9 */
+        {
             /* numSinrPerPrb (3 bits) */
-            proto_tree_add_item_ret_uint(section_tree, hf_oran_num_sinr_per_prb, tvb, offset, 1, ENC_BIG_ENDIAN, &num_sinr_per_prb);
+            proto_item *nspp_ti;
+            nspp_ti = proto_tree_add_item_ret_uint(section_tree, hf_oran_num_sinr_per_prb, tvb, offset, 1, ENC_BIG_ENDIAN, &num_sinr_per_prb);
             switch (num_sinr_per_prb) {
                 case 0:
                     num_sinr_per_prb = 1; break;
@@ -4517,6 +4568,10 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
                     num_sinr_per_prb = 6; break;
                 case 5:
                     num_sinr_per_prb = 12; break;
+
+                default:
+                    proto_item_append_text(nspp_ti, " (invalid)");
+                    /* TODO: expert info? */
             }
 
             /* reserved (13 bits) */
@@ -4525,6 +4580,7 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
             proto_tree_add_item(section_tree, hf_oran_reserved_8bits, tvb, offset, 1, ENC_BIG_ENDIAN);
             offset += 1;
             break;
+        }
 
         case SEC_C_RRM_MEAS_REPORTS:
         case SEC_C_REQUEST_RRM_MEAS:
@@ -7807,6 +7863,13 @@ proto_register_oran(void)
           HFILL}
         },
 
+        { &hf_oran_symbol_reordering_layer,
+          { "Layer", "oran_fh_cus.layer",
+            FT_STRING, BASE_NONE,
+            NULL, 0x0,
+            NULL, HFILL}
+        },
+
         { &hf_oran_c_section,
           { "Section", "oran_fh_cus.c-plane.section",
             FT_STRING, BASE_NONE,
@@ -7856,7 +7919,8 @@ proto_register_oran(void)
         &ett_oran_measurement_report,
         &ett_oran_sresmask,
         &ett_oran_c_section,
-        &ett_oran_remask
+        &ett_oran_remask,
+        &ett_oran_symbol_reordering_layer
     };
 
     expert_module_t* expert_oran;
@@ -7898,7 +7962,8 @@ proto_register_oran(void)
         { &ei_oran_unexpected_measTypeId, { "oran_fh_cus.unexpected_meastypeid", PI_MALFORMED, PI_WARN, "unexpected measTypeId", EXPFILL }},
         { &ei_oran_unsupported_compression_method, { "oran_fh_cus.compression_type_unsupported", PI_UNDECODED, PI_WARN, "Unsupported compression type", EXPFILL }},
         { &ei_oran_ud_comp_len_wrong_size, { "oran_fh_cus.ud_comp_len_wrong_size", PI_MALFORMED, PI_WARN, "udCompLen does not match length of U-Plane section", EXPFILL }},
-        { &ei_oran_sresmask2_not_zero_with_rb, { "oran_fh_cus.sresmask2_not_zero", PI_MALFORMED, PI_WARN, "sReSMask2 should be zero when rb set", EXPFILL }}
+        { &ei_oran_sresmask2_not_zero_with_rb, { "oran_fh_cus.sresmask2_not_zero", PI_MALFORMED, PI_WARN, "sReSMask2 should be zero when rb set", EXPFILL }},
+        { &ei_oran_st6_rb_shall_be_0, { "oran_fh_cus.st6_rb_sset", PI_MALFORMED, PI_WARN, "rb should not be set for Section  Type 6", EXPFILL }}
     };
 
     /* Register the protocol name and description */
