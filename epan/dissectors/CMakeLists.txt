@@ -832,6 +832,8 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bpv6.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bpv7.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bpsec.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bpsec-defaultsc.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bpsec-cose.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bssap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bssgp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bt-dht.c
@@ -1811,6 +1813,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rmt-norm.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rohc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-roofnet.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-roughtime.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rpc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rpcap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rpcrdma.c
