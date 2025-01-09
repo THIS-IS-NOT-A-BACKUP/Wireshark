@@ -80,7 +80,7 @@ WSLUA_METHOD FrameInfo_read_data(lua_State* L) {
         return 0;
     }
 
-    if (!wtap_read_packet_bytes(fh->file, &fi->rec->data, len, &err, &err_info)) {
+    if (!wtap_read_bytes_buffer(fh->file, &fi->rec->data, len, &err, &err_info)) {
         lua_pushboolean(L, false);
         if (err_info) {
             lua_pushstring(L, err_info);
@@ -229,8 +229,7 @@ static int FrameInfo_set_data (lua_State* L) {
         const char* s = luaL_checklstring(L,2,&len);
 
         /* Make sure we have enough room for the packet */
-        ws_buffer_assure_space(&fi->rec->data, len);
-        memcpy(ws_buffer_start_ptr(&fi->rec->data), s, len);
+        ws_buffer_append(&fi->rec->data, s, len);
         fi->rec->rec_header.packet_header.caplen = (uint32_t) len;
         fi->rec->rec_header.packet_header.len = (uint32_t) len;
     }

@@ -7,10 +7,11 @@
  */
 
 #include <config.h>
-#include "wtap.h"
-#include "wtap-int.h"
 
 #define WS_LOG_DOMAIN LOG_DOMAIN_WIRETAP
+
+#include "wtap.h"
+#include "wtap-int.h"
 
 #include <string.h>
 
@@ -1845,7 +1846,8 @@ wtap_read_bytes(FILE_T fh, void *buf, unsigned int count, int *err,
 }
 
 /*
- * Read packet data into a Buffer, growing the buffer as necessary.
+ * Read a given number of bytes from a file into a Buffer, growing the
+ * buffer as necessary.
  *
  * This returns an error on a short read, even if the short read hit
  * the EOF immediately.  (The assumption is that each packet has a
@@ -1854,7 +1856,7 @@ wtap_read_bytes(FILE_T fh, void *buf, unsigned int count, int *err,
  * has been cut short, even if the read didn't read any data at all.)
  */
 bool
-wtap_read_packet_bytes(FILE_T fh, Buffer *buf, unsigned length, int *err,
+wtap_read_bytes_buffer(FILE_T fh, Buffer *buf, unsigned length, int *err,
     char **err_info)
 {
 	bool rv;
