@@ -145,6 +145,17 @@ wtap_compression_type_extension(wtap_compression_type compression_type)
 	return NULL;
 }
 
+const char *
+wtap_compression_type_name(wtap_compression_type compression_type)
+{
+	for (struct compression_type *p = compression_types;
+	    p->type != WTAP_UNCOMPRESSED; p++) {
+		if (p->type == compression_type)
+			return p->name;
+	}
+	return NULL;
+}
+
 GSList *
 wtap_get_all_compression_type_extensions_list(void)
 {
@@ -1159,7 +1170,12 @@ lz4_fill_out_buffer(FILE_T state)
             break;
         }
 
+        inBufSize = state->in.avail;
         compressedSize = LZ4F_getFrameInfo(state->lz4_dctx, &state->lz4_info, state->in.next, &inBufSize);
+
+        // We only call this when we're in the middle of decoding a frame, not
+        // before the start of a frame, so this shouldn't consume any bytes.
+        ws_assert(inBufSize == 0);
 
         if (LZ4F_isError(compressedSize)) {
             state->err = WTAP_ERR_DECOMPRESS;
@@ -1199,7 +1215,7 @@ lz4_fill_out_buffer(FILE_T state)
 
         state->out.avail += (unsigned)outBufSize;
 
-        if (compressedSize == 0 && ret > 4) {
+        if (compressedSize == 0 && ret > LZ4F_BLOCK_HEADER_SIZE) {
             /* End of block plus the next block header. We want to add a fast
              * seek point to the beginning of a block, before the header. We
              * don't add a fast seek point after before the EndMark / footer,
