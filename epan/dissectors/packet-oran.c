@@ -497,8 +497,10 @@ static expert_field ei_oran_numslots_not_zero;
 static expert_field ei_oran_version_unsupported;
 static expert_field ei_oran_laa_msg_type_unsupported;
 static expert_field ei_oran_se_on_unsupported_st;
-static expert_field ei_oran_cplane_unexpected_sequence_number;
-static expert_field ei_oran_uplane_unexpected_sequence_number;
+static expert_field ei_oran_cplane_unexpected_sequence_number_ul;
+static expert_field ei_oran_cplane_unexpected_sequence_number_dl;
+static expert_field ei_oran_uplane_unexpected_sequence_number_ul;
+static expert_field ei_oran_uplane_unexpected_sequence_number_dl;
 static expert_field ei_oran_acknack_no_request;
 static expert_field ei_oran_udpcomphdr_should_be_zero;
 static expert_field ei_oran_radio_fragmentation_c_plane;
@@ -1921,7 +1923,7 @@ static uint32_t dissect_bfw_bundle(tvbuff_t *tvb, proto_tree *tree, packet_info 
 
         /* I */
         /* Get bits, and convert to float. */
-        uint32_t bits = tvb_get_bits(tvb, bit_offset, iq_width, ENC_BIG_ENDIAN);
+        uint32_t bits = tvb_get_bits32(tvb, bit_offset, iq_width, ENC_BIG_ENDIAN);
         float value = decompress_value(bits, bfwcomphdr_comp_meth, iq_width, exponent);
         /* Add to tree. */
         proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8, (iq_width+7)/8, value, "#%u=%f", w, value);
@@ -1930,7 +1932,7 @@ static uint32_t dissect_bfw_bundle(tvbuff_t *tvb, proto_tree *tree, packet_info 
 
         /* Q */
         /* Get bits, and convert to float. */
-        bits = tvb_get_bits(tvb, bit_offset, iq_width, ENC_BIG_ENDIAN);
+        bits = tvb_get_bits32(tvb, bit_offset, iq_width, ENC_BIG_ENDIAN);
         value = decompress_value(bits, bfwcomphdr_comp_meth, iq_width, exponent);
         /* Add to tree. */
         proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8, (iq_width+7)/8, value, "#%u=%f", w, value);
@@ -2265,7 +2267,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     /* sinrValues for this PRB. */
                     /* TODO: not sure how numSinrPerPrb interacts with rb==1... */
                     for (unsigned n=0; n < num_sinr_per_prb; n++) {
-                        unsigned sinr_bits = tvb_get_bits(tvb, bit_offset, pref_sample_bit_width_uplink, ENC_BIG_ENDIAN);
+                        unsigned sinr_bits = tvb_get_bits32(tvb, bit_offset, pref_sample_bit_width_uplink, ENC_BIG_ENDIAN);
 
                         /* TODO: using uplink compression settings from preferences.  This isn't right.. */
                         float value = decompress_value(sinr_bits, pref_iqCompressionUplink, pref_sample_bit_width_uplink, exponent);
@@ -2366,7 +2368,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                 /* I */
                 /* Get bits, and convert to float. */
-                uint32_t bits = tvb_get_bits(tvb, bit_offset, ci_iq_width, ENC_BIG_ENDIAN);
+                uint32_t bits = tvb_get_bits32(tvb, bit_offset, ci_iq_width, ENC_BIG_ENDIAN);
                 float value = decompress_value(bits, ci_comp_meth, ci_iq_width, exponent);
 
                 /* Add to tree. */
@@ -2376,7 +2378,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                 /* Q */
                 /* Get bits, and convert to float. */
-                bits = tvb_get_bits(tvb, bit_offset, ci_iq_width, ENC_BIG_ENDIAN);
+                bits = tvb_get_bits32(tvb, bit_offset, ci_iq_width, ENC_BIG_ENDIAN);
                 value = decompress_value(bits, ci_comp_meth, ci_iq_width, exponent);
 
                 /* Add to tree. */
@@ -2505,7 +2507,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                     /* I value */
                     /* Get bits, and convert to float. */
-                    uint32_t bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                    uint32_t bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                     float value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                     /* Add to tree. */
                     proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
@@ -2518,7 +2520,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                     /* Q value */
                     /* Get bits, and convert to float. */
-                    bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                    bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                     value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                     /* Add to tree. */
                     proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
@@ -3386,7 +3388,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                                 /* I */
                                 /* Get bits, and convert to float. */
-                                uint32_t bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                                uint32_t bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 float value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
                                 proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
@@ -3396,7 +3398,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                                 /* Q */
                                 /* Get bits, and convert to float. */
-                                bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                                bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
                                 proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
@@ -4516,7 +4518,10 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
     /* Show any issues associated with this frame number */
     flow_result_t *result = wmem_tree_lookup32(flow_results_table, pinfo->num);
     if (result!=NULL && result->unexpected_seq_number) {
-        expert_add_info_format(pinfo, seq_id_ti, &ei_oran_cplane_unexpected_sequence_number,
+        expert_add_info_format(pinfo, seq_id_ti,
+                               (direction == DIR_UPLINK) ?
+                                   &ei_oran_cplane_unexpected_sequence_number_ul :
+                                   &ei_oran_cplane_unexpected_sequence_number_dl,
                                "Sequence number %u expected, but got %u",
                                result->expected_sequence_number, seq_id);
         uint32_t missing_sns = (256 + seq_id - result->expected_sequence_number) % 256;
@@ -5022,7 +5027,7 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
 
                                 /* I value */
                                 /* Get bits, and convert to float. */
-                                uint32_t bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                                uint32_t bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 float value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
                                 proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
@@ -5035,7 +5040,7 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
 
                                 /* Q value */
                                 /* Get bits, and convert to float. */
-                                bits = tvb_get_bits(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
+                                bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
                                 proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
@@ -5412,14 +5417,14 @@ static int dissect_oran_u_re(tvbuff_t *tvb, proto_tree *tree,
                              uint32_t exponent)
 {
     /* I */
-    unsigned i_bits = tvb_get_bits(tvb, samples_offset, sample_bit_width, ENC_BIG_ENDIAN);
+    unsigned i_bits = tvb_get_bits32(tvb, samples_offset, sample_bit_width, ENC_BIG_ENDIAN);
     float i_value = decompress_value(i_bits, comp_meth, sample_bit_width, exponent);
     unsigned sample_len_in_bytes = ((samples_offset%8)+sample_bit_width+7)/8;
     proto_item *i_ti = proto_tree_add_float(tree, hf_oran_iSample, tvb, samples_offset/8, sample_len_in_bytes, i_value);
     proto_item_set_text(i_ti, "iSample: % 0.7f  0x%04x (RE-%2u in the PRB)", i_value, i_bits, sample_number);
     samples_offset += sample_bit_width;
     /* Q */
-    unsigned q_bits = tvb_get_bits(tvb, samples_offset, sample_bit_width, ENC_BIG_ENDIAN);
+    unsigned q_bits = tvb_get_bits32(tvb, samples_offset, sample_bit_width, ENC_BIG_ENDIAN);
     float q_value = decompress_value(q_bits, comp_meth, sample_bit_width, exponent);
     sample_len_in_bytes = ((samples_offset%8)+sample_bit_width+7)/8;
     proto_item *q_ti = proto_tree_add_float(tree, hf_oran_qSample, tvb, samples_offset/8, sample_len_in_bytes, q_value);
@@ -5642,7 +5647,10 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     flow_result_t *result = wmem_tree_lookup32(flow_results_table, pinfo->num);
     if (result) {
         if (result->unexpected_seq_number) {
-            expert_add_info_format(pinfo, seq_id_ti, &ei_oran_uplane_unexpected_sequence_number,
+            expert_add_info_format(pinfo, seq_id_ti,
+                                   (direction = DIR_UPLINK) ?
+                                        &ei_oran_uplane_unexpected_sequence_number_ul :
+                                        &ei_oran_uplane_unexpected_sequence_number_dl,
                                    "Sequence number %u expected, but got %u",
                                    result->expected_sequence_number, seq_id);
             tap_info->missing_sns = (seq_id - result->expected_sequence_number) % 256;
@@ -5724,7 +5732,7 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
         uint32_t ud_comp_len;
 
         /* udCompHdr (if preferences indicate will be present) */
-        bool included = (includeUdCompHeader==1) ||
+        bool included = (includeUdCompHeader==0) ||   /* 0 means present.. */
                         (includeUdCompHeader==2 && udcomphdr_appears_present(state, direction, tvb, offset));
         if (included) {
             /* 7.5.2.10 */
@@ -8302,8 +8310,10 @@ proto_register_oran(void)
         { &ei_oran_version_unsupported, { "oran_fh_cus.version_unsupported", PI_UNDECODED, PI_WARN, "Protocol version unsupported", EXPFILL }},
         { &ei_oran_laa_msg_type_unsupported, { "oran_fh_cus.laa_msg_type_unsupported", PI_UNDECODED, PI_WARN, "laaMsgType unsupported", EXPFILL }},
         { &ei_oran_se_on_unsupported_st, { "oran_fh_cus.se_on_unsupported_st", PI_MALFORMED, PI_WARN, "Section Extension should not appear on this Section Type", EXPFILL }},
-        { &ei_oran_cplane_unexpected_sequence_number, { "oran_fh_cus.unexpected_seq_no_cplane", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in C-Plane", EXPFILL }},
-        { &ei_oran_uplane_unexpected_sequence_number, { "oran_fh_cus.unexpected_seq_no_uplane", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in U-Plane", EXPFILL }},
+        { &ei_oran_cplane_unexpected_sequence_number_ul, { "oran_fh_cus.unexpected_seq_no_cplane.ul", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in C-Plane UL", EXPFILL }},
+        { &ei_oran_cplane_unexpected_sequence_number_dl, { "oran_fh_cus.unexpected_seq_no_cplane.dl", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in C-Plane DL", EXPFILL }},
+        { &ei_oran_uplane_unexpected_sequence_number_ul, { "oran_fh_cus.unexpected_seq_no_uplane.ul", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in U-Plane UL", EXPFILL }},
+        { &ei_oran_uplane_unexpected_sequence_number_dl, { "oran_fh_cus.unexpected_seq_no_uplane.dl", PI_SEQUENCE, PI_WARN, "Unexpected sequence number seen in U-Plane DL", EXPFILL }},
         { &ei_oran_acknack_no_request, { "oran_fh_cus.acknack_no_request", PI_SEQUENCE, PI_WARN, "Have ackNackId response, but no request", EXPFILL }},
         { &ei_oran_udpcomphdr_should_be_zero, { "oran_fh_cus.udcomphdr_should_be_zero", PI_MALFORMED, PI_WARN, "C-Plane udCompHdr in DL should be set to 0", EXPFILL }},
         { &ei_oran_radio_fragmentation_c_plane, { "oran_fh_cus.radio_fragmentation_c_plane", PI_MALFORMED, PI_ERROR, "Radio fragmentation not allowed in C-PLane", EXPFILL }},
