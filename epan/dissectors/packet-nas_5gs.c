@@ -949,8 +949,16 @@ static int hf_nas_5gs_wlansp_loc_3gpp_sub_ent_len;
 static int hf_nas_5gs_wlansp_loc_3gpp_num_loc_fields;
 static int hf_nas_5gs_wlansp_loc_3gpp_loc_field_len;
 static int hf_nas_5gs_wlansp_loc_3gpp_loc_field_type;
-static int hf_nas_5gs_wlansp_loc_wlan_sub_ent_len;
+static int hf_nas_5gs_wlansp_loc_3gpp_loc_tac;
+static int hf_nas_5gs_wlansp_loc_3gpp_loc_eutra_ci;
+static int hf_nas_5gs_wlansp_loc_3gpp_loc_nr_ci;
+static int hf_nas_5gs_wlansp_loc_num_loc_fields;
+static int hf_nas_5gs_wlansp_loc_sub_ent_len;
+static int hf_nas_5gs_wlansp_loc_wlan_loc_field_len;
 static int hf_nas_5gs_wlansp_loc_wlan_sub_ent_type;
+static int hf_nas_5gs_wlansp_loc_hessid;
+static int hf_nas_5gs_wlansp_loc_ssid;
+static int hf_nas_5gs_wlansp_loc_bssid;
 static int hf_nas_5gs_geo_loc_anc_lat;
 static int hf_nas_5gs_geo_loc_anc_long;
 static int hf_nas_5gs_geo_loc_rad;
@@ -10312,7 +10320,7 @@ static const value_string nas_5gs_andsp_wlansp_location_field_typevals[] = {
     { 0x02, "EUTRA CI" },
     { 0x04, "NR CI" },
     { 0x81, "HESSID" },
-    { 0x82, "SID" },
+    { 0x82, "SSID" },
     { 0x84, "BSSID" },
     { 0, NULL }
 };
@@ -10500,7 +10508,7 @@ de_nas_5gs_ue_policies_andsp_wlansp_rule(tvbuff_t* tvb, packet_info* pinfo _U_, 
                         proto_tree_add_item_ret_uint(sel_crit_set_sub_tree, hf_nas_5gs_wlansp_sub_ent_len, tvb, offset, 1, ENC_BIG_ENDIAN, &sub_ent_len);
                         offset++;
                         /* SSID */
-                        proto_tree_add_item(sel_crit_set_sub_tree, hf_nas_5gs_wlansp_sel_crit_sp_exc, tvb, offset, sub_ent_len, ENC_UTF_8 | ENC_NA);
+                        proto_tree_add_item(sel_crit_set_sub_tree, hf_nas_5gs_wlansp_sel_crit_sp_exc, tvb, offset, sub_ent_len, ENC_NA);
                         offset += sub_ent_len;
                         break;
                     case 5: /* minimum backhaul threshold */
@@ -10557,12 +10565,14 @@ de_nas_5gs_ue_policies_andsp_wlansp_rule(tvbuff_t* tvb, packet_info* pinfo _U_, 
                 uint32_t m;
                 current_offset = offset;
                 for (m = 0; m < loc_num_sub_entries; m++) {
-                    uint32_t tgpp_sub_ent_len, wlan_sub_ent_len, wlan_sub_ent_type, loc_field_len, loc_field_type;
-                    loc_tree_sub_tree = proto_tree_add_subtree_format(loc_tree, tvb, current_offset, -1, ett_nas_5gs_loc_3gpp_sub_ent, &item, "Sub entry %u", m + 1);
+                    uint32_t tgpp_sub_ent_len, wlan_sub_ent_len, wlan_sub_ent_type, loc_field_len, loc_field_type, num_loc_fields;
+                    loc_tree_sub_tree = proto_tree_add_subtree_format(loc_tree, tvb, current_offset, -1, ett_nas_5gs_loc_3gpp_sub_ent, &item, "%s sub entry %u",
+                        val_to_str_const(loc_entry_type, nas_5gs_andsp_wlansp_loc_entry_type_vals, "Unknown"), m + 1);
                     switch (loc_entry_type) {
                     case 1: /* 3GPP location */
                         /* Length of 3GPP location sub entry */
                         proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_3gpp_sub_ent_len, tvb, current_offset, 2, ENC_BIG_ENDIAN, &tgpp_sub_ent_len);
+                        proto_item_set_len(item, tgpp_sub_ent_len + 2);
                         current_offset += 2;
                         /*
                         * MCC digit 2 MCC digit 1 octet r+9
@@ -10584,8 +10594,17 @@ de_nas_5gs_ue_policies_andsp_wlansp_rule(tvbuff_t* tvb, packet_info* pinfo _U_, 
                             current_offset++;
                             switch (loc_field_type) {
                             case 1: /* TAC */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_3gpp_loc_tac, tvb, offset, loc_field_len - 1, ENC_BIG_ENDIAN);
+                                current_offset += loc_field_len - 1;
+                                break;
                             case 2: /* EUTRA CI */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_3gpp_loc_eutra_ci, tvb, offset, 2, ENC_BIG_ENDIAN);
+                                current_offset += 2;
+                                break;
                             case 4: /* NR CI */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_3gpp_loc_nr_ci, tvb, offset, 3, ENC_BIG_ENDIAN);
+                                current_offset += 3;
+                                break;
                             default:
                                 current_offset += loc_field_len - 1;
                                 break;
@@ -10593,15 +10612,44 @@ de_nas_5gs_ue_policies_andsp_wlansp_rule(tvbuff_t* tvb, packet_info* pinfo _U_, 
                         }
                         break;
                     case 2: /* WLAN location */
-                        /* Length of WLAN location field */
-                        proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_wlan_sub_ent_len, tvb, current_offset, 2, ENC_BIG_ENDIAN, &wlan_sub_ent_len);
+                        /* Figure 5.3.2.10a: Location sub entry {entry type= WLAN location or Geo location} */
+                        /* Length of location sub entry */
+                        proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_sub_ent_len, tvb, current_offset, 2, ENC_BIG_ENDIAN, &wlan_sub_ent_len);
+                        proto_item_set_len(item, wlan_sub_ent_len + 2);
                         current_offset += 2;
-                        /* WLAN location field type */
-                        proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_wlan_sub_ent_type, tvb, current_offset, 1, ENC_BIG_ENDIAN, &wlan_sub_ent_type);
+                        /* number of location fields */
+                        proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_num_loc_fields, tvb, current_offset, 1, ENC_BIG_ENDIAN, &num_loc_fields);
                         current_offset++;
-                        current_offset += wlan_sub_ent_len - 3;
+                        uint32_t o;
+                        for (o = 0; o < num_loc_fields; o++) {
+                            /* Length of WLAN location field */
+                            proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_wlan_loc_field_len, tvb, current_offset, 1, ENC_BIG_ENDIAN, &wlan_sub_ent_len);
+                            current_offset++;
+                            /* WLAN location field type */
+                            proto_tree_add_item_ret_uint(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_wlan_sub_ent_type, tvb, current_offset, 1, ENC_BIG_ENDIAN, &wlan_sub_ent_type);
+                            current_offset++;
+                            /* WLAN location field contents */
+                            switch (wlan_sub_ent_type) {
+                            case 0x81: /* HESSID */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_hessid, tvb, current_offset, 6, ENC_BIG_ENDIAN);
+                                current_offset += 6;
+                                break;
+                            case 0x82: /* SSID */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_ssid, tvb, current_offset, wlan_sub_ent_len - 1, ENC_NA);
+                                current_offset += wlan_sub_ent_len - 1;
+                                break;
+                            case 0x84: /* BSSID */
+                                proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_wlansp_loc_bssid, tvb, current_offset, 6, ENC_BIG_ENDIAN);
+                                current_offset += 6;
+                                break;
+                            default:
+                                current_offset += wlan_sub_ent_len - 3;
+                                break;
+                            }
+                        }
                         break;
                     case 3: /* Geo location */
+                        proto_item_set_len(item, 10 + 2);
                         /* Anchor latitude  */
                         proto_tree_add_item(loc_tree_sub_tree, hf_nas_5gs_geo_loc_anc_lat, tvb, current_offset, 4, ENC_BIG_ENDIAN);
                         current_offset += 4;
@@ -14516,8 +14564,6 @@ proto_register_nas_5gs(void)
             FT_BOOLEAN, 8, TFS(&tfs_supported_not_supported), 0x08,
             NULL, HFILL }
         },
-
-
         { &hf_nas_5gs_tac,
         { "TAC",   "nas-5gs.tac",
             FT_UINT24, BASE_DEC, NULL, 0x0,
@@ -15818,7 +15864,7 @@ proto_register_nas_5gs(void)
         },
         { &hf_nas_5gs_wlansp_sel_crit_sp_exc,
         { "SSID", "nas-5gs.andsp.wlansp.sel_crit_sp_exc",
-            FT_STRING, BASE_NONE, NULL, 0x0,
+            FT_BYTES, BASE_SHOW_UTF_8_PRINTABLE, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_nas_5gs_wlansp_sp_excl_list_ulbi_ind,
@@ -15846,7 +15892,6 @@ proto_register_nas_5gs(void)
             FT_UINT32, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
-
         { &hf_nas_5gs_wlansp_val_area_len,
         { "length of validity area", "nas-5gs.andsp.wlansp.val_area_len",
             FT_UINT16, BASE_DEC, NULL, 0x0,
@@ -15893,18 +15938,58 @@ proto_register_nas_5gs(void)
             NULL, HFILL }
         },
         { &hf_nas_5gs_wlansp_loc_3gpp_loc_field_type,
-        { "Length of 3GPP location field", "nas-5gs.andsp.wlansp.3gpp_loc_field_type",
+        { "Field type", "nas-5gs.andsp.wlansp.3gpp_loc_field_type",
             FT_UINT8, BASE_DEC, VALS(nas_5gs_andsp_wlansp_location_field_typevals), 0x0,
             NULL, HFILL }
         },
-        { &hf_nas_5gs_wlansp_loc_wlan_sub_ent_len,
-        { "Length of WLAN location sub entry", "nas-5gs.andsp.wlansp.wlan_sub_ent_len",
+        { &hf_nas_5gs_wlansp_loc_3gpp_loc_tac,
+        { "TAC", "nas-5gs.andsp.wlansp.3gpp_loc_tac",
+            FT_UINT24, BASE_DEC, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_3gpp_loc_eutra_ci,
+        { "EUTRA CI", "nas-5gs.andsp.wlansp.3gpp_loc_eutra_ci",
             FT_UINT16, BASE_DEC, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_3gpp_loc_nr_ci,
+        { "NR CI", "nas-5gs.andsp.wlansp.3gpp_loc_nr_ci",
+            FT_UINT24, BASE_DEC, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_sub_ent_len,
+        { "Length of location sub entry", "nas-5gs.andsp.wlansp.loc_sub_ent_len",
+            FT_UINT16, BASE_DEC, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_num_loc_fields,
+        { "Number of location fields", "nas-5gs.andsp.wlansp.oc_num_loc_fields",
+            FT_UINT8, BASE_DEC, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_wlan_loc_field_len,
+        { "Length of WLAN location field", "nas-5gs.andsp.wlansp.wlan_sub_ent_len",
+            FT_UINT8, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_nas_5gs_wlansp_loc_wlan_sub_ent_type,
         { "WLAN location field type", "nas-5gs.andsp.wlansp.wlan_sub_ent_type",
             FT_UINT16, BASE_DEC, VALS(nas_5gs_andsp_wlansp_location_field_typevals), 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_hessid,
+        { "HESSID", "nas-5gs.andsp.wlansp.loc_hessid",
+            FT_UINT48, BASE_HEX, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_ssid,
+        { "SSID", "nas-5gs.andsp.wlansp.loc_ssid",
+            FT_BYTES, BASE_SHOW_UTF_8_PRINTABLE, NULL, 0x0,
+            NULL, HFILL }
+        },
+        { &hf_nas_5gs_wlansp_loc_bssid,
+        { "BSSID", "nas-5gs.andsp.wlansp.loc_bssid",
+            FT_UINT48, BASE_HEX, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_nas_5gs_geo_loc_anc_lat,
