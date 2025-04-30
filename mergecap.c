@@ -281,7 +281,10 @@ main(int argc, char *argv[])
                 break;
 
             case 's':
-                snaplen = get_nonzero_uint32(ws_optarg, "snapshot length");
+                if (!get_nonzero_uint32(ws_optarg, "snapshot length", &snaplen)) {
+                    status = false;
+                    goto clean_exit;
+                }
                 break;
 
             case 'V':
@@ -307,6 +310,11 @@ main(int argc, char *argv[])
                 }
                 break;
             case '?':              /* Bad options if GNU getopt */
+            default:
+                /* wslog arguments are okay */
+                if (ws_log_is_wslog_arg(opt))
+                    break;
+
                 switch(ws_optopt) {
                     case'F':
                         list_capture_types();
