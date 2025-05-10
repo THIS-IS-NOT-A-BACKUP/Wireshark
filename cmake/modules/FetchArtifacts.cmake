@@ -15,7 +15,9 @@ endif()
 # extracting artifacts somewhere under CMAKE_BINARY_DIR, but CMake
 # doesn't allow source or build paths in INTERFACE_INCLUDE_DIRECTORIES.
 #
-if (NOT EXISTS ${WIRESHARK_BASE_DIR} OR NOT IS_DIRECTORY ${WIRESHARK_BASE_DIR} OR NOT IS_WRITABLE ${WIRESHARK_BASE_DIR})
+if (NOT IS_DIRECTORY ${WIRESHARK_BASE_DIR})
+# IS_WRITABLE requires CMake 3.29
+# if (NOT IS_DIRECTORY ${WIRESHARK_BASE_DIR} OR NOT IS_WRITABLE ${WIRESHARK_BASE_DIR})
   message(FATAL_ERROR "Please make sure ${WIRESHARK_BASE_DIR} is a directory that is writable by you.")
 endif()
 
@@ -62,7 +64,9 @@ endfunction()
 function(update_artifacts)
   list(JOIN artifacts "\n" list_manifest_contents)
   set(file_manifest_contents)
-  if (IS_READABLE ${manifest_file})
+if (EXISTS ${manifest_file})
+# IS_READABLE requires CMake 3.29
+# if (IS_READABLE ${manifest_file})
     file(READ ${manifest_file} file_manifest_contents)
   endif()
   if(list_manifest_contents STREQUAL file_manifest_contents)
