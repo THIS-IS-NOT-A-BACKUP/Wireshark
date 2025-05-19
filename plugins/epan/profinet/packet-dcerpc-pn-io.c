@@ -71,13 +71,11 @@
 #include <wsutil/file_util.h>
 #include <epan/prefs.h>
 
-#ifdef HAVE_LIBXML2
 #include <wsutil/strtoi.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
-#endif
 
 #include "packet-pn.h"
 
@@ -4307,7 +4305,6 @@ pnio_gsd_device_equal(const void *key1, const void *key2)
     return (a->vendor_id == b->vendor_id) && (a->device_id == b->device_id);
 }
 
-#ifdef HAVE_LIBXML2
 static wmem_map_t *
 pnio_load_gsd_device_modules(const xmlNodePtr deviceNode, xmlXPathContextPtr xpathCtx)
 {
@@ -4535,7 +4532,6 @@ pnio_load_gsd_device_profile(xmlNodePtr deviceNode, xmlXPathContextPtr xpathCtx,
     value->modules = pnio_load_gsd_device_modules(deviceNode, xpathCtx);
     value->submodules = pnio_load_gsd_device_submodules(deviceNode, xpathCtx);
 }
-#endif /* HAVE_LIBXML2 */
 
 static void
 pnio_load_gsd_files(void)
@@ -4547,7 +4543,6 @@ pnio_load_gsd_files(void)
         wmem_free_all(pnio_pref_scope);
     }
 
-#ifdef HAVE_LIBXML2
     char    *diropen = NULL;  /* saves the final networkpath to open for GSD-files */
     GDir    *dir;
     const char *filename;    /* saves the found GSD-file name */
@@ -4611,7 +4606,6 @@ pnio_load_gsd_files(void)
 
         g_dir_close(dir);
     }
-#endif /* HAVE_LIBXML2 */
 }
 typedef struct {
     address* device;
@@ -4804,7 +4798,7 @@ static wmem_list_t* copy_list(wmem_allocator_t* scope, wmem_list_t* src_list)
 /* Callback function called when an XML markup element is opened */
 static void parser_start_element(GMarkupParseContext* context, const char* element_name, const char** attribute_names,
     const char** attribute_values, void* user_data, GError** error) {
-    
+
     (void)context;
     (void)error;
     ModuleItemRef* module_item_ref;
@@ -4988,14 +4982,14 @@ static void parser_start_element(GMarkupParseContext* context, const char* eleme
         state->inside_primary_language = true;
     }
     else if (strcmp(element_name, "Text") == 0 && state->inside_primary_language) {
-        char* text_id = NULL;
-        char* value = NULL;
+        const char* text_id = NULL;
+        const char* value = NULL;
         for (int i = 0; attribute_names[i] != NULL; i++) {
             if (strcmp(attribute_names[i], "TextId") == 0) {
-                text_id = g_strdup(attribute_values[i]);
+                text_id = attribute_values[i];
             }
             if (strcmp(attribute_names[i], "Value") == 0) {
-                value = g_strdup(attribute_values[i]);
+                value = attribute_values[i];
             }
         }
         /* Finds matching moduleName string */
@@ -5193,7 +5187,7 @@ static void parser_conv_start_element(GMarkupParseContext* context, const char* 
         ConversationAddress* new_conversation_address = wmem_new0(wmem_file_scope(), ConversationAddress);
         for (int i = 0; attribute_names[i] != NULL; i++) {
             if (strcmp(attribute_names[i], "device") == 0) {
-                char* device_str = g_strdup(attribute_values[i]);
+                const char* device_str = attribute_values[i];
                 uint8_t* device_bytes = wmem_alloc(wmem_file_scope(), 6 * sizeof(uint8_t));
                 if (sscanf(device_str, "%2hhx:%2hhx:%2hhx:%2hhx:%2hhx:%2hhx",
                     &device_bytes[0],
@@ -5209,7 +5203,7 @@ static void parser_conv_start_element(GMarkupParseContext* context, const char* 
                 }
             }
             else if (strcmp(attribute_names[i], "controller") == 0) {
-                char* controller_str = g_strdup(attribute_values[i]);
+                const char* controller_str = attribute_values[i];
                 uint8_t* controller_bytes = wmem_alloc(wmem_file_scope(), 6 * sizeof(uint8_t));
                 if (sscanf(controller_str, "%2hhx:%2hhx:%2hhx:%2hhx:%2hhx:%2hhx",
                     &controller_bytes[0],
@@ -5230,7 +5224,7 @@ static void parser_conv_start_element(GMarkupParseContext* context, const char* 
         }
     }
     else if (strcmp(element_name, "DeviceAccessPointItem") == 0) {
-        state->use_manual_method = true; 
+        state->use_manual_method = true;
     }
 }
 
@@ -5295,8 +5289,8 @@ static void extract_pnio_objects_withoutAR(packet_info* pinfo)
     GDir* dir;
     FILE* fp = NULL;
     const char* filename;
-    char* extraction_file = g_strdup(pnio_ps_networkpath);
-    char* fileopen = NULL;
+    const char* extraction_file = pnio_ps_networkpath;
+    const char* fileopen = NULL;
     char* buf;
     bool manual_flag = false;
 
@@ -5330,7 +5324,7 @@ static void extract_pnio_objects_withoutAR(packet_info* pinfo)
         if (*stateflag == 0) {
             if (gen_conversations(pinfo->num, current_fake_aruuid)) {
                 /* Uses now the config File to extract the needed Data */
-                extraction_file = g_strdup(pnio_configpath);
+                extraction_file = pnio_configpath;
                 manual_flag = true;
             }
             *stateflag = 1;
@@ -5385,9 +5379,15 @@ static void extract_pnio_objects_withoutAR(packet_info* pinfo)
                     }
                     else if ((dir = g_dir_open(extraction_file, 0, NULL)) != NULL) {
                         if  ((filename = g_dir_read_name(dir)) != NULL) {
+                            /* XXX - Find exactly *ONE* file in the directory,
+                             * in whatever completely arbitrary undefined order
+                             * (possibly via inode number). This seems unlikely
+                             * to be correct.
+                             */
                             /* ---- complete the path to open a GSD-file ---- */
                             fileopen = wmem_strdup_printf(pinfo->pool, "%s" G_DIR_SEPARATOR_S "%s", extraction_file, filename);
                         }
+                        g_dir_close(dir);
                     }
                     if (fileopen != NULL) {
                         /* ---- Open the found GSD-file  ---- */
@@ -5706,7 +5706,7 @@ static void extract_pnio_objects_withoutAR(packet_info* pinfo)
                                                     io_data_object->slotNr = slotnr;
                                                     io_data_object->moduleNameStr = item->moduleNameStr;
                                                     /* if subslot_number is not set, use state.device_access_point_item->subslot_nr */
-                                                    io_data_object->subSlotNr = item->subslot_number ? 
+                                                    io_data_object->subSlotNr = item->subslot_number ?
                                                         item->subslot_number : state.device_access_point_item->subslot_nr;
                                                     io_data_object->discardIOXS = false;
 
@@ -8350,7 +8350,7 @@ dissect_SecurityRequest_block(tvbuff_t* tvb, int offset,
                     hf_pn_io_credential_id_reserved, &u32CredentialIDReserved);
                 u32CredentialIDReserved >>= 4;
             }
-            if (u16SecurityOperation == 0x0006) // GenerateKeyPairandCSRReq 
+            if (u16SecurityOperation == 0x0006) // GenerateKeyPairandCSRReq
             {
                 /* CertificationRequestLength */
                 u16CertificateRequestLength = tvb_get_ntohs(tvb, offset);
@@ -8426,23 +8426,23 @@ dissect_SecurityRequest_block(tvbuff_t* tvb, int offset,
                 /* SecurityMode */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_mode, &u64SecurityMode);
-     
+
                 /* CertificateValidityPeriodCheck */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_certificate_validity_period_check, &u64CertificateValidityPeriodCheck);
-                
+
                 /* Reserved1 */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_configuration_parameters_reserved1, &u64Reserved1);
-               
+
                 /* SACKDegredationThreshold */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_sack_degradation_threshold, &u64SACKDegredationThreshold);
-                
+
                 /* Reserved2 */
                 offset = dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_configuration_parameters_reserved2, &u64Reserved2);
-                
+
             }
 
         }
@@ -8604,23 +8604,23 @@ dissect_SecurityResponse_block(tvbuff_t* tvb, int offset,
                 /* SecurityMode */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_mode, &u64SecurityMode);
-                
+
                 /* CertificateValidityPeriodCheck */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_certificate_validity_period_check, &u64CertificateValidityPeriodCheck);
-                
+
                 /* Reserved1 */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_configuration_parameters_reserved1, &u64Reserved1);
-                
+
                 /* SACKDegredationThreshold */
                 dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_sack_degradation_threshold, &u64SACKDegredationThreshold);
-                
+
                 /* Reserved2 */
                 offset = dissect_dcerpc_uint64(tvb, offset, pinfo, configuration_tree, &di, drep,
                     hf_pn_io_security_configuration_parameters_reserved2, &u64Reserved2);
-                
+
                 break;
             case(0x0004): /* GetEECertificationPathRsp */
                 /* EECertificationPath */
@@ -8660,7 +8660,7 @@ dissect_SecurityResponse_block(tvbuff_t* tvb, int offset,
                 proto_tree_add_item(tree, hf_pn_io_certificate, tvb, offset, u16CertificateLength, ENC_ASCII);
                 offset += u16CertificateLength;
                 break;
-            case(0x0006): // GenerateKeyPairAndCSRRsp 
+            case(0x0006): // GenerateKeyPairAndCSRRsp
 
                 /* CertificationRequestLength */
                 u16CertificateRequestLength = tvb_get_ntohs(tvb, offset);
@@ -8687,7 +8687,7 @@ dissect_SecurityResponse_block(tvbuff_t* tvb, int offset,
         {
             /* SAMResponseData */
             tvbuff_t *eap_tvb;
-            
+
             // Get EAP Data lentgth
             uint16_t length = tvb_get_uint16(tvb, offset+2, ENC_BIG_ENDIAN);
             eap_tvb = tvb_new_subset_length(tvb, offset, length);
@@ -11228,23 +11228,23 @@ dissect_CIMStationForwardingDelay_block(tvbuff_t* tvb, int offset,
     while (u16NumberOfEntries > 0)
     {
          u16NumberOfEntries--;
- 
+
          /*ForwardingGroupIngress*/
          offset = dissect_dcerpc_uint8(tvb, offset, pinfo, tree, drep,
              hf_pn_io_cim_station_forwarding_group_ingress, &u8ForwardingGroupIngress);
- 
+
          /*ForwardingGroupEgress*/
          offset = dissect_dcerpc_uint8(tvb, offset, pinfo, tree, drep,
              hf_pn_io_cim_station_forwarding_group_egress, &u8ForwardingGroupEgress);
- 
+
          /* StreamClass */
          offset = dissect_dcerpc_uint16(tvb, offset, pinfo, tree, drep,
              hf_pn_io_cim_net_stream_class, &u16StreamClass);
- 
+
          /* ForwardingDelay */
          sub_item = proto_tree_add_item(tree, hf_pn_io_cim_forwarding_delay_entry, tvb, offset, 4, ENC_BIG_ENDIAN);
          sub_tree = proto_item_add_subtree(sub_item, ett_pn_io_cim_forwarding_delay_entry);
- 
+
          dissect_dcerpc_uint32(tvb, offset, pinfo, sub_tree, drep,
              hf_pn_io_cim_forwarding_delay_independent, &u32ForwardingDelay);
          dissect_dcerpc_uint32(tvb, offset, pinfo, sub_tree, drep,
@@ -11252,7 +11252,7 @@ dissect_CIMStationForwardingDelay_block(tvbuff_t* tvb, int offset,
          offset = dissect_dcerpc_uint32(tvb, offset, pinfo, sub_tree, drep,
              hf_pn_io_cim_forwarding_delay_dependent, &u32ForwardingDelay);
      }
- 
+
      return offset;
 }
 
@@ -17702,7 +17702,7 @@ dissect_PNIO_RTA_with_security(tvbuff_t* tvb, int offset,
     proto_tree* information_tree = proto_item_add_subtree(security_item, ett_pn_io_security);
 
     dissect_dcerpc_uint8(tvb, offset, pinfo, information_tree, drep, hf_pn_io_security_information_protection_mode, &u8ProtectionMode);
-    u8ProtectionMode &= 0x0F;
+    u8ProtectionMode &= 0x01;
     offset = dissect_dcerpc_uint8(tvb, offset, pinfo, information_tree, drep, hf_pn_io_security_information_reserved, &u8InformationReserved);
     u8InformationReserved >>= 1;
 
@@ -17775,7 +17775,7 @@ dissect_PNIO_RTA_with_security(tvbuff_t* tvb, int offset,
     {
         u16LengthSecurityData = tvb_captured_length_remaining(tvb, offset);
         proto_tree_add_item(rta_tree, hf_pn_io_security_data, tvb, offset, u16LengthSecurityData, ENC_NA);
-        proto_item* security_data_item = proto_tree_add_protocol_format(rta_tree, proto_pn_io, tvb, offset, u16LengthSecurityData, 
+        proto_item* security_data_item = proto_tree_add_protocol_format(rta_tree, proto_pn_io, tvb, offset, u16LengthSecurityData,
             "PROFINET IO Secure Data");
         proto_item_set_hidden(security_data_item);
         offset += u16LengthSecurityData;
@@ -17824,14 +17824,14 @@ dissect_PNIO_heur(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
         (u16FrameID >= 0x0700 && u16FrameID <= 0x0fff)) && /* RTC3 redundant */
         !isTimeAware) {
             u8ProtectionMode = tvb_get_uint8(tvb, 0);
-            u8ProtectionMode &= 0x0F;
+            u8ProtectionMode &= 0x01;
             u16SecurityLength = tvb_get_uint16(tvb, 6, ENC_BIG_ENDIAN);
-    
+
             if (u8ProtectionMode == 0x01)
                 security_data = tvb_captured_length_remaining(tvb, 8) - 16; /* Exclude SecurityChecksum, which is encrypted */
             else if (u8ProtectionMode == 0x00)
                 security_data = tvb_captured_length_remaining(tvb, 8) + 4; /* Include cyclic status fields */
-    
+
             if (u16SecurityLength == security_data)
                 dissect_RTC3_with_security(tvb, 0, pinfo, tree, drep, data);
             else
@@ -17864,7 +17864,7 @@ dissect_PNIO_heur(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
      * data to consider as a PNIO class 1 data packet with security */
     if (u16FrameID >= 0x8000 && u16FrameID < 0xbbff) {
         u8ProtectionMode = tvb_get_uint8(tvb, 0);
-        u8ProtectionMode &= 0x0F;
+        u8ProtectionMode &= 0x01;
         u16SecurityLength = tvb_get_uint16(tvb, 6, ENC_BIG_ENDIAN);
 
         if (u8ProtectionMode == 0x01)
@@ -17888,7 +17888,7 @@ dissect_PNIO_heur(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
       * data to consider as a PNIO class 1 data packet with security */
     if (u16FrameID >= 0xbc00 && u16FrameID < 0xbfff) {
         u8ProtectionMode = tvb_get_uint8(tvb, 0);
-        u8ProtectionMode &= 0x0F;
+        u8ProtectionMode &= 0x01;
         u16SecurityLength = tvb_get_uint16(tvb, 6, ENC_BIG_ENDIAN);
 
         if (u8ProtectionMode == 0x01)
@@ -20034,7 +20034,7 @@ proto_register_pn_io (void)
     { "SyncPortRole", "pn_io.nme_domain_sync_port_rule",
       FT_UINT8,BASE_HEX | BASE_RANGE_STRING, RVALS(pn_io_nme_domain_sync_port_role_vals), 0x0,
       NULL, HFILL }
-    }, 
+    },
     { &hf_pn_io_mau_type,
       { "MAUType", "pn_io.mau_type",
         FT_UINT16, BASE_HEX, VALS(pn_io_mau_type), 0x0,
@@ -22044,11 +22044,9 @@ proto_register_pn_io (void)
         "Folder containing GSD files",     /* Title */
         "Place GSD files in this folder.", /* Description */
         &pnio_ps_networkpath);             /* Variable in which to save the GSD file folder path */
-#ifndef HAVE_LIBXML2
     prefs_register_static_text_preference(pnio_module, "pnio_no_libxml2",
         "This version of Wireshark was built without support for reading GSDML files.",
         "This version of Wireshark was built without libxml2 and does not support reading GSDML files.");
-#endif
     prefs_register_filename_preference(pnio_module, "pnio_configpath",
         "Config file for manual extraction",
         "Choose a config XML file",
