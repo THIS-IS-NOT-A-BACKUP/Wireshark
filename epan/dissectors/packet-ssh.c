@@ -217,6 +217,7 @@ struct ssh_flow_data {
     wmem_array_t    *kex_shared_secret;
     bool            do_decrypt;
     bool            ext_ping_openssh_offered;
+    bool            ext_kex_strict;
     ssh_bignum      new_keys[6];
 };
 
@@ -668,7 +669,7 @@ static int ssh_try_dissect_encrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
 static int ssh_dissect_encrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
         struct ssh_peer_data *peer_data,
         int offset, proto_tree *tree);
-static void ssh_choose_algo(char *client, char *server, char **result);
+static bool ssh_choose_algo(char *client, char *server, char **result);
 static void ssh_set_mac_length(struct ssh_peer_data *peer_data);
 static void ssh_set_kex_specific_dissector(struct ssh_flow_data *global_data);
 
@@ -1152,7 +1153,9 @@ ssh_tree_add_hostkey(tvbuff_t *tvb, int offset, proto_tree *parent_tree,
 
     // server host key (K_S / Q)
     char *data = (char *)tvb_memdup(wmem_packet_scope(), tvb, last_offset + 4, key_len);
-    ssh_hash_buffer_put_string(global_data->kex_server_host_key_blob, data, key_len);
+    if (global_data) {
+        ssh_hash_buffer_put_string(global_data->kex_server_host_key_blob, data, key_len);
+    }
 
     last_offset += 4;
     proto_tree_add_uint(tree, hf_ssh_hostkey_type_length, tvb, last_offset, 4, type_len);
@@ -1363,6 +1366,16 @@ ssh_dissect_key_exchange(tvbuff_t *tvb, packet_info *pinfo,
                     global_data->peer_data[is_response].seq_num_new_key = global_data->peer_data[is_response].sequence_number;
                     global_data->peer_data[is_response].sequence_number++;
                     ssh_debug_printf("%s->sequence_number{SSH_MSG_NEWKEYS=%d}++ > %d\n", is_response?"server":"client", global_data->peer_data[is_response].seq_num_new_key, global_data->peer_data[is_response].sequence_number);
+                }
+                if (!PINFO_FD_VISITED(pinfo)) {
+                    /* "After sending or receiving a SSH2_MSG_NEWKEYS message,
+                     * reset the packet sequence number to zero. This behaviour
+                     * persists for the duration of the connection (i.e. not
+                     * just the first SSH2_MSG_NEWKEYS) */
+                    if (global_data->ext_kex_strict) {
+                        global_data->peer_data[is_response].sequence_number = 0;
+                        ssh_debug_printf("%s->sequence_number reset to 0 (Strict KEX)\n", is_response?"server":"client");
+                    }
                 }
 
                 // the client sent SSH_MSG_NEWKEYS
@@ -1877,7 +1890,7 @@ ssh_gslist_compare_strings(const void *a, const void *b)
 }
 
 /* expects that *result is NULL */
-static void
+static bool
 ssh_choose_algo(char *client, char *server, char **result)
 {
     char **server_strings = NULL;
@@ -1885,8 +1898,12 @@ ssh_choose_algo(char *client, char *server, char **result)
     char **step;
     GSList *server_list = NULL;
 
+    static const char* client_strict = "kex-strict-c-v00@openssh.com";
+    static const char* server_strict = "kex-strict-s-v00@openssh.com";
+    bool kex_strict = false;
+
     if (!client || !server || !result || *result)
-        return;
+        return false;
 
     server_strings = g_strsplit(server, ",", 0);
     for (step = server_strings; *step; step++) {
@@ -1902,9 +1919,28 @@ ssh_choose_algo(char *client, char *server, char **result)
         }
     }
 
+    /* Check for the OpenSSH strict key exchange extension designed to
+     * mitigate the Terrapin attack by resetting the packet sequence
+     * number to zero after a SSH2_MSG_NEWKEYS message.
+     * https://www.openssh.com/txt/release-9.6
+     * Also see PROTOCOL in the OpenSSH source distribution.
+     *
+     * OpenSSH says this is activated "when an endpoint that supports this
+     * extension observes this algorithm name in a peer's KEXINIT packet".
+     * We'll have to assume that any endpoint that supports this also
+     * indicates support for it in its own first SSH2_MSG_KEXINIT.
+     */
+    if (g_strv_contains((const char* const*)client_strings, client_strict) &&
+        g_strv_contains((const char* const*)server_strings, server_strict)) {
+
+        kex_strict = true;
+    }
+
     g_strfreev(client_strings);
     g_slist_free(server_list);
     g_strfreev(server_strings);
+
+    return kex_strict;
 }
 
 static int
@@ -2000,7 +2036,7 @@ ssh_dissect_key_init(tvbuff_t *tvb, packet_info *pinfo, int offset,
         !global_data->kex)
     {
         /* Note: we're ignoring first_kex_packet_follows. */
-        ssh_choose_algo(
+        global_data->ext_kex_strict = ssh_choose_algo(
             global_data->peer_data[CLIENT_PEER_DATA].kex_proposal,
             global_data->peer_data[SERVER_PEER_DATA].kex_proposal,
             &global_data->kex);
@@ -3906,39 +3942,32 @@ ssh_dissect_userauth_generic(tvbuff_t *packet_tvb, packet_info *pinfo,
         int offset, proto_item *msg_type_tree, unsigned msg_code)
 {
         if(msg_code==SSH_MSG_USERAUTH_REQUEST){
-                unsigned   slen;
-                slen = tvb_get_ntohl(packet_tvb, offset) ;
-                proto_tree_add_item(msg_type_tree, hf_ssh_userauth_user_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                uint32_t  slen;
+                proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_user_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                 offset += 4;
                 proto_tree_add_item(msg_type_tree, hf_ssh_userauth_user_name, packet_tvb, offset, slen, ENC_ASCII);
                 offset += slen;
-                slen = tvb_get_ntohl(packet_tvb, offset) ;
-                proto_tree_add_item(msg_type_tree, hf_ssh_userauth_service_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_service_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                 offset += 4;
                 proto_tree_add_item(msg_type_tree, hf_ssh_userauth_service_name, packet_tvb, offset, slen, ENC_ASCII);
                 offset += slen;
-                slen = tvb_get_ntohl(packet_tvb, offset) ;
-                proto_tree_add_item(msg_type_tree, hf_ssh_userauth_method_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_method_name_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                 offset += 4;
-                proto_tree_add_item(msg_type_tree, hf_ssh_userauth_method_name, packet_tvb, offset, slen, ENC_ASCII);
-
-                uint8_t* key_type;
-                key_type = tvb_get_string_enc(pinfo->pool, packet_tvb, offset, slen, ENC_ASCII|ENC_NA);
+                const uint8_t* key_type;
+                proto_tree_add_item_ret_string(msg_type_tree, hf_ssh_userauth_method_name, packet_tvb, offset, slen, ENC_ASCII, pinfo->pool, &key_type);
                 offset += slen;
                 if (0 == strcmp(key_type, "none")) {
-                }else if (0 == strcmp(key_type, "publickey")) {
+                }else if (0 == strcmp(key_type, "publickey") || 0 == strcmp(key_type, "publickey-hostbound-v00@openssh.com")) {
                         uint8_t bHaveSignature = tvb_get_uint8(packet_tvb, offset);
                         int dissected_len = 0;
                         proto_tree_add_item(msg_type_tree, hf_ssh_userauth_have_signature, packet_tvb, offset, 1, ENC_BIG_ENDIAN);
                         offset += 1;
-                        slen = tvb_get_ntohl(packet_tvb, offset) ;
-                        proto_tree_add_item(msg_type_tree, hf_ssh_userauth_pka_name_len, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                        proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_pka_name_len, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                         offset += 4;
                         proto_tree_add_item(msg_type_tree, hf_ssh_userauth_pka_name, packet_tvb, offset, slen, ENC_ASCII);
                         offset += slen;
                         proto_item *blob_tree = NULL;
-                        slen = tvb_get_ntohl(packet_tvb, offset) ;
-                        proto_tree_add_item(msg_type_tree, hf_ssh_blob_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                        proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_blob_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                         offset += 4;
                         blob_tree = proto_tree_add_subtree(msg_type_tree, packet_tvb, offset, slen, ett_userauth_pk_blob, NULL, "Public key blob");
 //        proto_tree_add_item(blob_tree, hf_ssh2_msg_code, packet_tvb, offset, 1, ENC_BIG_ENDIAN);
@@ -3947,9 +3976,13 @@ ssh_dissect_userauth_generic(tvbuff_t *packet_tvb, packet_info *pinfo,
                             expert_add_info_format(pinfo, blob_tree, &ei_ssh_packet_decode, "Decoded %d bytes, but packet length is %d bytes", dissected_len, slen);
                         }
                         offset += slen;
+                        if (0 == strcmp(key_type, "publickey-hostbound-v00@openssh.com")) {
+                            // Host key - but should we add it to global data or not?
+                            offset += ssh_tree_add_hostkey(packet_tvb, offset, msg_type_tree, "Server host key",
+                                    ett_key_exchange_host_key, NULL);
+                        }
                         if(bHaveSignature){
-                                slen = tvb_get_ntohl(packet_tvb, offset) ;
-                                proto_tree_add_item(msg_type_tree, hf_ssh_signature_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                                proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_signature_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                                 offset += 4;
                                 proto_item *signature_tree = NULL;
                                 signature_tree = proto_tree_add_subtree(msg_type_tree, packet_tvb, offset, slen, ett_userauth_pk_signautre, NULL, "Public key signature");
@@ -3963,14 +3996,12 @@ ssh_dissect_userauth_generic(tvbuff_t *packet_tvb, packet_info *pinfo,
                         uint8_t bChangePassword = tvb_get_uint8(packet_tvb, offset);
                         proto_tree_add_item(msg_type_tree, hf_ssh_userauth_change_password, packet_tvb, offset, 1, ENC_BIG_ENDIAN);
                         offset += 1;
-                        slen = tvb_get_ntohl(packet_tvb, offset) ;
-                        proto_tree_add_item(msg_type_tree, hf_ssh_userauth_password_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                        proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_password_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                         offset += 4;
                         proto_tree_add_item(msg_type_tree, hf_ssh_userauth_password, packet_tvb, offset, slen, ENC_ASCII);
                         offset += slen;
                         if(bChangePassword){
-                            slen = tvb_get_ntohl(packet_tvb, offset) ;
-                            proto_tree_add_item(msg_type_tree, hf_ssh_userauth_new_password_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                            proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_userauth_new_password_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                             offset += 4;
                             proto_tree_add_item(msg_type_tree, hf_ssh_userauth_new_password, packet_tvb, offset, slen, ENC_ASCII);
                             offset += slen;
@@ -3980,8 +4011,7 @@ ssh_dissect_userauth_generic(tvbuff_t *packet_tvb, packet_info *pinfo,
 
         }else if(msg_code==SSH_MSG_USERAUTH_FAILURE){
                 unsigned   slen;
-                slen = tvb_get_ntohl(packet_tvb, offset) ;
-                proto_tree_add_item(msg_type_tree, hf_ssh_auth_failure_list_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
+                proto_tree_add_item_ret_uint(msg_type_tree, hf_ssh_auth_failure_list_length, packet_tvb, offset, 4, ENC_BIG_ENDIAN, &slen);
                 offset += 4;
                 proto_tree_add_item(msg_type_tree, hf_ssh_auth_failure_list, packet_tvb, offset, slen, ENC_ASCII);
                 offset += slen;
