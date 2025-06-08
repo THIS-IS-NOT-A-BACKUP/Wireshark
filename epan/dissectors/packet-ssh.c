@@ -486,6 +486,7 @@ static expert_field ei_ssh2_kex_hybrid_msg_code;
 static expert_field ei_ssh2_kex_hybrid_msg_code_unknown;
 
 static bool ssh_desegment = true;
+static bool ssh_ignore_mac_failed;
 
 static dissector_handle_t ssh_handle;
 static dissector_handle_t sftp_handle;
@@ -595,6 +596,7 @@ static const char *ssh_debug_file_name;
 //#define CIPHER_AES192_GCM               0x00040002        -- does not exist
 #define CIPHER_AES256_GCM               0x00040004
 // DO NOT USE 0x00040000 (used by SSH_KEX_SNTRUP761X25519)
+#define CIPHER_NULL                     0x00080000
 
 #define CIPHER_MAC_SHA2_256             0x00020001
 
@@ -764,10 +766,6 @@ static unsigned ssh_decrypt_packet(tvbuff_t *tvb, packet_info *pinfo,
 static bool ssh_decrypt_chacha20(gcry_cipher_hd_t hd, uint32_t seqnr,
         uint32_t counter, const unsigned char *ctext, unsigned ctext_len,
         unsigned char *plain, unsigned plain_len);
-static proto_item * ssh_tree_add_mac(proto_tree *tree, tvbuff_t *tvb, const unsigned offset, const unsigned mac_len,
-        const int hf_mac, const int hf_mac_status, struct expert_field* bad_checksum_expert,
-        packet_info *pinfo, const uint8_t * calc_mac, const unsigned flags);
-
 static int ssh_dissect_decrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
         struct ssh_peer_data *peer_data, proto_tree *tree,
         ssh_message_info_t *message);
@@ -1998,7 +1996,7 @@ static int
 ssh_try_dissect_encrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
         struct ssh_peer_data *peer_data, int offset, proto_tree *tree)
 {
-    bool can_decrypt = peer_data->cipher != NULL;
+    bool can_decrypt = peer_data->cipher != NULL || peer_data->cipher_id == CIPHER_NULL;
     ssh_message_info_t *message = NULL;
 
     if (can_decrypt) {
@@ -3341,6 +3339,9 @@ ssh_decryption_set_cipher_id(struct ssh_peer_data *peer)
         peer->cipher_id = CIPHER_AES192_CTR;
     } else if (0 == strcmp(cipher_name, "aes256-ctr")) {
         peer->cipher_id = CIPHER_AES256_CTR;
+    } else if (0 == strcmp(cipher_name, "none")) {
+        peer->cipher_id = CIPHER_NULL;
+        peer->length_is_plaintext = 1;
     } else {
         peer->cipher = NULL;
         ws_debug("decryption not supported: %s", cipher_name);
@@ -3633,7 +3634,10 @@ ssh_calc_mac(struct ssh_peer_data *peer_data, uint32_t seqnr, uint8_t* data, uin
 
     memset(calc_mac, 0, DIGEST_MAX_SIZE);
 
-    if (ssh_hmac_init(&hm, peer_data->hmac_iv, peer_data->hmac_iv_len,md) != 0)
+    if (md == -1) {
+        return;
+    }
+    if (ssh_hmac_init(&hm, peer_data->hmac_iv, peer_data->hmac_iv_len, md) != 0)
         return;
 
     /* hash sequence number */
@@ -3993,6 +3997,38 @@ ssh_decrypt_packet(tvbuff_t *tvb, packet_info *pinfo,
 
         // XXX - In -etm modes, should calculate MAC based on ciphertext.
         ssh_calc_mac(peer_data, seqnr, plain, data_len, calc_mac);
+    } else if (CIPHER_NULL == peer_data->cipher_id) {
+        if (ssh_desegment && pinfo->can_desegment && remaining < 4) {
+            /* Can do reassembly, and the packet length is split across
+             * segment boundaries. */
+            pinfo->desegment_offset = offset;
+            pinfo->desegment_len = DESEGMENT_ONE_MORE_SEGMENT;
+            return tvb_captured_length(tvb);
+        }
+        message_length = tvb_get_uint32(tvb, offset, ENC_BIG_ENDIAN);
+        ssh_debug_printf("length: %d, remaining: %d\n", message_length, remaining);
+        if (message_length > SSH_MAX_PACKET_LEN || message_length < 8) {
+            ws_debug("ssh: unreasonable message length %u", message_length);
+            return tvb_captured_length(tvb);
+        }
+
+        if (message_length + 4 + mac_len > remaining) {
+            // Need desegmentation; as the message length was unencrypted
+            // AAD, we need no special handling here.
+            if (pinfo->can_desegment) {
+                pinfo->desegment_offset = offset;
+                pinfo->desegment_len = message_length + 4 + mac_len - remaining;
+                return tvb_captured_length(tvb);
+            }
+            // If we can't desegment, we will have an exception below in
+            // the tvb_memdup. Advance the sequence number (not crucial).
+            peer_data->sequence_number++;
+        }
+        data_len = message_length + 4;
+        plain = tvb_memdup(pinfo->pool, tvb, offset, data_len);
+
+        // XXX - In -etm modes, should calculate MAC based on ciphertext.
+        ssh_calc_mac(peer_data, seqnr, plain, data_len, calc_mac);
     }
 
     if (mac_len && data_len) {
@@ -4003,10 +4039,9 @@ ssh_decrypt_packet(tvbuff_t *tvb, packet_info *pinfo,
             ws_debug("MAC ERR");
             /* Bad MAC, just show the packet as encrypted. We can get
              * this for a known encryption type with no keys currently. */
-            /* XXX: The TLS dissector has a preference to show the attempt
-             * anyway if it failed.
-             */
-            return tvb_captured_length(tvb);
+            if (!ssh_ignore_mac_failed) {
+                return tvb_captured_length(tvb);
+            }
         }
     }
 
@@ -4036,87 +4071,6 @@ ssh_decrypt_packet(tvbuff_t *tvb, packet_info *pinfo,
 
     offset += message_length + mac_len + 4;
     return offset;
-}
-
-proto_item *
-ssh_tree_add_mac(proto_tree *tree, tvbuff_t *tvb, const unsigned offset, const unsigned mac_len,
-                const int hf_mac, const int hf_mac_status, struct expert_field* bad_checksum_expert,
-                packet_info *pinfo, const uint8_t * calc_mac, const unsigned flags)
-{
-//    header_field_info *hfinfo = proto_registrar_get_nth(hf_checksum);
-    proto_item* ti = NULL;
-    proto_item* ti2;
-    bool incorrect_mac = true;
-    char *mac;
-
-//    DISSECTOR_ASSERT_HINT(hfinfo != NULL, "Not passed hfi!");
-/*
-    if (flags & PROTO_CHECKSUM_NOT_PRESENT) {
-        ti = proto_tree_add_uint_format_value(tree, hf_checksum, tvb, offset, len, 0, "[missing]");
-        proto_item_set_generated(ti);
-        if (hf_checksum_status > 0) {
-            ti2 = proto_tree_add_uint(tree, hf_checksum_status, tvb, offset, len, PROTO_CHECKSUM_E_NOT_PRESENT);
-            proto_item_set_generated(ti2);
-        }
-        return ti;
-    }
-*/
-    mac = (char *)tvb_get_ptr(tvb, offset, mac_len);
-    if (flags & PROTO_CHECKSUM_GENERATED) {
-//        ti = proto_tree_add_uint(tree, hf_checksum, tvb, offset, len, computed_checksum);
-//        proto_item_set_generated(ti);
-    } else {
-        ti = proto_tree_add_item(tree, hf_mac, tvb, offset, mac_len, ENC_NA);
-        if (flags & PROTO_CHECKSUM_VERIFY) {
-            if (flags & (PROTO_CHECKSUM_IN_CKSUM|PROTO_CHECKSUM_ZERO)) {
-                if (!memcmp(mac, calc_mac, mac_len)) {
-                    proto_item_append_text(ti, " [correct]");
-                    if (hf_mac_status != -1) {
-                        ti2 = proto_tree_add_uint(tree, hf_mac_status, tvb, offset, 0, PROTO_CHECKSUM_E_GOOD);
-                        proto_item_set_generated(ti2);
-                    }
-                    incorrect_mac = false;
-                } else if (flags & PROTO_CHECKSUM_IN_CKSUM) {
-//                    computed_checksum = in_cksum_shouldbe(checksum, computed_checksum);
-                }
-            } else {
-                if (!memcmp(mac, calc_mac, mac_len)) {
-                    proto_item_append_text(ti, " [correct]");
-                    if (hf_mac_status != -1) {
-                        ti2 = proto_tree_add_uint(tree, hf_mac_status, tvb, offset, 0, PROTO_CHECKSUM_E_GOOD);
-                        proto_item_set_generated(ti2);
-                    }
-                    incorrect_mac = false;
-                }
-            }
-
-            if (incorrect_mac) {
-                if (hf_mac_status != -1) {
-                    ti2 = proto_tree_add_uint(tree, hf_mac_status, tvb, offset, 0, PROTO_CHECKSUM_E_BAD);
-                    proto_item_set_generated(ti2);
-                }
-                if (flags & PROTO_CHECKSUM_ZERO) {
-                    proto_item_append_text(ti, " [incorrect]");
-                    if (bad_checksum_expert != NULL)
-                        expert_add_info_format(pinfo, ti, bad_checksum_expert, "%s", expert_get_summary(bad_checksum_expert));
-                } else {
-                    char *data = (char *)wmem_alloc(pinfo->pool, mac_len*2 + 1);
-                    *bytes_to_hexstr(data, calc_mac, mac_len) = 0;
-                    proto_item_append_text(ti, " incorrect, computed %s", data);
-                    if (bad_checksum_expert != NULL)
-                        expert_add_info_format(pinfo, ti, bad_checksum_expert, "%s", expert_get_summary(bad_checksum_expert));
-                }
-            }
-        } else {
-            if (hf_mac_status != -1) {
-                proto_item_append_text(ti, " [unverified]");
-                ti2 = proto_tree_add_uint(tree, hf_mac_status, tvb, offset, 0, PROTO_CHECKSUM_E_UNVERIFIED);
-                proto_item_set_generated(ti2);
-            }
-        }
-    }
-
-    return ti;
 }
 
 static bool
@@ -4328,8 +4282,7 @@ ssh_dissect_decrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
     offset += padding_length;
 
     if (peer_data->mac_length) {
-        ssh_tree_add_mac(tree, tvb, offset, peer_data->mac_length, hf_ssh_mac_string, hf_ssh_mac_status, &ei_ssh_mac_bad, pinfo, message->calc_mac,
-                                               PROTO_CHECKSUM_VERIFY|PROTO_CHECKSUM_IN_CKSUM);
+        proto_tree_add_checksum_bytes(tree, tvb, offset, hf_ssh_mac_string, hf_ssh_mac_status, &ei_ssh_mac_bad, pinfo, message->calc_mac, peer_data->mac_length, PROTO_CHECKSUM_VERIFY);
         offset += peer_data->mac_length;
     }
     ti = proto_tree_add_uint(tree, hf_ssh_seq_num, tvb, offset, 0, message->sequence_number);
@@ -6632,6 +6585,11 @@ proto_register_ssh(void)
                        "Whether the SSH dissector should reassemble SSH buffers spanning multiple TCP segments. "
                        "To use this option, you must also enable \"Allow subdissectors to reassemble TCP streams\" in the TCP protocol settings.",
                        &ssh_desegment);
+    prefs_register_bool_preference(ssh_module, "ignore_ssh_mac_failed",
+                        "Ignore Message Authentication Code (MAC) failure",
+                        "For troubleshooting purposes, decrypt even if the "
+                        "Message Authentication Code (MAC) check fails.",
+                        &ssh_ignore_mac_failed);
 
     ssh_master_key_map = g_hash_table_new_full(ssh_hash, ssh_equal, ssh_free_glib_allocated_bignum, ssh_free_glib_allocated_entry);
     prefs_register_filename_preference(ssh_module, "keylog_file", "Key log filename",
