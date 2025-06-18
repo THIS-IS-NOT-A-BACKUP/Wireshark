@@ -1586,8 +1586,8 @@ dissect_icmp(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, void* data)
 
 	ti = proto_tree_add_item(icmp_tree, hf_icmp_type, tvb, 0, 1,
 				 ENC_BIG_ENDIAN);
-	proto_item_append_text(ti, " (%s)", type_str);
-        switch (icmp_type) {
+
+	switch (icmp_type) {
 	case ICMP_UNREACH:
 	case ICMP_REDIRECT:
 	case ICMP_TIMXCEED:
@@ -1963,7 +1963,7 @@ void proto_register_icmp(void)
 {
 	static hf_register_info hf[] = {
 		{&hf_icmp_type,
-		 {"Type", "icmp.type", FT_UINT8, BASE_DEC, NULL, 0x0,
+		 {"Type", "icmp.type", FT_UINT8, BASE_DEC, VALS(icmp_type_str), 0x0,
 		  NULL, HFILL}},
 
 		{&hf_icmp_code,
