@@ -51,6 +51,7 @@
 #include <epan/prefs.h>
 #include <epan/expert.h>
 #include <epan/proto_data.h>
+#include <epan/tfs.h>
 #include <wsutil/strtoi.h>
 #include <wsutil/to_str.h>
 #include <wsutil/file_util.h>
@@ -486,6 +487,7 @@ static bool ssh_ignore_mac_failed;
 
 static dissector_handle_t ssh_handle;
 static dissector_handle_t sftp_handle;
+static dissector_handle_t data_text_lines_handle;
 
 static const char   *pref_keylog_file;
 static FILE         *ssh_keylog_file;
@@ -597,12 +599,6 @@ static const char *ssh_debug_file_name;
 #define CIPHER_MAC_SHA2_256             0x00020001
 
 #define SSH_EXTENDED_DATA_STDERR    1
-
-static const value_string ssh_direction_vals[] = {
-    { CLIENT_TO_SERVER_PROPOSAL, "client-to-server" },
-    { SERVER_TO_CLIENT_PROPOSAL, "server-to-client" },
-    { 0, NULL }
-};
 
 static const value_string ssh2_msg_vals[] = {
     { SSH_MSG_DISCONNECT,                "Disconnect" },
@@ -990,8 +986,7 @@ dissect_ssh(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U_)
     }
 
     col_prepend_fstr(pinfo->cinfo, COL_INFO, "%s: ", is_response ? "Server" : "Client");
-    ti = proto_tree_add_boolean_format_value(ssh_tree, hf_ssh_direction, tvb, 0, 0, is_response, "%s",
-        try_val_to_str(is_response, ssh_direction_vals));
+    ti = proto_tree_add_boolean(ssh_tree, hf_ssh_direction, tvb, 0, 0, is_response);
     proto_item_set_generated(ti);
 
     ssh_debug_flush();
@@ -5254,9 +5249,12 @@ ssh_dissect_connection_specific(tvbuff_t *packet_tvb, packet_info *pinfo,
         } else if (0 == strcmp(request_name, "exec")) {
             proto_tree_add_item_ret_length(msg_type_tree, hf_ssh_exec_cmd, packet_tvb, offset, 4, ENC_BIG_ENDIAN | ENC_UTF_8, &slen);
             offset += slen;
+            set_subdissector_for_channel(peer_data, recipient_channel, "exec");
         } else if (0 == strcmp(request_name, "exit-status")) {
             proto_tree_add_item(msg_type_tree, hf_ssh_exit_status, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
             offset += 4;
+        } else if (0 == strcmp(request_name, "shell")) {
+            set_subdissector_for_channel(peer_data, recipient_channel, "shell");
         }
     } else if (msg_code == SSH_MSG_CHANNEL_SUCCESS) {
         proto_tree_add_item(msg_type_tree, hf_ssh_connection_recipient_channel, packet_tvb, offset, 4, ENC_BIG_ENDIAN);
@@ -5357,8 +5355,11 @@ static void
 set_subdissector_for_channel(struct ssh_peer_data *peer_data, uint32_t recipient_channel, const uint8_t* subsystem_name)
 {
     dissector_handle_t handle = NULL;
-    if(0 == strcmp(subsystem_name, "sftp")) {
+    if (0 == strcmp(subsystem_name, "sftp")) {
         handle = sftp_handle;
+    } else if (0 == strcmp(subsystem_name, "shell") ||
+               0 == strcmp(subsystem_name, "exec")) {
+        handle = data_text_lines_handle;
     }
 
     if (handle) {
@@ -5768,7 +5769,7 @@ proto_register_ssh(void)
 
         { &hf_ssh_direction,
           { "Direction", "ssh.direction",
-            FT_BOOLEAN, BASE_NONE, NULL, 0x0,
+            FT_BOOLEAN, BASE_NONE, TFS(&tfs_s2c_c2s), 0x0,
             "Message direction", HFILL }},
 
         { &hf_ssh_msg_code,
@@ -6677,7 +6678,7 @@ proto_register_ssh(void)
         { &ei_ssh_packet_length,  { "ssh.packet_length.error", PI_PROTOCOL, PI_WARN, "Invalid packet length", EXPFILL }},
         { &ei_ssh_padding_length,  { "ssh.padding_length.error", PI_PROTOCOL, PI_WARN, "Invalid padding length", EXPFILL }},
         { &ei_ssh_packet_decode,  { "ssh.packet_decode.error", PI_UNDECODED, PI_WARN, "Packet decoded length not equal to packet length", EXPFILL }},
-        { &ei_ssh_channel_number, { "ssh.channel_number.error", PI_PROTOCOL, PI_WARN, "Coud not find channel", EXPFILL }},
+        { &ei_ssh_channel_number, { "ssh.channel_number.error", PI_PROTOCOL, PI_WARN, "Could not find channel", EXPFILL }},
         { &ei_ssh_invalid_keylen, { "ssh.key_length.error", PI_PROTOCOL, PI_ERROR, "Invalid key length", EXPFILL }},
         { &ei_ssh_mac_bad,        { "ssh.mac_bad.expert", PI_CHECKSUM, PI_ERROR, "Bad MAC", EXPFILL }},
         { &ei_ssh2_kex_hybrid_msg_code, { "ssh.kex_hybrid_msg_code", PI_SECURITY, PI_NOTE, "Hybrid KEX encountered", EXPFILL }},
@@ -6736,7 +6737,8 @@ proto_reg_handoff_ssh(void)
     dissector_add_uint_range_with_preference("tcp.port", TCP_RANGE_SSH, ssh_handle);
     dissector_add_uint("sctp.port", SCTP_PORT_SSH, ssh_handle);
     dissector_add_uint("sctp.ppi", SSH_PAYLOAD_PROTOCOL_ID, ssh_handle);
-    sftp_handle = find_dissector("sftp");
+    sftp_handle = find_dissector_add_dependency("sftp", proto_ssh);
+    data_text_lines_handle = find_dissector_add_dependency("data-text-lines", proto_ssh);
 
     heur_dissector_add("tcp", dissect_ssh_heur, "SSH over TCP", "ssh_tcp", proto_ssh, HEURISTIC_ENABLE);
 }
