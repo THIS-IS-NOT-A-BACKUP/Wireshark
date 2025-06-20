@@ -4221,7 +4221,6 @@ ssh_dissect_decrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
                 // Reset array while REKEY: sanitize server_key_exchange_init and force do_decrypt :
                 peer_data->global_data->kex_server_key_exchange_init = wmem_array_new(wmem_file_scope(), 1);
                 peer_data->global_data->do_decrypt      = true;
-                peer_data->global_data->ext_ping_openssh_offered = false;
                 dissected_len = ssh_dissect_key_init(payload_tvb, pinfo, offset - 4, msg_type_tree, is_response, peer_data->global_data);
             break;
             }
@@ -4310,7 +4309,7 @@ ssh_dissect_decrypted_packet(tvbuff_t *tvb, packet_info *pinfo,
     /* Local extensions (192-255) */
     else if (msg_code >= 192 && msg_code <= 255) {
         msg_type_tree = proto_tree_add_subtree(tree, packet_tvb, offset, plen-1, ett_key_exchange, NULL, "Message: Local extension");
-        dissected_len = ssh_dissect_local_extension(payload_tvb, pinfo, 0, peer_data, msg_type_tree, msg_code) - offset;
+        dissected_len = ssh_dissect_local_extension(payload_tvb, pinfo, 0, peer_data, msg_type_tree, msg_code);
     }
 
     /* XXX - ssh_dissect_key_exchange only adds undecoded payload here,
