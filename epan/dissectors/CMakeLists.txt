@@ -331,7 +331,6 @@ set(DISSECTOR_PUBLIC_HEADERS
 	packet-crmf.h
 	packet-csn1.h
 	packet-dap.h
-	packet-dcc.h
 	packet-dccp.h
 	packet-dcerpc.h
 	packet-dcerpc-browser.h
@@ -665,6 +664,7 @@ set(DISSECTOR_PUBLIC_HEADERS
 	packet-x509ce.h
 	packet-x509if.h
 	packet-x509sat.h
+	packet-xdlc.h
 	packet-xml.h
 	packet-xmpp-conference.h
 	packet-xmpp-core.h
@@ -818,6 +818,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bicc_mst.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bier.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bist-itch.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-bist-ouch.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bitcoin.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bittorrent.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-bjnp.c
@@ -2143,6 +2144,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-x75.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-xcp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-xcsl.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-xdlc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-xdmcp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-xip.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-xip-serval.c
