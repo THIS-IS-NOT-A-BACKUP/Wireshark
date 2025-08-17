@@ -277,10 +277,15 @@ static void parse_band_he_cap_phy(struct ws80211_band *band,
 	 * already parsed. (Would anything support a particular bandwidth for
 	 * HE but not for VHT?) It is here as a useful POC that the EHT code
 	 * below should work if you have 802.11ax but not 802.11be gear. */
-	uint32_t chan_cap_phy;
+	/* The HE PHY capabilities are 11 bytes long, so unlike the HT
+	 * and VHT PHY capabilities (which are sent as native byte-order
+	 * uint16_t and uint32_t, respectively), they're in the IE's original
+	 * Little Endian order. We only care about entries in the LSB.
+	 */
+	uint8_t chan_cap_phy;
 	if (!tb) return;
 
-	chan_cap_phy = (nla_get_u32(tb) >> 1) & 0xf;
+	chan_cap_phy = (nla_get_u8(tb) >> 1) & 0xf;
 	band->channel_types |= 1 << WS80211_CHAN_HT20;
 	if (chan_cap_phy & 1) {
 		/* 40 MHz in 2.4 GHz band */
@@ -308,10 +313,17 @@ static void parse_band_he_cap_phy(struct ws80211_band *band,
 static void parse_band_eht_cap_phy(struct ws80211_band *band,
 				   struct nlattr *tb)
 {
-	uint32_t chan_cap_phy;
+	/* The EHT PHY capabilities are 9 bytes long, so unlike the HT
+	 * and VHT PHY capabilities (which are sent as native byte-order
+	 * uint16_t and uint32_t, respectively), they're in the IE's original
+	 * Little Endian order. We only care about entries in the LSB.
+	 * uint16_t or uint32_t, but in the IE's original Little Endian order.
+	 * We only care about entries in the first byte, which makes it simple.
+	 */
+	uint8_t chan_cap_phy;
 	if (!tb) return;
 
-	chan_cap_phy = (nla_get_u32(tb) >> 1) & 1;
+	chan_cap_phy = (nla_get_u8(tb) >> 1) & 1;
 	if (chan_cap_phy == 1) {
 		band->channel_types |= 1 << WS80211_CHAN_EHT320;
 	}
@@ -750,13 +762,21 @@ static int ws80211_populate_devices(GArray *interfaces)
 	char *ret;
 	int i;
 	unsigned int j;
+	int err;
 
 	struct ws80211_iface_info pub = {-1, WS80211_CHAN_NO_HT, -1, -1, WS80211_FCS_ALL};
 	struct __iface_info iface_info;
 	struct ws80211_interface *iface;
 
-	/* Get a list of phy's that can handle monitor mode */
-	ws80211_get_phys(interfaces);
+	/* Get a list of PHYs that can handle monitor mode. For each PHY,
+	 * populates the list with a tentative name ("{wiphy_name}.mon")
+	 * of a monitor mode device. If no monitor mode device exists for
+	 * the PHY, we'll try to create one on demand later. */
+	err = ws80211_get_phys(interfaces);
+	if (err != 0) {
+		return err;
+	}
+	/* Remove the PHYs that don't support IFTYPE_MONITOR at all. */
 	ws80211_keep_only_monitor(interfaces);
 
 	fh = g_fopen("/proc/net/dev", "r");
@@ -775,7 +795,8 @@ static int ws80211_populate_devices(GArray *interfaces)
 		}
 	}
 
-	/* Update names of user created monitor interfaces */
+	/* For each PHY, if it has already [user created] monitor interfaces
+	 * use the first one we find instead of creating one. */
 	while(fgets(line, sizeof(line), fh)) {
 		t = index(line, ':');
 		if (!t)
@@ -786,11 +807,16 @@ static int ws80211_populate_devices(GArray *interfaces)
 			t++;
 		memset(&iface_info, 0, sizeof(iface_info));
 		iface_info.pub = &pub;
+		/* Look at each interface - is it a mac8021 interface?
+		 * Skip devices that aren't (so ignore errors.) */
 		__ws80211_get_iface_info(t, &iface_info);
 
+		// If so, is it a monitor interface?
 		if (iface_info.type == NL80211_IFTYPE_MONITOR) {
 			for (j = 0; j < interfaces->len; j++) {
 				iface = g_array_index(interfaces, struct ws80211_interface *, j);
+				/* Replace any tentative interface for the same
+				 * PHY with this existing monitor interface. */
 				t2 = ws_strdup_printf("phy%d.mon", iface_info.phyidx);
 				if (t2) {
 					if (!strcmp(t2, iface->ifname)) {
