@@ -454,6 +454,17 @@ pcapng_get_cb_section_info_data(section_info_t *section_info, uint32_t pen,
     return data;
 }
 
+static void
+pcapng_destroy_section_info(section_info_t *section_info)
+{
+    if (section_info->interfaces != NULL)
+        g_array_free(section_info->interfaces, true);
+    if (section_info->custom_block_data != NULL)
+        g_hash_table_destroy(section_info->custom_block_data);
+    if (section_info->local_block_data != NULL)
+        g_hash_table_destroy(section_info->local_block_data);
+}
+
 void *
 pcapng_get_lb_section_info_data(section_info_t *section_info,
                                 uint32_t block_type,
@@ -743,7 +754,14 @@ pcapng_process_string_option(wtapng_block_t *wblock, uint16_t option_code,
     /* Validate UTF-8 encoding. */
     str = ws_utf8_make_valid(NULL, opt, optlen);
 
-    wtap_block_add_string_option_owned(wblock->block, option_code, str);
+    /*
+     * If this option can appear only once in a block, this call
+     * will fail on the second and later occurrences of the option;
+     * we silently ignore the failure.
+     */
+    if (wtap_block_add_string_option_owned(wblock->block, option_code, str) != WTAP_OPTTYPE_SUCCESS) {
+        g_free(str);
+    }
 }
 
 void
@@ -1250,8 +1268,10 @@ pcapng_read_section_header_block(FILE_T fh, pcapng_block_header_t *bh,
     opt_cont_buf_len = bh->block_total_length - MIN_SHB_SIZE;
     if (!pcapng_process_options(fh, wblock, section_info, opt_cont_buf_len,
                                 pcapng_process_section_header_block_option,
-                                OPT_SECTION_BYTE_ORDER, err, err_info))
+                                OPT_SECTION_BYTE_ORDER, err, err_info)) {
+        pcapng_destroy_section_info(section_info);
         return PCAPNG_BLOCK_ERROR;
+    }
 
     /*
      * We don't return these to the caller in pcapng_read().
@@ -1353,7 +1373,7 @@ pcapng_process_if_descr_block_option(wtapng_block_t *wblock,
         case(OPT_IDB_FILTER): /* if_filter */
             if (option_length < 1) {
                 *err = WTAP_ERR_BAD_FILE;
-                *err_info = ws_strdup_printf("pcapng: packet block verdict option length %u is < 1",
+                *err_info = ws_strdup_printf("pcapng: IDB interface filter option length %u is < 1",
                                             option_length);
                 /* XXX - free anything? */
                 return false;
@@ -2726,8 +2746,10 @@ read_options:
     opt_cont_buf_len = to_read;
     if (!pcapng_process_options(fh, wblock, section_info, opt_cont_buf_len,
                                 pcapng_process_name_resolution_block_option,
-                                OPT_SECTION_BYTE_ORDER, err, err_info))
+                                OPT_SECTION_BYTE_ORDER, err, err_info)) {
+        ws_buffer_free(&nrb_rec);
         return false;
+    }
 
     ws_buffer_free(&nrb_rec);
 
@@ -3122,6 +3144,7 @@ pcapng_read_block(wtap *wth, FILE_T fh,
     pcapng_block_type_information_t *handler;
     block_return_val ret;
     pcapng_block_header_t bh;
+    uint32_t block_padded_length;
     uint32_t block_content_length;
 
     wblock->block = NULL;
@@ -3223,7 +3246,7 @@ pcapng_read_block(wtap *wth, FILE_T fh,
          * it reports an error if the block total length isn't a
          * multiple of 4.)
          */
-        bh.block_total_length = WS_ROUNDUP_4(bh.block_total_length);
+        block_padded_length = WS_ROUNDUP_4(bh.block_total_length);
 
         wblock->type = bh.block_type;
 
@@ -3234,7 +3257,7 @@ pcapng_read_block(wtap *wth, FILE_T fh,
            any address space or memory+backing store for anything else.
 
            We do that by imposing a maximum block size of MAX_BLOCK_SIZE. */
-        if (bh.block_total_length > MAX_BLOCK_SIZE) {
+        if (block_padded_length < bh.block_total_length || block_padded_length > MAX_BLOCK_SIZE) {
             *err = WTAP_ERR_BAD_FILE;
             *err_info = ws_strdup_printf("pcapng: total block length %u is too large (> %u)",
                                         bh.block_total_length, MAX_BLOCK_SIZE);
@@ -3244,7 +3267,7 @@ pcapng_read_block(wtap *wth, FILE_T fh,
         /*
          * Length of the contents of the block.
          */
-        block_content_length = bh.block_total_length - MIN_BLOCK_SIZE;
+        block_content_length = block_padded_length - MIN_BLOCK_SIZE;
 
         /*
          * Do we have a handler for this block type?
@@ -3258,7 +3281,7 @@ pcapng_read_block(wtap *wth, FILE_T fh,
                 return false;
         } else {
             ws_debug("Unknown block_type: 0x%08x (block ignored), block total length %u",
-                     bh.block_type, bh.block_total_length);
+                     bh.block_type, block_padded_length);
             if (!pcapng_read_unknown_block(fh, block_content_length,
                                            section_info, wblock,
                                            err, err_info))
@@ -3863,13 +3886,8 @@ pcapng_close(wtap *wth)
      * Free up the interfaces tables for all the sections.
      */
     for (unsigned i = 0; i < pcapng->sections->len; i++) {
-        section_info_t *section_info = &g_array_index(pcapng->sections,
-                                                      section_info_t, i);
-        g_array_free(section_info->interfaces, true);
-        if (section_info->custom_block_data != NULL)
-            g_hash_table_destroy(section_info->custom_block_data);
-        if (section_info->local_block_data != NULL)
-            g_hash_table_destroy(section_info->local_block_data);
+        pcapng_destroy_section_info(&g_array_index(pcapng->sections,
+                                                   section_info_t, i));
     }
     g_array_free(pcapng->sections, true);
 }
