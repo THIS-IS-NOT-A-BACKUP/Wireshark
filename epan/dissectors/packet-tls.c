@@ -2286,8 +2286,8 @@ dissect_ssl3_record(tvbuff_t *tvb, packet_info *pinfo,
         add_new_data_source(pinfo, decrypted, "Decrypted TLS");
         if (session->version == TLSV1DOT3_VERSION) {
             content_type = record->type;
-            ti = proto_tree_add_uint(ssl_record_tree, hf_tls_record_content_type,
-                                     decrypted, record->content_len, 1, record->type);
+            proto_tree_add_uint(ssl_record_tree, hf_tls_record_content_type,
+                                decrypted, record->content_len, 1, record->type);
             decrypted = tvb_new_subset_length(decrypted, 0, record->content_len);
         }
         ti = proto_tree_add_uint64(ssl_record_tree, hf_tls_record_sequence_number,
@@ -5036,7 +5036,7 @@ static int dissect_tls_sct_ber(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tr
     offset = dissect_ber_length(pinfo, tree, tvb, offset, NULL, NULL);
     /*
      * RFC 6962 (Certificate Transparency) refers to RFC 5246 (TLS 1.2) for the
-     * DigitallySigned format, so asssume that version.
+     * DigitallySigned format, so assume that version.
      */
     return tls_dissect_sct_list(&dissect_ssl3_hf, tvb, pinfo, tree, offset, tvb_captured_length(tvb), TLSV1DOT2_VERSION);
 }

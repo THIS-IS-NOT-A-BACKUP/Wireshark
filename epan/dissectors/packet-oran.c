@@ -428,6 +428,7 @@ static int hf_oran_tx_win_for_on_air_symbol_r;
 static int hf_oran_num_fo_fb;
 static int hf_oran_freq_offset_fb;
 
+static int hf_oran_num_ue_sinr_rpt;
 static int hf_oran_num_sinr_per_prb;
 static int hf_oran_num_sinr_per_prb_right;
 
@@ -1925,7 +1926,7 @@ static int dissect_bfwCompParam(tvbuff_t *tvb, proto_tree *tree, packet_info *pi
                                 proto_item *meth_ti, uint32_t *bfw_comp_method,
                                 uint32_t *exponent, bool *supported, unsigned *num_trx_entries, uint16_t **trx_entries)
 {
-    if (bfw_comp_method == COMP_NONE) {
+    if (*bfw_comp_method == COMP_NONE) {
         /* Absent! */
         *supported = true;
         return offset;
@@ -2140,6 +2141,7 @@ static uint32_t dissect_bfw_bundle(tvbuff_t *tvb, proto_tree *tree, packet_info 
     if (num_trx_entries != 0) {
         num_weights_per_bundle = num_trx_entries;
     }
+
     for (unsigned w=0; w < num_weights_per_bundle; w++) {
 
         uint16_t trx_index = (num_trx_entries) ? trx_entries[w] : w+1;
@@ -2772,7 +2774,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 uint32_t exponent = 0;
                 bool compression_method_supported = false;
                 unsigned num_trx = 0;
-                uint16_t *trx;
+                uint16_t *trx;        /* ptr to array */
                 offset = dissect_bfwCompParam(tvb, extension_tree, pinfo, offset, comp_meth_ti,
                                               &bfwcomphdr_comp_meth, &exponent, &compression_method_supported,
                                               &num_trx, &trx);
@@ -2801,6 +2803,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 }
                 else {
                     using_array = true;
+                    num_trx = pref_num_bf_antennas;
                 }
 
                 int bit_offset = offset*8;
@@ -2820,8 +2823,8 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     uint32_t bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                     float value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                     /* Add to tree. */
-                    proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
-                                                      (bfwcomphdr_iq_width+7)/8, value, "%f", value);
+                    proto_tree_add_float(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
+                                         (bfwcomphdr_iq_width+7)/8, value);
                     bit_offset += bfwcomphdr_iq_width;
                     proto_item_append_text(bfw_ti, "I=%f ", value);
 
@@ -2833,8 +2836,8 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                     value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                     /* Add to tree. */
-                    proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
-                                                      (bfwcomphdr_iq_width+7)/8, value, "%f", value);
+                    proto_tree_add_float(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
+                                         (bfwcomphdr_iq_width+7)/8, value);
                     bit_offset += bfwcomphdr_iq_width;
                     proto_item_append_text(bfw_ti, "Q=%f", value);
 
@@ -4345,16 +4348,16 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 proto_tree_add_item(extension_tree, hf_oran_reserved_3bits, tvb, offset, 1, ENC_BIG_ENDIAN);
                 /* numUeSinrRpt */
                 uint32_t num_ue_sinr_rpt;
-                proto_tree_add_item_ret_uint(extension_tree, hf_oran_reserved_3bits, tvb, offset, 1, ENC_BIG_ENDIAN, &num_ue_sinr_rpt);
+                proto_tree_add_item_ret_uint(extension_tree, hf_oran_num_ue_sinr_rpt, tvb, offset, 1, ENC_BIG_ENDIAN, &num_ue_sinr_rpt);
                 offset += 1;
 
                 for (uint32_t n=0; n < num_ue_sinr_rpt; n++) {
                     /* reserved (1 bit) */
-                    proto_tree_add_item(extension_tree, (n % 2) ? hf_oran_reserved_1bit : hf_oran_reserved_bit4,
+                    proto_tree_add_item(extension_tree, (n % 2) ? hf_oran_reserved_bit4 : hf_oran_reserved_1bit,
                                         tvb, offset, 1, ENC_BIG_ENDIAN);
 
                     /* numSinrPerPrb (3 bits).  Taken from alternate nibbles within byte.  */
-                    proto_tree_add_item(extension_tree, (n % 2) ? hf_oran_num_sinr_per_prb : hf_oran_num_sinr_per_prb_right,
+                    proto_tree_add_item(extension_tree, (n % 2) ? hf_oran_num_sinr_per_prb_right : hf_oran_num_sinr_per_prb,
                                         tvb, offset, 1, ENC_BIG_ENDIAN);
                     if (n % 2) {
                         offset += 1;
@@ -4470,7 +4473,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 case 2:
                     /* ueLayerPower entries (how many? for now just use up meas_data_size..) */
                     /* TODO: add number of distinct dmrsPortNumber entries seen in SE24 and save in state? */
-                    /* Or would it make sense to use the preference 'pref_num_bf_antennas' (currently used for ST 6)? */
+                    /* Or would it make sense to use the preference 'pref_num_bf_antennas' ? */
                     for (unsigned n=0; n < (meas_data_size-4)/2; n++) {
                         unsigned ue_layer_power;
                         proto_item *ue_layer_power_ti;
@@ -5112,6 +5115,7 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
         }
     }
     else if (sectionType != SEC_C_LAA) {
+        /* numberOfSections */
         proto_tree_add_item_ret_uint(section_tree, hf_oran_numberOfSections, tvb, offset, 1, ENC_NA, &nSections);
     }
     else {
@@ -5345,9 +5349,13 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
     }
 
 
-    proto_item_append_text(sectionHeading, "%d, %s, Frame: %d, Subframe: %d, Slot: %d, StartSymbol: %d",
+    proto_item_append_text(sectionHeading, "%d, %s, frameId: %d, subframeId: %d, slotId: %d, startSymbolId: %d",
                            sectionType, val_to_str_const(direction, data_direction_vals, "Unknown"),
                            frameId, subframeId, slotId, startSymbolId);
+    if (nSections) {
+        proto_item_append_text(sectionHeading, ", numberOfSections=%u", nSections);
+    }
+
     write_pdu_label_and_info(protocol_item, NULL, pinfo, ", Type: %2d %s", sectionType,
                              rval_to_str_const(sectionType, section_types_short, "Unknown"));
 
@@ -5541,8 +5549,8 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
                                 uint32_t bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 float value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
-                                proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
-                                                                  (bfwcomphdr_iq_width+7)/8, value, "%f", value);
+                                proto_tree_add_float(bfw_tree, hf_oran_bfw_i, tvb, bit_offset/8,
+                                                     (bfwcomphdr_iq_width+7)/8, value);
                                 bit_offset += bfwcomphdr_iq_width;
                                 proto_item_append_text(bfw_ti, "I=%f ", value);
 
@@ -5554,8 +5562,8 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
                                 bits = tvb_get_bits32(tvb, bit_offset, bfwcomphdr_iq_width, ENC_BIG_ENDIAN);
                                 value = decompress_value(bits, bfwcomphdr_comp_meth, bfwcomphdr_iq_width, exponent);
                                 /* Add to tree. */
-                                proto_tree_add_float_format_value(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
-                                                                  (bfwcomphdr_iq_width+7)/8, value, "%f", value);
+                                proto_tree_add_float(bfw_tree, hf_oran_bfw_q, tvb, bit_offset/8,
+                                                     (bfwcomphdr_iq_width+7)/8, value);
                                 bit_offset += bfwcomphdr_iq_width;
                                 proto_item_append_text(bfw_ti, "Q=%f", value);
 
@@ -6133,7 +6141,7 @@ dissect_oran_u(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     proto_item *pi = proto_tree_add_string(timing_header_tree, hf_oran_refa, tvb, ref_a_offset, 3, id);
     proto_item_set_generated(pi);
 
-    proto_item_append_text(timingHeader, "%s, Frame: %d, Subframe: %d, Slot: %d, Symbol: %d)",
+    proto_item_append_text(timingHeader, "%s, frameId: %d, subframeId: %d, slotId: %d, symbolId: %d)",
         val_to_str_const(direction, data_direction_vals, "Unknown"), frameId, subframeId, slotId, symbolId);
 
     unsigned sample_bit_width;
@@ -6790,7 +6798,7 @@ proto_register_oran(void)
           { "Number of Sections", "oran_fh_cus.numberOfSections",
             FT_UINT8, BASE_DEC,
             NULL, 0x0,
-            "The number of section IDs included in this C-Plane message", HFILL}
+            "The number of section IDs included in this message", HFILL}
         },
 
         /* Section 7.5.2.9 */
@@ -8929,17 +8937,25 @@ proto_register_oran(void)
             "UE frequency offset feedback", HFILL}
         },
 
+        /* 7.7.28.2 */
+        { &hf_oran_num_ue_sinr_rpt,
+          { "numUeSinrRpt", "oran_fh_cus.numUeSinrRpt",
+            FT_UINT8, BASE_DEC,
+            NULL, 0x1f,
+            "number of sinr reported UEs {1 - 12}", HFILL}
+        },
+
         /* 7.5.2.19 */
         { &hf_oran_num_sinr_per_prb,
           { "numSinrPerPrb", "oran_fh_cus.numSinrPerPrb",
             FT_UINT8, BASE_DEC,
-            VALS(num_sinr_per_prb_vals), 0xe0,
+            VALS(num_sinr_per_prb_vals), 0x70,
             "number of SINR values per PRB", HFILL}
         },
         { &hf_oran_num_sinr_per_prb_right,
           { "numSinrPerPrb", "oran_fh_cus.numSinrPerPrb",
             FT_UINT8, BASE_DEC,
-            VALS(num_sinr_per_prb_vals), 0x0e,
+            VALS(num_sinr_per_prb_vals), 0x07,
             "number of SINR values per PRB", HFILL}
         },
 
