@@ -67,7 +67,6 @@ set(LIBWIRESHARK_PUBLIC_HEADERS
 	dccpservicecodes.h
 	dvb_chartbl.h
 	eap.h
-	eapol_keydes_types.h
 	epan.h
 	epan_dissect.h
 	etypes.h
@@ -100,7 +99,6 @@ set(LIBWIRESHARK_PUBLIC_HEADERS
 	media_params.h
 	next_tvb.h
 	nghttp2_hd_huffman.h
-	nlpid.h
 	oids.h
 	osi-utils.h
 	oui.h
