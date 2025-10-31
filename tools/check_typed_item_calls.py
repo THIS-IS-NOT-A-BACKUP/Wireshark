@@ -59,7 +59,7 @@ class Call:
         # Substitute length if necessary
         if length:
             try:
-                #if offset.find('*') != -1 and offset.find('*') != 0 and offset.find('8') != -1:
+                #if '*' in offset and offset.find('*') != 0 and '8' in offset:
                 #    print(hf_name, function_name, offset)
                 self.length = int(length)
             except Exception:
@@ -480,7 +480,7 @@ class ProtoTreeAddItemCheck(APICheck):
             if fun_idx != -1:
                 # Ok, add the next file lines before trying RE
                 for i in range(1, 5):
-                    if to_check.find(';') != -1:
+                    if ';' in to_check:
                         break
                     elif line_number+i < total_lines:
                         to_check += (lines[line_number-1+i] + '\n')
@@ -640,7 +640,10 @@ known_non_contiguous_fields = { 'wlan.fixed.capabilities.cfpoll.sta',
                                 'hf_h223_mux_mpl',
                                 'rdp.flags.pkt',
                                 'erf.flags.if_raw',  # confirmed by Stephen Donnelly
-                                'oran_fh_cus.sReSMask'
+                                'oran_fh_cus.sReSMask',
+                                'ttl.trace_data.entry.status_info.can_flags',
+                                'ttl.trace_data.entry.status_info.fr_flags',
+                                'ttl.trace_data.entry.status_info.fr_pulse_flags'
                               }
 ##################################################################################################
 
@@ -1457,8 +1460,8 @@ class Item:
                 self.check_range_string_range(rs.min_value, rs.max_value)
 
         # Could/should this item be FT_FRAMENUM ?
-        #if ((self.label.lower().find(' frame') != -1 or self.label.lower().find('frame ') != -1) and self.label.lower().find('frames') == -1 and
-        #    (self.label.lower().find('in') != -1 or self.label.lower().find('for') != -1) and
+        #if (' frame' in self.label.lower() or 'frame ' in self.label.lower()) and 'frames' not in self.label.lower() and
+        #    ('in' in self.label.lower() or 'for' in self.label.lower()) and
         #    self.item_type == 'FT_UINT32' and self.mask_value == 0x0):
         #    print('Warning: ' + self.filename, self.hf, 'filter "' + self.filter + '", label "' + label + '"', 'item type is', self.item_type, '- could be FT_FRANENUM?')
         #    warnings_found += 1
@@ -1819,7 +1822,6 @@ class Item:
                 # These need to have a mask - don't judge for being 0
                 found = True
                 break
-
         if found:
             # It needs to have a non-zero mask.
             if self.mask_read and self.mask_value == 0:
@@ -1873,7 +1875,7 @@ class Item:
             return True
 
         # Are they just different?
-        if label.lower().find(last_filter.lower()) == -1:
+        if last_filter.lower() not in label.lower():
             if reportError:
                 print('Warning:', self.filename, self.hf, 'label="' + self.label + '" does not seem to match filter="' + self.filter + '"')
                 warnings_found += 1
