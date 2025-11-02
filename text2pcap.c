@@ -417,7 +417,7 @@ parse_options(int argc, char *argv[], text_import_info_t * const info, wtap_dump
     info->payload = "data";
 
     /* Initialize the version information. */
-    ws_init_version_info("Text2pcap", NULL, NULL);
+    ws_init_version_info("Text2pcap", NULL, get_ws_vcs_version_info, NULL, NULL);
 
     /* Scan CLI parameters */
     while ((c = ws_getopt_long(argc, argv, optstring, long_options, NULL)) != -1) {
@@ -1067,7 +1067,7 @@ main(int argc, char *argv[])
     /*
      * Make sure our plugin path is initialized for wtap_init.
      */
-    configuration_init_error = configuration_init(argv[0]);
+    configuration_init_error = configuration_init(argv[0], "wireshark");
     if (configuration_init_error != NULL) {
         cmdarg_err("Can't get pathname of directory containing the text2pcap program: %s.",
                 configuration_init_error);

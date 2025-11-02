@@ -37,6 +37,7 @@
 #include <wsutil/privileges.h>
 #include <wsutil/wslog.h>
 #include <wsutil/ws_assert.h>
+#include <wsutil/application_flavor.h>
 #include <cli_main.h>
 #include <wsutil/version_info.h>
 
@@ -344,7 +345,7 @@ main(int argc, char *argv[])
      * Attempt to get the pathname of the directory containing the
      * executable file.
      */
-    configuration_init_error = configuration_init(argv[0]);
+    configuration_init_error = configuration_init(argv[0], "wireshark");
     if (configuration_init_error != NULL) {
         fprintf(stderr,
                 "tfshark: Can't get pathname of directory containing the tfshark program: %s.\n",
@@ -355,7 +356,7 @@ main(int argc, char *argv[])
     initialize_funnel_ops();
 
     /* Initialize the version information. */
-    ws_init_version_info("TFShark",
+    ws_init_version_info("TFShark", application_flavor_name_proper(), get_ws_vcs_version_info,
                          epan_gather_compile_info,
                          epan_gather_runtime_info);
     /*

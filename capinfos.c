@@ -1514,7 +1514,7 @@ main(int argc, char *argv[])
      * Attempt to get the pathname of the directory containing the
      * executable file.
      */
-    configuration_init_error = configuration_init(argv[0]);
+    configuration_init_error = configuration_init(argv[0], "wireshark");
     if (configuration_init_error != NULL) {
         fprintf(stderr,
                 "capinfos: Can't get pathname of directory containing the capinfos program: %s.\n",
@@ -1523,7 +1523,7 @@ main(int argc, char *argv[])
     }
 
     /* Initialize the version information. */
-    ws_init_version_info("Capinfos", NULL, NULL);
+    ws_init_version_info("Capinfos", NULL, get_ws_vcs_version_info, NULL, NULL);
 
     init_report_failure_message("capinfos");
 
