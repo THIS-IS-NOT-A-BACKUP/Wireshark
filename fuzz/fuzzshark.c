@@ -24,6 +24,7 @@
 #include <wsutil/cmdarg_err.h>
 #include <ui/failure_message.h>
 #include <wsutil/filesystem.h>
+#include <wsutil/application_flavor.h>
 #include <wsutil/privileges.h>
 #include <wsutil/clopts_common.h>
 #include <wsutil/ws_getopt.h>
@@ -149,6 +150,8 @@ fuzz_init(int argc, char **argv)
 		LONGOPT_WSLOG
 		{0, 0, 0, 0 }
 	};
+        const struct file_extension_info* file_extensions;
+        unsigned num_extensions;
 
 	const char *fuzz_target =
 #if defined(FUZZ_DISSECTOR_TARGET)
@@ -267,7 +270,8 @@ fuzz_init(int argc, char **argv)
 	 * dissection-time handlers for file-type-dependent blocks can
 	 * register using the file type/subtype value for the file type.
 	 */
-	wtap_init(true);
+        application_file_extensions(&file_extensions, &num_extensions);
+        wtap_init(true, application_configuration_environment_prefix(), file_extensions, num_extensions);
 
 	/* Register all dissectors; we must do this before checking for the
 	   "-G" flag, as the "-G" flag dumps information registered by the
@@ -282,7 +286,7 @@ fuzz_init(int argc, char **argv)
 	/* Load libwireshark settings from the current profile. */
 	prefs_p = epan_load_settings();
 
-	if (!color_filters_init(&err_msg, NULL))
+	if (!color_filters_init(&err_msg, NULL, application_configuration_environment_prefix()))
 	{
 		fprintf(stderr, "%s\n", err_msg);
 		g_free(err_msg);
