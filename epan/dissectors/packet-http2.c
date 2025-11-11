@@ -1542,7 +1542,7 @@ http2_set_stream_imsi(packet_info *pinfo, char* imsi)
         return;
     }
 
-    stream_info->imsi = imsi;
+    stream_info->imsi = wmem_strdup(wmem_file_scope(), imsi);
 }
 
 void http2_add_notifyuri_imsi(char* notifyuri, const char* imsi)
@@ -2176,13 +2176,15 @@ populate_http_header_tracking(tvbuff_t *tvb, packet_info *pinfo, http2_session_t
             if (g_match_info_matches(match_info_imsi)) {
                 matched_imsi = g_match_info_fetch(match_info_imsi, 1); //will be empty string if imsi is not in supi
                 if (matched_imsi && (strcmp(matched_imsi, "") != 0)) {
-                    stream_info->imsi = matched_imsi;
+                    stream_info->imsi = wmem_strdup(wmem_file_scope(), matched_imsi);
                 }
+                g_free(matched_imsi);
             } else if (g_match_info_matches(match_info_referenceid)) {
                 matched_referenceid = g_match_info_fetch(match_info_referenceid, 2); //will be empty string if referenceid is not found
                 if (matched_referenceid && (strcmp(matched_referenceid, "") != 0)) {
-                    stream_info->referenceid = matched_referenceid;
+                    stream_info->referenceid = wmem_strdup(wmem_file_scope(), matched_referenceid);
                 }
+                g_free(matched_referenceid);
             }
             g_regex_unref(regex_imsi);
             g_regex_unref(regex_referenceid);
@@ -2211,6 +2213,7 @@ populate_http_header_tracking(tvbuff_t *tvb, packet_info *pinfo, http2_session_t
                 if (matched_location && (strcmp(matched_location, "") != 0)) {
                     http2_add_location_imsi(matched_location, stream_info->imsi);
                 }
+                g_free(matched_location);
             }
             g_regex_unref(regex_location);
         }
@@ -2253,13 +2256,15 @@ populate_http_header_tracking(tvbuff_t *tvb, packet_info *pinfo, http2_session_t
             if (g_match_info_matches(match_info_imsi)) {
                 matched_imsi = g_match_info_fetch(match_info_imsi, 1); //will be empty string if imsi is not in supi
                 if (matched_imsi && (strcmp(matched_imsi, "") != 0)) {
-                    stream_info->imsi = matched_imsi;
+                    stream_info->imsi = wmem_strdup(wmem_file_scope(), matched_imsi);
                 }
+                g_free(matched_imsi);
             } else if (g_match_info_matches(match_info_referenceid)) {
                 matched_referenceid = g_match_info_fetch(match_info_referenceid, 2); //will be empty string if referenceid is not found
                 if (matched_referenceid && (strcmp(matched_referenceid, "") != 0)) {
-                    stream_info->referenceid = matched_referenceid;
+                    stream_info->referenceid = wmem_strdup(wmem_file_scope(), matched_referenceid);
                 }
+                g_free(matched_referenceid);
             }
             g_regex_unref(regex_imsi);
             g_regex_unref(regex_referenceid);
@@ -2293,8 +2298,9 @@ populate_http_header_tracking(tvbuff_t *tvb, packet_info *pinfo, http2_session_t
             if (g_match_info_matches(match_info_imsi)) {
                 matched_imsi = g_match_info_fetch(match_info_imsi, 1); //will be empty string if imsi is not in supi
                 if (matched_imsi && (strcmp(matched_imsi, "") != 0)) {
-                    stream_info->imsi = matched_imsi;
+                    stream_info->imsi = wmem_strdup(wmem_file_scope(), matched_imsi);
                 }
+                g_free(matched_imsi);
             }
             g_regex_unref(regex_imsi);
         }
@@ -5470,7 +5476,7 @@ proto_register_http2(void)
     static build_valid_func http2_current_stream_values[1] = { http2_current_stream_id_value };
     static decode_as_value_t http2_da_stream_id_values[1] = { {http2_streamid_prompt, 1, http2_current_stream_values} };
     static decode_as_t http2_da_stream_id = { "http2", "http2.streamid", 1, 0, http2_da_stream_id_values, "HTTP2", "Stream ID as",
-                                       decode_as_http2_populate_list, decode_as_default_reset, decode_as_default_change, NULL, NULL };
+                                       decode_as_http2_populate_list, decode_as_default_reset, decode_as_default_change, NULL, NULL, NULL };
     register_decode_as(&http2_da_stream_id);
 #endif
 

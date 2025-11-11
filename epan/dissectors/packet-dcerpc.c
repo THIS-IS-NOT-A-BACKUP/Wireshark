@@ -867,9 +867,8 @@ decode_dcerpc_reset_all(void)
     }
 }
 
-
-void
-decode_dcerpc_add_show_list(decode_add_show_list_func func, void *user_data)
+static void
+decode_dcerpc_add_show_list(decode_as_add_changed_list_func func, void *user_data)
 {
     g_slist_foreach(decode_dcerpc_bindings, func, user_data);
 }
@@ -1717,30 +1716,6 @@ dcerpc_init_uuid(int proto, int ett, e_guid_t *uuid, uint16_t ver,
 
     /* Register the GUID with the dissector table */
     guid_handle = create_dissector_handle( dissect_dcerpc_guid, proto);
-
-    dcerpc_init_finalize(guid_handle, &key, &value);
-}
-
-void
-dcerpc_init_from_handle(int proto, e_guid_t *uuid, uint16_t ver,
-                dissector_handle_t guid_handle)
-{
-    guid_key key;
-    dcerpc_uuid_value value;
-
-    key.guid = *uuid;
-    key.ver = ver;
-
-    value.proto    = find_protocol_by_id(proto);
-    value.proto_id = proto;
-    value.ett      = -1;
-    value.name     = proto_get_protocol_short_name(value.proto);
-    value.procs    = NULL;
-    value.opnum_hf = 0;
-
-    if (uuid_type_remove_if_present(dcerpc_uuid_id, &key)) {
-        guids_delete_guid(uuid);
-    }
 
     dcerpc_init_finalize(guid_handle, &key, &value);
 }
@@ -7233,7 +7208,7 @@ proto_register_dcerpc(void)
     static decode_as_value_t dcerpc_da_values = {dcerpc_prompt, 1, dcerpc_da_build_value};
     static decode_as_t dcerpc_da = {"dcerpc", DCERPC_TABLE_NAME,
                                     1, 0, &dcerpc_da_values, NULL, NULL,
-                                    dcerpc_populate_list, decode_dcerpc_binding_reset, dcerpc_decode_as_change, dcerpc_decode_as_free, decode_dcerpc_reset_all };
+                                    dcerpc_populate_list, decode_dcerpc_binding_reset, dcerpc_decode_as_change, dcerpc_decode_as_free, decode_dcerpc_reset_all, decode_dcerpc_add_show_list };
 
     module_t *dcerpc_module;
     expert_module_t* expert_dcerpc;
