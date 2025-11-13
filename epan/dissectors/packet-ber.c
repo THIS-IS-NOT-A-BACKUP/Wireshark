@@ -3874,10 +3874,9 @@ dissect_ber_UTCTime(bool implicit_tag, asn1_ctx_t *actx, proto_tree *tree, tvbuf
 
     if (datestrptr) {
        *datestrptr = outstr; /* mark as valid */
-    } else {
-        if (hf_id > 0) {
-            proto_tree_add_string(tree, hf_id, tvb, offset, len, outstr);
-        }
+    }
+    if (hf_id > 0) {
+        proto_tree_add_string(tree, hf_id, tvb, offset, len, outstr);
     }
     if (tvblen) *tvblen = len;
 
@@ -4007,6 +4006,7 @@ dissect_ber_constrained_bitstring(bool implicit_tag, asn1_ctx_t *actx, proto_tre
         }
         offset++;
         len--;
+        bit_len -= 8;
         if (hf_id > 0) {
             item = proto_tree_add_item(parent_tree, hf_id, tvb, offset, len, ENC_NA);
             actx->created_item = item;
