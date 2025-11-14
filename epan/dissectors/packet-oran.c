@@ -493,6 +493,9 @@ static int hf_oran_u_section_ul_symbol_last_frame;
 static int hf_oran_cd_scg_size;
 static int hf_oran_cd_scg_phase_step;
 
+static int hf_oran_sinr_prb;
+static int hf_oran_oru_control_sinr_slot_mask_id;
+
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
 static int hf_oran_refa;
@@ -546,7 +549,8 @@ static int ett_oran_symbol_reordering_layer;
 static int ett_oran_dmrs_entry;
 static int ett_oran_dmrs_symbol_mask;
 static int ett_oran_symbol_mask;
-static int ett_active_beamspace_coefficient_mask;
+static int ett_oran_active_beamspace_coefficient_mask;
+static int ett_oran_sinr_prb;
 
 
 /* Don't want all extensions to open and close together. Use extType-1 entry */
@@ -2021,7 +2025,7 @@ static int dissect_active_beamspace_coefficient_mask(tvbuff_t *tvb, proto_tree *
     for (unsigned n=0; n < k_octets; n++) {
         proto_tree_add_bitmask_ret_uint64(tree, tvb, offset,
                                           hf_oran_activeBeamspaceCoefficientMask,
-                                          ett_active_beamspace_coefficient_mask, mask_bits,
+                                          ett_oran_active_beamspace_coefficient_mask, mask_bits,
                                           ENC_BIG_ENDIAN, &val);
         offset++;
         /* Add up the set bits for this byte (but be careful not to count beyond last real K bit..) */
@@ -2698,7 +2702,10 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
 
                 /* Add SINR entries for each PRB */
                 for (unsigned prb=0; prb < numPrbu; prb++) {
-                    /* TODO: create a subtree for each PRB entry with good summary? */
+                    /* Create a subtree for each PRB */
+                    proto_item *prb_ti = proto_tree_add_string_format(c_section_tree, hf_oran_sinr_prb,
+                                                                tvb, offset, 0, "", "PRB %3u (", prb);
+                    proto_tree *prb_tree = proto_item_add_subtree(prb_ti, ett_oran_sinr_prb);
 
                     /* Each prb starts byte-aligned */
                     bit_offset = ((bit_offset+7)/8) * 8;
@@ -2708,7 +2715,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     /* sinrCompParam (udCompParam format, may be empty) */
                     uint32_t exponent = 0;  /* N.B. init to silence warnings, but will always be set if read in COMP_BLOCK_FP case */
                     uint16_t sReSMask;
-                    bit_offset = dissect_udcompparam(tvb, pinfo, c_section_tree, bit_offset/8,
+                    bit_offset = dissect_udcompparam(tvb, pinfo, prb_tree, bit_offset/8,
                                                      pref_iqCompressionSINR, &exponent, &sReSMask,
                                                      true) * 8; /* last param is for_sinr */
 
@@ -2723,8 +2730,9 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                                                        exponent,
                                                        NULL /* no ModCompr for SINR */, 0 /* RE */);
                         unsigned sample_len_in_bytes = ((bit_offset%8)+pref_sample_bit_width_sinr+7)/8;
-                        proto_item *val_ti = proto_tree_add_float(c_section_tree, hf_oran_sinr_value, tvb,
+                        proto_item *val_ti = proto_tree_add_float(prb_tree, hf_oran_sinr_value, tvb,
                                                                    bit_offset/8, sample_len_in_bytes, value);
+                        proto_item_append_text(prb_ti, " %8f", value);
 
                         /* Show here which subcarriers share which values (they all divide 12..) */
                         if (num_sinr_per_prb == 12) {
@@ -2743,6 +2751,9 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     /* 1-byte alignment per PRB (7.2.11) */
                     offset = (bit_offset+7)/8;
                     bit_offset = offset*8;
+
+                    proto_item_append_text(prb_ti, ")");
+                    proto_item_set_end(prb_ti, tvb, offset);
                 }
                 break;
             }
@@ -5608,9 +5619,10 @@ static int dissect_oran_c(tvbuff_t *tvb, packet_info *pinfo,
                                            num_sinr_per_prb);
             }
 
-            /* reserved (13 bits) */
-            proto_tree_add_item(section_tree, hf_oran_reserved_last_5bits, tvb, offset, 1, ENC_BIG_ENDIAN);
+            /* oruControlSinrSlotMaskId (5 bits) */
+            proto_tree_add_item(section_tree, hf_oran_oru_control_sinr_slot_mask_id, tvb, offset, 1, ENC_BIG_ENDIAN);
             offset += 1;
+            /* reserved (8 bits) */
             proto_tree_add_item(section_tree, hf_oran_reserved_8bits, tvb, offset, 1, ENC_BIG_ENDIAN);
             offset += 1;
             break;
@@ -9552,6 +9564,22 @@ proto_register_oran(void)
             HFILL}
         },
 
+        { &hf_oran_sinr_prb,
+          { "PRB", "oran_fh_cus.sinr.prb",
+            FT_STRING, BASE_NONE,
+            NULL, 0x0,
+            NULL, HFILL}
+        },
+        /* 7.5.2.20 */
+        { &hf_oran_oru_control_sinr_slot_mask_id,
+          {"oruControlSinrSlotMaskId", "oran_fh_cus.oruControlSinrSlotMaskId",
+            FT_UINT8, BASE_DEC,
+            NULL, 0x1f,
+            "SINR time resolution",
+            HFILL}
+        },
+
+
         { &hf_oran_c_section_common,
           { "Common Section", "oran_fh_cus.c-plane.section.common",
             FT_STRING, BASE_NONE,
@@ -9622,7 +9650,8 @@ proto_register_oran(void)
         &ett_oran_dmrs_entry,
         &ett_oran_dmrs_symbol_mask,
         &ett_oran_symbol_mask,
-        &ett_active_beamspace_coefficient_mask
+        &ett_oran_active_beamspace_coefficient_mask,
+        &ett_oran_sinr_prb
     };
 
     static int *ext_ett[HIGHEST_EXTTYPE];
