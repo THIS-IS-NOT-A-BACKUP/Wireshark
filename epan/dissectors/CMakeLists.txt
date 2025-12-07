@@ -12,6 +12,7 @@ ADD_CUSTOM_CMAKE_INCLUDE()
 add_subdirectory(asn1 EXCLUDE_FROM_ALL)
 add_subdirectory(dcerpc EXCLUDE_FROM_ALL)
 add_subdirectory(pidl EXCLUDE_FROM_ALL)
+add_subdirectory(corba-idl EXCLUDE_FROM_ALL)
 
 add_custom_command(
 	OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/packet-ncp2222.c
@@ -1537,6 +1538,8 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-meta.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-metamako.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-mgcp.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-midi.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-midi-sysex_digitech.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-midi-sysex-id.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-mih.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-mikey.c
@@ -1653,6 +1656,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-nlm.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-nlsp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-nmea0183.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-nmea2000.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-nmf.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-nntp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-noe.c
@@ -1996,8 +2000,6 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-synergy.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-synphasor.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-sysdig-event.c
-	${CMAKE_CURRENT_SOURCE_DIR}/packet-sysex.c
-	${CMAKE_CURRENT_SOURCE_DIR}/packet-sysex_digitech.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-syslog.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-systemd-journal.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-t30.c
