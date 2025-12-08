@@ -351,6 +351,7 @@ set(DISSECTOR_PUBLIC_HEADERS
 	packet-diffserv-mpls-common.h
 	packet-disp.h
 	packet-dlt.h
+	packet-dmx-manfid.h
 	packet-dns.h
 	packet-docsis-tlv.h
 	packet-doip.h
@@ -1053,6 +1054,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dlsw.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dlt.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dmp.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-dmx-manfid.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dmx.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dnp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-dns.c
@@ -1845,6 +1847,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rmt-lct.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rmt-norm.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rohc.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-romon.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-roofnet.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-roon_discovery.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-roughtime.c
