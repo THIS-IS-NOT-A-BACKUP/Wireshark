@@ -493,7 +493,7 @@ static GHashTable* proto_names;
 static GHashTable* proto_short_names;
 static GHashTable* proto_filter_names;
 
-static const char *reserved_filter_names[] = {
+static const char * const reserved_filter_names[] = {
 	/* Display filter keywords. */
 	"eq",
 	"ne",
@@ -581,7 +581,7 @@ void proto_pre_init(void)
 	proto_filter_names = g_hash_table_new(wmem_str_hash, g_str_equal);
 
 	proto_reserved_filter_names = g_hash_table_new(wmem_str_hash, g_str_equal);
-	for (const char** ptr = reserved_filter_names; *ptr != NULL; ptr++) {
+	for (const char* const * ptr = reserved_filter_names; *ptr != NULL; ptr++) {
 		/* GHashTable has no key destructor so the cast is safe. */
 		g_hash_table_add(proto_reserved_filter_names, *(char**)ptr);
 	}
@@ -10021,7 +10021,7 @@ mark_truncated(char *label_str, size_t name_pos, const size_t size, size_t *valu
 	 * name_pos==0 means that we have only data or only a field_name
 	 */
 
-	ws_assert(size > trunc_len);
+	ws_abort_if_fail(size > trunc_len);
 
 	if (name_pos >= size - trunc_len) {
 		/* No room for trunc_str after the field_name, put it first. */

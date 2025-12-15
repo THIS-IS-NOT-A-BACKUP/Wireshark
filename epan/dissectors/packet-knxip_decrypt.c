@@ -41,9 +41,22 @@ struct knx_keyring_ia_seqs* knx_keyring_ia_seqs;
 static void encrypt_block( const uint8_t key[ KNX_KEY_LENGTH ], const uint8_t plain[ KNX_KEY_LENGTH ], uint8_t p_crypt[ KNX_KEY_LENGTH ] )
 {
   gcry_cipher_hd_t cryptor = NULL;
-  gcry_cipher_open( &cryptor, GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CBC, 0 );
-  gcry_cipher_setkey( cryptor, key, KNX_KEY_LENGTH );
-  gcry_cipher_encrypt( cryptor, p_crypt, KNX_KEY_LENGTH, plain, KNX_KEY_LENGTH );
+  gcry_error_t err;
+  err = gcry_cipher_open( &cryptor, GCRY_CIPHER_AES128, GCRY_CIPHER_MODE_CBC, 0 );
+  if (err != 0) {
+    ws_debug("failed to open AES128 cipher handle: %s/%s", gcry_strsource(err), gcry_strerror(err));
+    return;
+  }
+  err = gcry_cipher_setkey( cryptor, key, KNX_KEY_LENGTH );
+  if (err != 0) {
+    ws_debug("failed to set AES128 cipher key: %s/%s", gcry_strsource(err), gcry_strerror(err));
+    gcry_cipher_close( cryptor );
+    return;
+  }
+  err = gcry_cipher_encrypt( cryptor, p_crypt, KNX_KEY_LENGTH, plain, KNX_KEY_LENGTH );
+  if (err != 0) {
+    ws_debug("failed to encrypt AES128: %s/%s", gcry_strsource(err), gcry_strerror(err));
+  }
   gcry_cipher_close( cryptor );
 }
 
@@ -383,7 +396,7 @@ static void add_ga_key( uint16_t ga, const char* text, uint8_t password_hash[], 
 
     if( f2 )
     {
-      fprintf( f2, "GA %u/%u/%u key", (ga >> 11) & 0x1F, (ga >> 8) & 0x7, ga & 0xFF );
+      fprintf( f2, "GA %d/%d/%d key", (ga >> 11) & 0x1F, (ga >> 8) & 0x7, ga & 0xFF );
       fprintf_hex( f2, key, KNX_KEY_LENGTH );
     }
 
@@ -422,7 +435,7 @@ static void add_ga_sender( uint16_t ga, const char* text, FILE* f2 )
 
   if( f2 )
   {
-    fprintf( f2, "GA %u/%u/%u sender %u.%u.%u\n", (ga >> 11) & 0x1F, (ga >> 8) & 0x7, ga & 0xFF, (ia >> 12) & 0xF, (ia >> 8) & 0xF, ia & 0xFF );
+    fprintf( f2, "GA %d/%d/%d sender %d.%d.%d\n", (ga >> 11) & 0x1F, (ga >> 8) & 0x7, ga & 0xFF, (ia >> 12) & 0xF, (ia >> 8) & 0xF, ia & 0xFF );
   }
 
   ga_sender = wmem_new(wmem_epan_scope(), struct knx_keyring_ga_senders);
@@ -467,7 +480,7 @@ static void add_ia_key( uint16_t ia, const char* text, uint8_t password_hash[], 
 
     if( f2 )
     {
-      fprintf( f2, "IA %u.%u.%u key", (ia >> 12) & 0xF, (ia >> 8) & 0xF, ia & 0xFF );
+      fprintf( f2, "IA %d.%d.%d key", (ia >> 12) & 0xF, (ia >> 8) & 0xF, ia & 0xFF );
       fprintf_hex( f2, key, KNX_KEY_LENGTH );
     }
 
