@@ -2800,11 +2800,11 @@ tvb_strnlen(tvbuff_t *tvb, const int offset, const unsigned maxlength)
  * it returns 0 (meaning "equal") and -1 otherwise, otherwise return -1.
  */
 int
-tvb_strneql(tvbuff_t *tvb, const int offset, const char *str, const size_t size)
+tvb_strneql(tvbuff_t *tvb, const unsigned offset, const char *str, const size_t size)
 {
 	const uint8_t *ptr;
 
-	ptr = ensure_contiguous_no_exception(tvb, offset, (int)size, NULL);
+	ptr = ensure_contiguous_unsigned_no_exception(tvb, offset, (unsigned)size, NULL);
 
 	if (ptr) {
 		int cmp = strncmp((const char *)ptr, str, size);
@@ -2827,11 +2827,11 @@ tvb_strneql(tvbuff_t *tvb, const int offset, const char *str, const size_t size)
  * 0 if it returns 0 (meaning "equal") and -1 otherwise, otherwise return -1.
  */
 int
-tvb_strncaseeql(tvbuff_t *tvb, const int offset, const char *str, const size_t size)
+tvb_strncaseeql(tvbuff_t *tvb, const unsigned offset, const char *str, const size_t size)
 {
 	const uint8_t *ptr;
 
-	ptr = ensure_contiguous_no_exception(tvb, offset, (int)size, NULL);
+	ptr = ensure_contiguous_unsigned_no_exception(tvb, offset, (unsigned)size, NULL);
 
 	if (ptr) {
 		int cmp = g_ascii_strncasecmp((const char *)ptr, str, size);
@@ -2855,11 +2855,11 @@ tvb_strncaseeql(tvbuff_t *tvb, const int offset, const char *str, const size_t s
  * and -1 for error. This function does not throw an exception.
  */
 int
-tvb_memeql(tvbuff_t *tvb, const int offset, const uint8_t *str, size_t size)
+tvb_memeql(tvbuff_t *tvb, const unsigned offset, const uint8_t *str, size_t size)
 {
 	const uint8_t *ptr;
 
-	ptr = ensure_contiguous_no_exception(tvb, offset, (int) size, NULL);
+	ptr = ensure_contiguous_unsigned_no_exception(tvb, offset, (unsigned)size, NULL);
 
 	if (ptr) {
 		int cmp = memcmp(ptr, str, size);
@@ -2881,30 +2881,24 @@ tvb_memeql(tvbuff_t *tvb, const int offset, const uint8_t *str, size_t size)
  * Format the data in the tvb from offset for size.
  */
 char *
-tvb_format_text(wmem_allocator_t *scope, tvbuff_t *tvb, const int offset, const int size)
+tvb_format_text(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned offset, const unsigned size)
 {
 	const uint8_t *ptr;
-	int           len;
 
-	len = (size > 0) ? size : 0;
-
-	ptr = ensure_contiguous(tvb, offset, size);
-	return format_text(scope, (const char*)ptr, len);
+	ptr = ensure_contiguous_unsigned(tvb, offset, size);
+	return format_text(scope, (const char*)ptr, size);
 }
 
 /*
  * Format the data in the tvb from offset for length ...
  */
 char *
-tvb_format_text_wsp(wmem_allocator_t* allocator, tvbuff_t *tvb, const int offset, const int size)
+tvb_format_text_wsp(wmem_allocator_t* allocator, tvbuff_t *tvb, const unsigned offset, const unsigned size)
 {
 	const uint8_t *ptr;
-	int           len;
 
-	len = (size > 0) ? size : 0;
-
-	ptr = ensure_contiguous(tvb, offset, size);
-	return format_text_wsp(allocator, (const char*)ptr, len);
+	ptr = ensure_contiguous_unsigned(tvb, offset, size);
+	return format_text_wsp(allocator, (const char*)ptr, size);
 }
 
 /**
@@ -2912,16 +2906,13 @@ tvb_format_text_wsp(wmem_allocator_t* allocator, tvbuff_t *tvb, const int offset
  * the null padding characters as "\000".
  */
 char *
-tvb_format_stringzpad(wmem_allocator_t *scope, tvbuff_t *tvb, const int offset, const int size)
+tvb_format_stringzpad(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned offset, const unsigned size)
 {
 	const uint8_t *ptr, *p;
-	int           len;
-	int           stringlen;
+	unsigned      stringlen;
 
-	len = (size > 0) ? size : 0;
-
-	ptr = ensure_contiguous(tvb, offset, size);
-	for (p = ptr, stringlen = 0; stringlen < len && *p != '\0'; p++, stringlen++)
+	ptr = ensure_contiguous_unsigned(tvb, offset, size);
+	for (p = ptr, stringlen = 0; stringlen < size && *p != '\0'; p++, stringlen++)
 		;
 	return format_text(scope, (const char*)ptr, stringlen);
 }
@@ -2931,16 +2922,13 @@ tvb_format_stringzpad(wmem_allocator_t *scope, tvbuff_t *tvb, const int offset, 
  * the null padding characters as "\000".
  */
 char *
-tvb_format_stringzpad_wsp(wmem_allocator_t* allocator, tvbuff_t *tvb, const int offset, const int size)
+tvb_format_stringzpad_wsp(wmem_allocator_t* allocator, tvbuff_t *tvb, const unsigned offset, const unsigned size)
 {
 	const uint8_t *ptr, *p;
-	int           len;
-	int           stringlen;
-
-	len = (size > 0) ? size : 0;
+	unsigned      stringlen;
 
 	ptr = ensure_contiguous(tvb, offset, size);
-	for (p = ptr, stringlen = 0; stringlen < len && *p != '\0'; p++, stringlen++)
+	for (p = ptr, stringlen = 0; stringlen < size && *p != '\0'; p++, stringlen++)
 		;
 	return format_text_wsp(allocator, (const char*)ptr, stringlen);
 }
