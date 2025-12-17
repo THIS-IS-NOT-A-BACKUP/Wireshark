@@ -368,6 +368,7 @@ static int hf_isakmp_cfg_attr_internal_ip6_prefix_ip;
 static int hf_isakmp_cfg_attr_internal_ip6_prefix_length;
 static int hf_isakmp_cfg_attr_p_cscf_ip4_address;
 static int hf_isakmp_cfg_attr_p_cscf_ip6_address;
+static int hf_isakmp_cfg_attr_internal_dns_domain;
 static int hf_isakmp_cfg_attr_xauth_type;
 static int hf_isakmp_cfg_attr_xauth_user_name;
 static int hf_isakmp_cfg_attr_xauth_user_password;
@@ -378,6 +379,8 @@ static int hf_isakmp_cfg_attr_xauth_domain;
 static int hf_isakmp_cfg_attr_xauth_status;
 static int hf_isakmp_cfg_attr_xauth_next_pin;
 static int hf_isakmp_cfg_attr_xauth_answer;
+static int hf_isakmp_cfg_attr_fortinet_auto_negotiate;
+static int hf_isakmp_cfg_attr_fortinet_keep_alive;
 static int hf_isakmp_cfg_attr_fortinet_dns_suffix;
 static int hf_isakmp_cfg_attr_unity_banner;
 static int hf_isakmp_cfg_attr_unity_save_passwd;
@@ -550,6 +553,7 @@ static const fragment_items isakmp_frag_items = {
 #define INTERNAL_IP6_PREFIX             18
 #define P_CSCF_IP4_ADDRESS              20
 #define P_CSCF_IP6_ADDRESS              21
+#define INTERNAL_DNS_DOMAIN             25
 /* checkpoint configuration attributes */
 #define CHKPT_DEF_DOMAIN                16387
 #define CHKPT_MAC_ADDRESS               16388
@@ -569,6 +573,8 @@ static const fragment_items isakmp_frag_items = {
 #define XAUTH_NEXT_PIN                  16528
 #define XAUTH_ANSWER                    16529
 /* Fortinet Configuration Attribute */
+#define FORTINET_AUTO_NEGOTIATE         21514
+#define FORTINET_KEEP_ALIVE             21515
 #define FORTINET_DNS_SUFFIX             21516
 /* unity (CISCO) configuration attributes */
 #define UNITY_BANNER                    28672
@@ -1688,7 +1694,9 @@ static const range_string vs_v2_cfgattr[] = {
   { 28,20,       "ENCDNS_IP6" },
   { 29,29,       "ENCDNS_DIGEST_INFO" },
   { 30,16383,    "RESERVED TO IANA"},
-  { 16384,21515, "PRIVATE USE"},
+  { 16384,21513, "PRIVATE USE"},
+  { 21514,21514, "FORTINET_AUTO_NEGOTIATE" },
+  { 21515,21515, "FORTINET_KEEP_ALIVE" },
   { 21516,21516, "FORTINET_DNS_SUFFIX" },
   { 21517,28671, "PRIVATE USE"},
   { 28672,28672, "UNITY_BANNER" }, /* Fortinet use UNITY for IKEv2 too...*/
@@ -5489,6 +5497,10 @@ dissect_config_attribute(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, in
         }
       }
       break;
+    case INTERNAL_DNS_DOMAIN: /* 25 */
+      proto_tree_add_item_ret_string(attr_tree, hf_isakmp_cfg_attr_internal_dns_domain, tvb, offset, value_len, ENC_ASCII|ENC_NA, pinfo->pool, &str);
+      proto_item_append_text(attr_item, ": %s", str);
+      break;
     case XAUTH_TYPE: /* 16520 */
       proto_tree_add_item(attr_tree, hf_isakmp_cfg_attr_xauth_type, tvb, offset, value_len, ENC_BIG_ENDIAN);
       proto_item_append_text(attr_item, ": %s", rval_to_str_wmem(pinfo->pool, tvb_get_ntohs(tvb, offset), cfgattr_xauth_type, "Unknown %d"));
@@ -5530,6 +5542,12 @@ dissect_config_attribute(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, in
       proto_item_append_text(attr_item, ": %s", str);
       break;
 
+    case FORTINET_AUTO_NEGOTIATE: /* 21514 */
+      proto_tree_add_item(attr_tree, hf_isakmp_cfg_attr_fortinet_auto_negotiate, tvb, offset, 2, ENC_BIG_ENDIAN);
+      break;
+    case FORTINET_KEEP_ALIVE: /* 21515 */
+      proto_tree_add_item(attr_tree, hf_isakmp_cfg_attr_fortinet_keep_alive, tvb, offset, 2, ENC_BIG_ENDIAN);
+      break;
     case FORTINET_DNS_SUFFIX: /* 21516 */
       proto_tree_add_item_ret_string(attr_tree, hf_isakmp_cfg_attr_fortinet_dns_suffix, tvb, offset, value_len, ENC_ASCII|ENC_NA, pinfo->pool, &str);
       proto_item_append_text(attr_item, ": %s", str);
@@ -7802,6 +7820,10 @@ proto_register_isakmp(void)
       { "P_CSCF_IP6_ADDRESS (IP)", "isakmp.cfg.attr.p_cscf_ip6_address",
         FT_IPv6, BASE_NONE, NULL, 0x00,
         "An IPv6 address of the P-CSCF server", HFILL }},
+    { &hf_isakmp_cfg_attr_internal_dns_domain,
+      { "INTERNAL_DNS_DOMAIN", "isakmp.cfg.attr.internal_dns_domain",
+        FT_STRING, BASE_NONE, NULL, 0x00,
+        NULL, HFILL }},
 
     { &hf_isakmp_cfg_attr_xauth_type,
       { "XAUTH TYPE", "isakmp.cfg.attr.xauth.type",
@@ -7843,6 +7865,14 @@ proto_register_isakmp(void)
       { "XAUTH ANSWER", "isakmp.cfg.attr.xauth.answer",
         FT_STRING, BASE_NONE, NULL, 0x00,
         "A variable length ASCII string used to send input to the edge device", HFILL }},
+    { &hf_isakmp_cfg_attr_fortinet_auto_negotiate,
+      { "FORTINET AUTO NEGOTIATE", "isakmp.cfg.attr.fortinet.auto_negotiate",
+        FT_UINT16, BASE_DEC, NULL, 0x00,
+        NULL, HFILL }},
+    { &hf_isakmp_cfg_attr_fortinet_keep_alive,
+      { "FORTINET KEEP ALIVE", "isakmp.cfg.attr.fortinet.keep_alive",
+        FT_UINT16, BASE_DEC, NULL, 0x00,
+        NULL, HFILL }},
     { &hf_isakmp_cfg_attr_fortinet_dns_suffix,
       { "FORTINET DNS SUFFIX", "isakmp.cfg.attr.fortinet.dns_suffix",
         FT_STRING, BASE_NONE, NULL, 0x00,
