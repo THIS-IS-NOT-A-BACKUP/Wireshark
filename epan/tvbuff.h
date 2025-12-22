@@ -379,7 +379,6 @@ WS_DLL_PUBLIC unsigned tvb_captured_length(const tvbuff_t *tvb);
 /**
  * @brief Computes bytes to end of buffer from the given offset.
  *
- * The offset can be negative to indicate bytes from the end of the buffer.
  * The function returns 0 if the offset is either at the end of the buffer or out of bounds.
  * No exception is thrown.
  * You probably want @ref tvb_reported_length_remaining instead.
@@ -389,7 +388,7 @@ WS_DLL_PUBLIC unsigned tvb_captured_length(const tvbuff_t *tvb);
  *
  * @return The number of bytes remaining to the end of the buffer from the given offset.
  */
-WS_DLL_PUBLIC int tvb_captured_length_remaining(const tvbuff_t *tvb, const unsigned offset);
+WS_DLL_PUBLIC int tvb_captured_length_remaining(const tvbuff_t *tvb, const int offset);
 
 /**
  * @brief Same as @ref tvb_captured_length_remaining, but throws an exception if the offset is out of bounds.
@@ -2182,6 +2181,54 @@ WS_DLL_PUBLIC const uint8_t *tvb_get_ptr(tvbuff_t *tvb, const int offset,
  * @brief Find the first occurrence of a byte value in a tvbuff.
  *
  * Searches for the first occurrence of `needle` in the given tvbuff_t,
+ * starting at `offset` and searching the remaining captured bytes.
+ *
+ * This function will throw an exception if the start offset is outside
+ * the tvbuff captured bytes, but will not throw an exception if the needle
+ * is not found.
+ *
+ * @param tvb          The tvbuff_t to search.
+ * @param offset       The offset in the tvbuff to begin searching.
+ * @param needle       The byte value to search for.
+ * @param found_offset The offset of the needle, if found. Otherwise, the offset
+ * just past the last byte searched.
+ *
+ * @return true if the needle is found, false otherwise
+ *
+ * @see tvb_find_uint8_length
+ */
+WS_DLL_PUBLIC bool tvb_find_uint8_remaining(tvbuff_t *tvb, const unsigned offset,
+    const uint8_t needle, unsigned *found_offset);
+
+/**
+ * @brief Find the first occurrence of a byte value in a tvbuff up to a limit.
+ *
+ * Searches for the first occurrence of `needle` in the given tvbuff_t,
+ * starting at `offset` and scanning up to `maxlength` bytes.
+ *
+ * This function will only search up to the bytes actually contained in the
+ * tvbuff, and will not throw an exception for going past the captured or
+ * reported length, even if even if `maxlength` exceeds those. (It will throw
+ * an exception if the start offset is outside the tvbuff captured bytes.)
+ *
+ * @param tvb          The tvbuff_t to search.
+ * @param offset       The offset in the tvbuff to begin searching.
+ * @param maxlength    The maximum number of bytes to search.
+ * @param needle       The byte value to search for.
+ * @param found_offset The offset of the needle, if found. Otherwise, the offset
+ * just past the last byte searched.
+ *
+ * @return true if the needle is found, false otherwise
+ *
+ * @see tvb_find_uint8_remaining
+ */
+WS_DLL_PUBLIC bool tvb_find_uint8_length(tvbuff_t *tvb, const unsigned offset,
+    const unsigned maxlength, const uint8_t needle, unsigned *found_offset);
+
+/**
+ * @brief Find the first occurrence of a byte value in a tvbuff.
+ *
+ * Searches for the first occurrence of `needle` in the given tvbuff_t,
  * starting at `offset` and scanning up to `maxlength` bytes. If `maxlength` is -1,
  * the search continues to the end of the tvbuff.
  *
@@ -2381,7 +2428,7 @@ WS_DLL_PUBLIC unsigned tvb_unicode_strsize(tvbuff_t *tvb, const unsigned offset)
  *
  * @see tvb_strsize
  */
-WS_DLL_PUBLIC int tvb_strnlen(tvbuff_t *tvb, const int offset,
+WS_DLL_PUBLIC int tvb_strnlen(tvbuff_t *tvb, const unsigned offset,
     const unsigned maxlength);
 
 /**
@@ -3190,8 +3237,8 @@ WS_DLL_PUBLIC int tvb_find_tvb(tvbuff_t *haystack_tvb, tvbuff_t *needle_tvb,
  * @see tvb_uncompress_zlib
  */
 WS_DEPRECATED_X("Use tvb_uncompress_zlib instead")
-WS_DLL_PUBLIC tvbuff_t *tvb_uncompress(tvbuff_t *tvb, const int offset,
-    int comprlen);
+WS_DLL_PUBLIC tvbuff_t *tvb_uncompress(tvbuff_t *tvb, const unsigned offset,
+    unsigned comprlen);
 
 /**
  * @brief Uncompress zlib-compressed data from a tvbuff.
@@ -3214,8 +3261,8 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress(tvbuff_t *tvb, const int offset,
  *
  * @see tvb_child_uncompress
  */
-WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_zlib(tvbuff_t *tvb, const int offset,
-    int comprlen);
+WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_zlib(tvbuff_t *tvb, const unsigned offset,
+    unsigned comprlen);
 
 /**
  * @brief Deprecated interface for uncompressing data and chaining the result to a parent tvbuff.
@@ -3240,7 +3287,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_zlib(tvbuff_t *tvb, const int offset,
  */
 WS_DEPRECATED_X("Use tvb_child_uncompress_zlib instead")
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress(tvbuff_t *parent, tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress a zlib-compressed packet inside a tvbuff and attach the result to a parent tvbuff.
@@ -3259,7 +3306,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress(tvbuff_t *parent, tvbuff_t *tvb,
  * @return A new tvbuff_t with uncompressed data attached to `parent`, or NULL on failure.
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_zlib(tvbuff_t *parent, tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_brotli.c */
 
@@ -3284,8 +3331,8 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_zlib(tvbuff_t *parent, tvbuff_t *tv
  *
  * @see tvb_child_uncompress_brotli
  */
-WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_brotli(tvbuff_t *tvb, const int offset,
-    int comprlen);
+WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_brotli(tvbuff_t *tvb, const unsigned offset,
+	unsigned comprlen);
 
 /**
  * @brief Uncompress Brotli-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3306,7 +3353,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_brotli(tvbuff_t *tvb, const int offset,
  * @see tvb_uncompress_brotli
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_brotli(tvbuff_t *parent, tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_snappy.c */
 
@@ -3327,8 +3374,8 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_brotli(tvbuff_t *parent, tvbuff_t *
  *
  * @return A new tvbuff_t with uncompressed data, or NULL on failure.
  */
-WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_snappy(tvbuff_t *tvb, const int offset,
-    int comprlen);
+WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_snappy(tvbuff_t *tvb, const unsigned offset,
+    unsigned comprlen);
 
 /**
  * @brief Uncompress Snappy-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3349,7 +3396,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_snappy(tvbuff_t *tvb, const int offset,
  * @see tvb_uncompress_snappy
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_snappy(tvbuff_t *parent, tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_lz77.c */
 
@@ -3375,7 +3422,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_snappy(tvbuff_t *parent, tvbuff_t *
  * @see tvb_child_uncompress_lz77
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lz77(tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress Microsoft Plain LZ77-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3397,7 +3444,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lz77(tvbuff_t *tvb,
  * @see tvb_uncompress_lz77
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lz77(tvbuff_t *parent,
-     tvbuff_t *tvb, const int offset, int comprlen);
+     tvbuff_t *tvb, const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_lz77huff.c */
 
@@ -3423,7 +3470,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lz77(tvbuff_t *parent,
  * @see tvb_child_uncompress_lz77huff
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lz77huff(tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress Microsoft LZ77+Huffman-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3445,7 +3492,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lz77huff(tvbuff_t *tvb,
  * @see tvb_uncompress_lz77huff
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lz77huff(tvbuff_t *parent,
-    tvbuff_t *tvb, const int offset, int comprlen);
+    tvbuff_t *tvb, const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_lznt1.c */
 
@@ -3471,7 +3518,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lz77huff(tvbuff_t *parent,
  * @see tvb_child_uncompress_lznt1
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lznt1(tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress Microsoft LZNT1-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3493,7 +3540,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_lznt1(tvbuff_t *tvb,
  * @see tvb_uncompress_lznt1
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lznt1(tvbuff_t *parent,
-    tvbuff_t *tvb, const int offset, int comprlen);
+    tvbuff_t *tvb, const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress Zstandard (ZSTD)-compressed data from a tvbuff.
@@ -3517,7 +3564,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_lznt1(tvbuff_t *parent,
  * @see tvb_child_uncompress_zstd
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_zstd(tvbuff_t *tvb,
-    const int offset, int comprlen);
+    const unsigned offset, unsigned comprlen);
 
 /**
  * @brief Uncompress Zstandard (ZSTD)-compressed data from a tvbuff and attach the result to a parent tvbuff.
@@ -3539,7 +3586,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_uncompress_zstd(tvbuff_t *tvb,
  * @see tvb_uncompress_zstd
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_zstd(tvbuff_t *parent,
-    tvbuff_t *tvb, const int offset, int comprlen);
+    tvbuff_t *tvb, const unsigned offset, unsigned comprlen);
 
 /* From tvbuff_base64.c */
 
