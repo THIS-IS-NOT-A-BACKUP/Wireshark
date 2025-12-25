@@ -652,8 +652,8 @@ _tvb_captured_length_remaining(const tvbuff_t *tvb, const unsigned offset)
 	return rem_length;
 }
 
-int
-tvb_captured_length_remaining(const tvbuff_t *tvb, const int offset)
+unsigned
+tvb_captured_length_remaining(const tvbuff_t *tvb, const unsigned offset)
 {
 	unsigned rem_length;
 	int   exception;
@@ -2343,7 +2343,7 @@ static const uint8_t bit_mask8[] = {
  * When encoding is ENC_LITTLE_ENDIAN, the data is aligned to the right.
  */
 uint8_t *
-tvb_get_bits_array(wmem_allocator_t *scope, tvbuff_t *tvb, const int bit_offset,
+tvb_get_bits_array(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned bit_offset,
 		   size_t no_of_bits, size_t *data_length, const unsigned encoding)
 {
 	tvbuff_t *sub_tvb;
@@ -4701,12 +4701,12 @@ tvb_find_line_end_unquoted(tvbuff_t *tvb, const unsigned offset, int len, int *n
  *			character following offset or offset + maxlength -1 whichever
  *			is smaller.
  */
-int
-tvb_skip_wsp(tvbuff_t *tvb, const int offset, const int maxlength)
+unsigned
+tvb_skip_wsp(tvbuff_t *tvb, const unsigned offset, const unsigned maxlength)
 {
-	int    counter;
-	int    end, tvb_len;
-	uint8_t tempchar;
+	unsigned counter;
+	unsigned end, tvb_len;
+	uint8_t  tempchar;
 
 	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
@@ -4714,42 +4714,49 @@ tvb_skip_wsp(tvbuff_t *tvb, const int offset, const int maxlength)
 	/*tvb_len = tvb_captured_length(tvb);*/
 	tvb_len = tvb->length;
 
-	end     = offset + maxlength;
-	if (end >= tvb_len)
-	{
+	if (ckd_add(&end, offset, maxlength) || end > tvb_len) {
 		end = tvb_len;
 	}
 
 	/* Skip past spaces, tabs, CRs and LFs until run out or meet something else */
+	/* XXX - The MEGACO dissector uses g_ascii_isspace(), which might be
+	 * slightly faster but also tests for vertical tab and form feed. */
 	for (counter = offset;
 		 counter < end &&
 		  ((tempchar = tvb_get_uint8(tvb,counter)) == ' ' ||
 		  tempchar == '\t' || tempchar == '\r' || tempchar == '\n');
 		 counter++);
 
-	return (counter);
+	return counter;
 }
 
-int
-tvb_skip_wsp_return(tvbuff_t *tvb, const int offset)
+unsigned
+tvb_skip_wsp_return(tvbuff_t *tvb, const unsigned offset)
 {
-	int    counter;
-	uint8_t tempchar;
+	unsigned counter;
+	uint8_t  tempchar;
 
 	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
+	/* XXX - DISSECTOR_ASSERT(offset > 0) and then subtract 1 from offset?
+	 * The way this is used the caller almost always wants to subtract one
+	 * from the offset of a non WSP separator, and they might forget to do
+	 * so and then this function return the offset past the separator. */
+
+	/* XXX - The MEGACO dissector uses g_ascii_isspace(), which might be
+	 * slightly faster but also tests for vertical tab and form feed. */
 	for (counter = offset; counter > 0 &&
 		((tempchar = tvb_get_uint8(tvb,counter)) == ' ' ||
 		tempchar == '\t' || tempchar == '\n' || tempchar == '\r'); counter--);
 	counter++;
 
-	return (counter);
+	return counter;
 }
 
-int
-tvb_skip_uint8(tvbuff_t *tvb, int offset, const int maxlength, const uint8_t ch)
+unsigned
+tvb_skip_uint8(tvbuff_t *tvb, unsigned offset, const unsigned maxlength, const uint8_t ch)
 {
-	int end, tvb_len;
+	unsigned end, tvb_len;
 
 	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
@@ -4757,9 +4764,9 @@ tvb_skip_uint8(tvbuff_t *tvb, int offset, const int maxlength, const uint8_t ch)
 	/*tvb_len = tvb_captured_length(tvb);*/
 	tvb_len = tvb->length;
 
-	end     = offset + maxlength;
-	if (end >= tvb_len)
+	if (ckd_add(&end, offset, maxlength) || end > tvb_len) {
 		end = tvb_len;
+	}
 
 	while (offset < end) {
 		uint8_t tempch = tvb_get_uint8(tvb, offset);
