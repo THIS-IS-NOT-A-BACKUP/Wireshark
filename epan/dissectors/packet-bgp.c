@@ -58,6 +58,7 @@
  * RFC8365 A Network Virtualization Overlay Solution Using Ethernet VPN (EVPN)
  * draft-abraitis-bgp-version-capability-13
  * draft-ietf-idr-bgp-bfd-strict-mode
+ * RFC8654 Extended Message Support for BGP
 
  * TODO:
  * Destination Preference Attribute for BGP (work in progress)
@@ -70,14 +71,13 @@
 #include "config.h"
 
 #include <epan/packet.h>
-#include <epan/afn.h>
 #include <epan/prefs.h>
 #include <epan/expert.h>
 #include <epan/to_str.h>
 #include <epan/proto_data.h>
-#include <epan/ipproto.h>
 #include <epan/tfs.h>
 #include <wsutil/str_util.h>
+#include "packet-iana-data.h"
 #include "packet-ip.h"
 #include "packet-tcp.h"
 #include "packet-ldp.h"
@@ -93,6 +93,7 @@ static dissector_handle_t bgp_handle;
 
 /* some handy things to know */
 #define BGP_MAX_PACKET_SIZE            4096
+#define BGP_MAX_PACKET_SIZE_EXTENDED  65535
 #define BGP_MARKER_SIZE                  16    /* size of BGP marker */
 #define BGP_HEADER_SIZE                  19    /* size of BGP header, including marker */
 #define BGP_MIN_OPEN_MSG_SIZE            29
@@ -185,6 +186,9 @@ static dissector_handle_t bgp_handle;
 #define BGP_CAPABILITY_MULTISESSION_CISCO          131  /* Cisco, RFC8810 */
 #define BGP_CAPABILITY_FQDN_CISCO                  184  /* Cisco, RFC8810 */
 #define BGP_CAPABILITY_OPERATIONAL_MSG_CISCO       185  /* Cisco, RFC8810 */
+
+/* Technically not defined by IANA */
+#define AFNUM_AFI_FOR_L2VPN_INFORMATION_OLD        196
 
 #define BGP_ORF_COMM            0x02 /* unknown */
 #define BGP_ORF_EXTCOMM         0x03 /* unknown */
@@ -3476,6 +3480,7 @@ static expert_field ei_bgp_mup_nlri_addr_len_err;
 
 /* desegmentation */
 static bool bgp_desegment = true;
+static bool bgp_ext_msg = true;
 
 static int bgp_asn_len;
 
@@ -4252,7 +4257,7 @@ decode_flowspec_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi, 
     proto_tree *filter_tree;
 
 
-    if (afi != AFNUM_INET && afi != AFNUM_INET6)
+    if (afi != AFNUM_IP && afi != AFNUM_IP6)
     {
         expert_add_info(pinfo, NULL, &ei_bgp_afi_type_not_supported);
         return -1;
@@ -4332,10 +4337,10 @@ decode_flowspec_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi, 
         switch (tvb_get_uint8(tvb,offset+cursor_fspec)) {
         case BGPNLRI_FSPEC_DST_PFIX:
             cursor_fspec++;
-            if (afi == AFNUM_INET)
+            if (afi == AFNUM_IP)
                 filter_len = decode_prefix4(filter_tree, pinfo, filter_item, hf_bgp_flowspec_nlri_dst_pref_ipv4,
                                             tvb, offset+cursor_fspec, "Destination IP filter");
-            else /* AFNUM_INET6 */
+            else /* AFNUM_IP6 */
                 filter_len = decode_fspec_match_prefix6(filter_tree, filter_item, hf_bgp_flowspec_nlri_dst_ipv6_pref,
                                                         tvb, offset+cursor_fspec, 0, pinfo);
             if (filter_len == -1)
@@ -4343,10 +4348,10 @@ decode_flowspec_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi, 
             break;
         case BGPNLRI_FSPEC_SRC_PFIX:
             cursor_fspec++;
-            if (afi == AFNUM_INET)
+            if (afi == AFNUM_IP)
                 filter_len = decode_prefix4(filter_tree, pinfo, filter_item, hf_bgp_flowspec_nlri_src_pref_ipv4,
                                             tvb, offset+cursor_fspec, "Source IP filter");
-            else /* AFNUM_INET6 */
+            else /* AFNUM_IP6 */
                 filter_len = decode_fspec_match_prefix6(filter_tree, filter_item, hf_bgp_flowspec_nlri_src_ipv6_pref,
                                                         tvb, offset+cursor_fspec, 0, pinfo);
             if (filter_len == -1)
@@ -4416,7 +4421,7 @@ decode_mcast_vpn_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi,
     uint32_t route_key_length;
     int ret;
 
-    ip_length = (afi == AFNUM_INET) ? 4 : 16;
+    ip_length = (afi == AFNUM_IP) ? 4 : 16;
 
     route_type = tvb_get_uint8(tvb, offset);
     proto_tree_add_item(tree, hf_bgp_mcast_vpn_nlri_route_type, tvb,
@@ -4448,7 +4453,7 @@ decode_mcast_vpn_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi,
                                 decode_bgp_rd(pinfo->pool, tvb, offset));
             offset += BGP_ROUTE_DISTINGUISHER_SIZE;
 
-            if (afi == AFNUM_INET)
+            if (afi == AFNUM_IP)
                 proto_tree_add_item(nlri_tree,
                                            hf_bgp_mcast_vpn_nlri_origin_router_ipv4,
                                            tvb, offset, ip_length, ENC_BIG_ENDIAN);
@@ -4484,7 +4489,7 @@ decode_mcast_vpn_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi,
 
             offset = ret;
 
-            if (afi == AFNUM_INET)
+            if (afi == AFNUM_IP)
                 proto_tree_add_item(nlri_tree,
                                            hf_bgp_mcast_vpn_nlri_origin_router_ipv4,
                                            tvb, offset, ip_length, ENC_BIG_ENDIAN);
@@ -4503,7 +4508,7 @@ decode_mcast_vpn_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi,
                                 plurality(route_key_length, "", "s"));
             offset += route_key_length;
 
-            if (afi == AFNUM_INET)
+            if (afi == AFNUM_IP)
                 proto_tree_add_item(nlri_tree,
                                            hf_bgp_mcast_vpn_nlri_origin_router_ipv4,
                                            tvb, offset, ip_length, ENC_BIG_ENDIAN);
@@ -4561,7 +4566,7 @@ decode_sr_policy_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, uint16_t afi)
    offset += 4;
    proto_tree_add_item(tree, hf_bgp_sr_policy_nlri_policy_color, tvb, offset, 4, ENC_NA);
    offset += 4;
-   if (afi == AFNUM_INET) {
+   if (afi == AFNUM_IP) {
        proto_tree_add_item(tree, hf_bgp_sr_policy_nlri_endpoint_v4, tvb, offset, 4, ENC_BIG_ENDIAN);
        return 13;
    } else {
@@ -4894,7 +4899,7 @@ decode_mp_next_hop(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo, uint16_t
     offset += 1;
 
     switch (afi) {
-        case AFNUM_INET:
+        case AFNUM_IP:
             switch (safi) {
                 case SAFNUM_UNICAST:       /* RFC 8950 */
                 case SAFNUM_MULCAST:       /* RFC 8950 */
@@ -4964,7 +4969,7 @@ decode_mp_next_hop(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo, uint16_t
                     break;
             } /* switch (safi) */
             break;
-        case AFNUM_INET6:
+        case AFNUM_IP6:
             switch (safi) {
                 case SAFNUM_UNICAST:       /* RFC 8950 */
                 case SAFNUM_MULCAST:       /* RFC 8950 */
@@ -5004,8 +5009,8 @@ decode_mp_next_hop(tvbuff_t *tvb, proto_tree *tree, packet_info *pinfo, uint16_t
                     break;
             } /* switch (safi) */
             break;
-        case AFNUM_L2VPN:
-        case AFNUM_L2VPN_OLD:
+        case AFNUM_AFI_FOR_L2VPN_INFORMATION:
+        case AFNUM_AFI_FOR_L2VPN_INFORMATION_OLD:
             switch (safi) {
                 /* XXX: Do these first three really appear with L2VPN AFI? */
                 case SAFNUM_LAB_VPNUNICAST:
@@ -7473,7 +7478,7 @@ static int decode_bgp_mup_nlri_variable_prefix(proto_tree *tree, tvbuff_t *tvb, 
     reader_offset++;
 
     switch (afi) {
-    case AFNUM_INET:
+    case AFNUM_IP:
         byte_length = tvb_get_ipv4_addr_with_prefix_len(tvb, reader_offset, &ipv4_prefix, prefix_length);
         if (byte_length == -1) {
             proto_tree_add_expert_format(tree, pinfo, &ei_bgp_prefix_length_invalid, tvb, reader_offset, -1,
@@ -7487,7 +7492,7 @@ static int decode_bgp_mup_nlri_variable_prefix(proto_tree *tree, tvbuff_t *tvb, 
         reader_offset += byte_length;
         break;
 
-    case AFNUM_INET6:
+    case AFNUM_IP6:
         byte_length = tvb_get_ipv6_addr_with_prefix_len(tvb, reader_offset, &ipv6_prefix, prefix_length);
         if (byte_length == -1) {
             proto_tree_add_expert_format(tree, pinfo, &ei_bgp_prefix_length_invalid, tvb, reader_offset, -1,
@@ -7644,7 +7649,7 @@ static int decode_bgp_mup_nlri_type2_st_route(proto_tree *tree, tvbuff_t *tvb, i
     reader_offset++;
 
     switch (afi) {
-    case AFNUM_INET:
+    case AFNUM_IP:
         prefix_length = endpoint_length>32 ? 32 : endpoint_length;
         byte_length = tvb_get_ipv4_addr_with_prefix_len(tvb, reader_offset, &ipv4_prefix, prefix_length);
         set_address(&ipv4_prefix_addr, AT_IPv4, 4, &ipv4_prefix);
@@ -7658,7 +7663,7 @@ static int decode_bgp_mup_nlri_type2_st_route(proto_tree *tree, tvbuff_t *tvb, i
             arch_spec_endpoint_length = endpoint_length - 32;
         }
         break;
-    case AFNUM_INET6:
+    case AFNUM_IP6:
         prefix_length = endpoint_length>128 ? 128 : endpoint_length;
         byte_length = tvb_get_ipv6_addr_with_prefix_len(tvb, reader_offset, &ipv6_prefix, prefix_length);
         set_address(&ipv6_prefix_addr, AT_IPv6, 16, ipv6_prefix.bytes);
@@ -7773,10 +7778,10 @@ static int decode_bgp_mup_nlri(proto_tree *tree, tvbuff_t *tvb, int offset, pack
         proto_item_append_text(rd_pi, " (%s)", decode_bgp_rd(pinfo->pool, tvb, reader_offset));
         reader_offset += 8;
         switch (afi) {
-        case AFNUM_INET:
+        case AFNUM_IP:
             proto_tree_add_item(prefix_tree, hf_bgp_mup_nlri_ip_addr, tvb, reader_offset, 4, ENC_BIG_ENDIAN);
             break;
-        case AFNUM_INET6:
+        case AFNUM_IP6:
             proto_tree_add_item(prefix_tree, hf_bgp_mup_nlri_ipv6_addr, tvb, reader_offset, 16, ENC_NA);
             break;
         }
@@ -7844,7 +7849,7 @@ decode_prefix_MP(proto_tree *tree, int hf_path_id, int hf_addr4, int hf_addr6,
 
     switch (afi) {
 
-    case AFNUM_INET:
+    case AFNUM_IP:
         switch (safi) {
 
             case SAFNUM_UNICAST:
@@ -8095,7 +8100,7 @@ decode_prefix_MP(proto_tree *tree, int hf_path_id, int hf_addr4, int hf_addr6,
         } /* switch (safi) */
         break;
 
-    case AFNUM_INET6:
+    case AFNUM_IP6:
         switch (safi) {
 
             case SAFNUM_UNICAST:
@@ -8292,8 +8297,8 @@ decode_prefix_MP(proto_tree *tree, int hf_path_id, int hf_addr4, int hf_addr6,
         } /* switch (safi) */
         break;
 
-    case AFNUM_L2VPN:
-    case AFNUM_L2VPN_OLD:
+    case AFNUM_AFI_FOR_L2VPN_INFORMATION:
+    case AFNUM_AFI_FOR_L2VPN_INFORMATION_OLD:
         switch (safi) {
 
             case SAFNUM_LAB_VPNUNICAST:
@@ -9204,7 +9209,7 @@ dissect_bgp_update_ext_com(proto_tree *parent_tree, tvbuff_t *tvb, uint16_t tlen
                 proto_tree_add_item(community_tree, hf_bgp_ext_com_value_as2, tvb, offset+2, 2, ENC_BIG_ENDIAN);
                 data = load_afi_safi_data(pinfo);
 
-                if(data && data->afi == AFNUM_L2VPN && data->safi == SAFNUM_EVPN) {
+                if(data && data->afi == AFNUM_AFI_FOR_L2VPN_INFORMATION && data->safi == SAFNUM_EVPN) {
                         static int * const local_admin_flags[] = {
                             &hf_bgp_ext_com_local_admin_auto_derived_flag,
                             &hf_bgp_ext_com_local_admin_type,
@@ -10452,7 +10457,7 @@ dissect_bgp_path_attr(proto_tree *subtree, tvbuff_t *tvb, uint16_t path_attr_len
                 subtree3 = proto_item_add_subtree(ti, ett_bgp_mp_reach_nlri);
 
                 if (tlen)  {
-                    if (af != AFNUM_INET && af != AFNUM_INET6 && af != AFNUM_L2VPN && af != AFNUM_BGP_LS) {
+                    if (af != AFNUM_IP && af != AFNUM_IP6 && af != AFNUM_AFI_FOR_L2VPN_INFORMATION && af != AFNUM_BGP_LS) {
                         proto_tree_add_expert(subtree3, pinfo, &ei_bgp_unknown_afi, tvb, o + i + aoff, tlen);
                     } else {
                         while (tlen > 0) {
@@ -11680,11 +11685,45 @@ example 2
     }
 }
 
+static bool
+bgp_length_is_valid (uint8_t bgp_type, uint32_t bgp_len)
+{
+    switch (bgp_type) {
+    case BGP_OPEN:
+    case BGP_CAPABILITY:
+        if (bgp_len < BGP_HEADER_SIZE || bgp_len > BGP_MAX_PACKET_SIZE)
+            return false;
+        break;
+    case BGP_KEEPALIVE:
+        if (bgp_len != BGP_HEADER_SIZE)
+            return false;
+        break;
+    case BGP_UPDATE:
+    case BGP_NOTIFICATION:
+    case BGP_ROUTE_REFRESH_CISCO:
+    case BGP_ROUTE_REFRESH:
+    default:
+        if (bgp_len < BGP_HEADER_SIZE)
+            return false;
+        if (bgp_ext_msg) {
+            if (bgp_len > BGP_MAX_PACKET_SIZE_EXTENDED)
+                return false;
+        } else {
+            if (bgp_len > BGP_MAX_PACKET_SIZE)
+                return false;
+        }
+        break;
+    }
+
+    /* length is valid */
+    return true;
+}
+
 static int
 dissect_bgp_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
                 void *data _U_)
 {
-    uint16_t      bgp_len;          /* Message length             */
+    uint32_t      bgp_len;          /* Message length             */
     uint8_t       bgp_type;         /* Message type               */
     const char    *typ;             /* Message type (string)      */
     proto_item    *ti = NULL;
@@ -11742,7 +11781,7 @@ dissect_bgp_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
         ti_len = proto_tree_add_item(bgp_tree, hf_bgp_length, tvb, 16, 2, ENC_BIG_ENDIAN);
     }
 
-    if (bgp_len < BGP_HEADER_SIZE || bgp_len > BGP_MAX_PACKET_SIZE) {
+    if (! bgp_length_is_valid (bgp_type, bgp_len)) {
         expert_add_info_format(pinfo, ti_len, &ei_bgp_length_invalid, "Length is invalid %u", bgp_len);
         return tvb_captured_length(tvb);
     }
@@ -14665,6 +14704,10 @@ proto_register_bgp(void)
       "Whether the BGP dissector should reassemble messages spanning multiple TCP segments."
       " To use this option, you must also enable \"Allow subdissectors to reassemble TCP streams\" in the TCP protocol settings.",
       &bgp_desegment);
+    prefs_register_bool_preference(bgp_module, "ext_msg",
+      "Allow BGP Extended Messages",
+      "Whether the BGP dissector should allow pakets with a length exceeding 4096 octets.",
+      &bgp_ext_msg);
     prefs_register_enum_preference(bgp_module, "asn_len",
       "Length of the AS number",
       "BGP dissector detect the length of the AS number in AS_PATH attributes automatically or manually (NOTE: Automatic detection is not 100% accurate)",
