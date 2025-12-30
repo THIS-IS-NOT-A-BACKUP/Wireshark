@@ -51,7 +51,7 @@
 #include <wsutil/ws_assert.h>
 #include <wsutil/strtoi.h>
 #include <wsutil/report_message.h>
-#include <wsutil/application_flavor.h>
+#include <app/application_flavor.h>
 #include <wsutil/path_config.h>
 #include <cli_main.h>
 #include <wsutil/version_info.h>
@@ -842,7 +842,7 @@ about_folders(void)
     g_strfreev(resultArray);
 
     /* Global Extcap */
-    constpath = get_extcap_dir(env_prefix, EXTCAP_DIR);
+    constpath = get_extcap_dir(env_prefix, application_extcap_dir());
 
     resultArray = g_strsplit(constpath, G_SEARCHPATH_SEPARATOR_S, 10);
     for(i = 0; resultArray[i]; i++)
