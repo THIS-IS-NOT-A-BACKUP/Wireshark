@@ -266,8 +266,10 @@ set (STRATOSHARK_QT_HEADERS
 	stratoshark_about_dialog.h
 	stratoshark_capture_file_properties_dialog.h
 	stratoshark_follow_stream_dialog.h
+	stratoshark_io_graph_dialog.h
 	stratoshark_profile_dialog.h
 	stratoshark_search_frame.h
+	stratoshark_welcome_page.h
 	${WIRESHARK_QT_HEADERS}
 )
 
@@ -509,8 +511,10 @@ set (STRATOSHARK_QT_SRC
 	stratoshark_about_dialog.cpp
 	stratoshark_capture_file_properties_dialog.cpp
 	stratoshark_follow_stream_dialog.cpp
+	stratoshark_io_graph_dialog.cpp
 	stratoshark_profile_dialog.cpp
 	stratoshark_search_frame.cpp
+	stratoshark_welcome_page.cpp
 	${WIRESHARK_QT_SRC})
 
 set(WIRESHARK_QT_TAP_SRC

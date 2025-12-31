@@ -543,6 +543,12 @@ WS_DLL_PUBLIC void tvb_fix_reported_length(tvbuff_t *tvb);
  * @param tvb The tvbuff_t to query.
  *
  * @return The offset from the beginning of the real buffer.
+ *
+ * @note This function returns the same value as tvb_raw_offset; the difference
+ * is that this function calculates the value each time whereas tvb_raw_offset
+ * caches the result (hence this function can take a const tvbuff_t.)
+ *
+ * @see tvb_raw_offset
  */
 WS_DLL_PUBLIC unsigned tvb_offset_from_real_beginning(const tvbuff_t *tvb);
 
@@ -556,8 +562,13 @@ WS_DLL_PUBLIC unsigned tvb_offset_from_real_beginning(const tvbuff_t *tvb);
  * @param tvb The tvbuff to query.
  *
  * @return The offset from the first byte of real data in the buffer.
+ *
+ * @note This function returns the same value as tvb_offset_from_real_beginning
+ * but caches the result in the tvbuff_t.
+ *
+ * @see tvb_offset_from_real_beginning
  */
-WS_DLL_PUBLIC int tvb_raw_offset(tvbuff_t *tvb);
+WS_DLL_PUBLIC unsigned tvb_raw_offset(tvbuff_t *tvb);
 
 /**
  * @brief Set the "this is a fragment" flag on a tvbuff.
@@ -2191,7 +2202,7 @@ WS_DLL_PUBLIC const uint8_t *tvb_get_ptr(tvbuff_t *tvb, const int offset,
  * @param offset       The offset in the tvbuff to begin searching.
  * @param needle       The byte value to search for.
  * @param found_offset The offset of the needle, if found. Otherwise, the offset
- * just past the last byte searched.
+ * just past the last byte searched. (The pointer can be NULL.)
  *
  * @return true if the needle is found, false otherwise
  *
@@ -2216,7 +2227,7 @@ WS_DLL_PUBLIC bool tvb_find_uint8_remaining(tvbuff_t *tvb, const unsigned offset
  * @param maxlength    The maximum number of bytes to search.
  * @param needle       The byte value to search for.
  * @param found_offset The offset of the needle, if found. Otherwise, the offset
- * just past the last byte searched.
+ * just past the last byte searched. (The pointer can be NULL.)
  *
  * @return true if the needle is found, false otherwise
  *
@@ -2848,9 +2859,12 @@ const uint8_t *tvb_get_const_stringz(tvbuff_t *tvb,
  *
  * Returns the number of bytes copied, excluding the terminating NUL.
  *
- * If the remaining packet data is less than `bufsize`, this function will not throw
- * an exception if the end of the packet is reached before the NUL byte is found.
- * In that case, the buffer is still guaranteed to be NUL-terminated.
+ * `bufsize` must be at least 1 (for the terminating NULL) and the start offset
+ * must be valid, but otherwise this function will not throw an exception if the
+ * end of the captured packet data is reached before the NUL byte is found or if
+ * `bufsize` is not large enough for the string. It will copy as many bytes to
+ * the buffer as possible (the lesser of `bufsize - 1` and the number of
+ * remaining captured bytes) and NUL terminate the buffer.
  *
  * @param tvb      The tvbuff_t to read from.
  * @param offset   The offset in the tvbuff to start searching and copying.
@@ -2858,8 +2872,10 @@ const uint8_t *tvb_get_const_stringz(tvbuff_t *tvb,
  * @param buffer   The destination buffer where bytes will be copied.
  *
  * @return The number of bytes copied, excluding the terminating NUL.
+ *
+ * @see tvb_get_raw_bytes_as_string
  */
-WS_DLL_PUBLIC int tvb_get_raw_bytes_as_stringz(tvbuff_t *tvb, const int offset,
+WS_DLL_PUBLIC unsigned tvb_get_raw_bytes_as_stringz(tvbuff_t *tvb, const unsigned offset,
     const unsigned bufsize, uint8_t *buffer);
 
 /**
@@ -2876,6 +2892,8 @@ WS_DLL_PUBLIC int tvb_get_raw_bytes_as_stringz(tvbuff_t *tvb, const int offset,
  * @param bufsize  The size of the destination buffer (including space for terminating NUL).
  *
  * @return The number of bytes copied into the buffer, excluding the terminating NUL.
+ *
+ * @see tvb_get_raw_bytes_as_stringz
  */
 WS_DLL_PUBLIC unsigned tvb_get_raw_bytes_as_string(tvbuff_t *tvb, const unsigned offset, char *buffer, size_t bufsize);
 
