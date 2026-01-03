@@ -323,6 +323,7 @@ expert_update_comment_count(uint64_t count)
 		highest_severity = 0;
 }
 
+//coverity[-alloc]
 expert_module_t *expert_register_protocol(int id)
 {
 	expert_module_t *module;
@@ -799,6 +800,11 @@ proto_tree_add_expert_format(proto_tree *tree, packet_info *pinfo, expert_field 
 	va_start(ap, format);
 	expert_set_info_vformat(pinfo, ti, eiinfo->group, eiinfo->severity, *eiinfo->hf_info.p_id, true, format, ap);
 	va_end(ap);
+
+	/* But make sure it throws an exception *after* adding the item */
+	if (length != -1) {
+		tvb_ensure_bytes_exist(tvb, start, length);
+	}
 
 	return ti;
 }
