@@ -2009,7 +2009,7 @@ WS_DLL_PUBLIC uint8_t* tvb_get_bits_array(wmem_allocator_t *scope, tvbuff_t *tvb
  * @see tvb_get_bits64
  */
 WS_DLL_PUBLIC uint8_t tvb_get_bits8(tvbuff_t *tvb, unsigned bit_offset,
-    const int no_of_bits);
+    const unsigned no_of_bits);
 
 /**
  * @brief Retrieve 1–16 bits from a tvbuff and return them as a uint16_t.
@@ -2033,7 +2033,7 @@ WS_DLL_PUBLIC uint8_t tvb_get_bits8(tvbuff_t *tvb, unsigned bit_offset,
  * @see tvb_get_bits64
  */
 WS_DLL_PUBLIC uint16_t tvb_get_bits16(tvbuff_t *tvb, unsigned bit_offset,
-    const int no_of_bits, const unsigned encoding);
+    const unsigned no_of_bits, const unsigned encoding);
 
 /**
  * @brief Retrieve 1–32 bits from a tvbuff and return them as a uint32_t.
@@ -2057,7 +2057,7 @@ WS_DLL_PUBLIC uint16_t tvb_get_bits16(tvbuff_t *tvb, unsigned bit_offset,
  * @see tvb_get_bits64
  */
 WS_DLL_PUBLIC uint32_t tvb_get_bits32(tvbuff_t *tvb, unsigned bit_offset,
-    const int no_of_bits, const unsigned encoding);
+    const unsigned no_of_bits, const unsigned encoding);
 
 /**
  * @brief Retrieve 1–64 bits from a tvbuff and return them as a uint64_t.
@@ -2081,7 +2081,7 @@ WS_DLL_PUBLIC uint32_t tvb_get_bits32(tvbuff_t *tvb, unsigned bit_offset,
  * @see tvb_get_bits32
  */
 WS_DLL_PUBLIC uint64_t tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset,
-    const int no_of_bits, const unsigned encoding);
+    const unsigned no_of_bits, const unsigned encoding);
 
 /**
  * @brief Deprecated accessor for extracting bits from a tvbuff.
@@ -2103,7 +2103,7 @@ WS_DLL_PUBLIC uint64_t tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset,
 WS_DLL_PUBLIC
 WS_DEPRECATED_X("Use tvb_get_bits32() instead")
 uint32_t tvb_get_bits(tvbuff_t *tvb, const unsigned bit_offset,
-    const int no_of_bits, const unsigned encoding);
+    const unsigned no_of_bits, const unsigned encoding);
 
 /**
  * @brief Copy a range of bytes from a tvbuff into a pre-allocated target buffer.
@@ -2910,15 +2910,29 @@ WS_DLL_PUBLIC unsigned tvb_get_raw_bytes_as_string(tvbuff_t *tvb, const unsigned
  *
  * @return true if all bytes are printable ASCII characters, @c false otherwise.
  */
-WS_DLL_PUBLIC bool tvb_ascii_isprint(tvbuff_t *tvb, const int offset,
-	const int length);
+WS_DLL_PUBLIC bool tvb_ascii_isprint(tvbuff_t *tvb, const unsigned offset,
+	const unsigned length);
+
+/**
+ * @brief Check whether all bytes in a tvbuff starting at an offset are ASCII printable characters.
+ *
+ * Iterates over the tvbuff_t starting at `offset` and spanning all captured
+ * bytes, verifying that each byte is an ASCII printable character
+ * (i.e., in the range 0x20 to 0x7E).
+ *
+ * @param tvb      The tvbuff_t to inspect.
+ * @param offset   The offset in the tvbuff to begin checking.
+ *
+ * @return true if all bytes are printable ASCII characters, @c false otherwise.
+ */
+WS_DLL_PUBLIC bool tvb_ascii_isprint_remaining(tvbuff_t *tvb, const unsigned offset);
 
 /**
  * @brief Check if a portion of a tvbuff contains only valid, printable UTF-8 characters.
  *
  * Iterates over the specified portion of the tvbuff_t starting at `offset`
- * and spanning `length` bytes (or until the end if `length` is -1),
- * verifying that the data forms valid UTF-8 sequences consisting entirely of printable characters.
+ * and spanning `length` bytes, verifying that the data forms valid UTF-8
+ * sequences consisting entirely of printable characters.
  *
  * Partial UTF-8 sequences at the end of the range are considered invalid,
  * and in such cases the function returns false.
@@ -2929,10 +2943,30 @@ WS_DLL_PUBLIC bool tvb_ascii_isprint(tvbuff_t *tvb, const int offset,
  *
  * @return true if all characters are valid and printable UTF-8, @c false otherwise.
  *
+ * @see tvb_utf_8_isprint_remaining()
  * @see isprint_utf8_string()
  */
-WS_DLL_PUBLIC bool tvb_utf_8_isprint(tvbuff_t *tvb, const int offset,
-	const int length);
+WS_DLL_PUBLIC bool tvb_utf_8_isprint(tvbuff_t *tvb, const unsigned offset,
+	const unsigned length);
+
+/**
+ * @brief Check if a tvbuff contains only valid, printable UTF-8 characters.
+ *
+ * Iterates over the tvbuff_t starting at `offset`, verifying that the data
+ * forms valid UTF-8 sequences consisting entirely of printable characters.
+ *
+ * Partial UTF-8 sequences at the end of the range are considered invalid,
+ * and in such cases the function returns false.
+ *
+ * @param tvb     The tvbuff_t to check.
+ * @param offset  The offset within the tvbuff where the check begins.
+ *
+ * @return true if all characters are valid and printable UTF-8, @c false otherwise.
+ *
+ * @see tvb_utf_8_isprint()
+ * @see isprint_utf8_string()
+ */
+WS_DLL_PUBLIC bool tvb_utf_8_isprint_remaining(tvbuff_t *tvb, const unsigned offset);
 
 /**
  * @brief Check if all bytes in a tvbuff range are ASCII digits.
@@ -2947,8 +2981,8 @@ WS_DLL_PUBLIC bool tvb_utf_8_isprint(tvbuff_t *tvb, const int offset,
  *
  * @return true if all bytes are ASCII digits, @c false otherwise.
  */
-WS_DLL_PUBLIC bool tvb_ascii_isdigit(tvbuff_t *tvb, const int offset,
-	const int length);
+WS_DLL_PUBLIC bool tvb_ascii_isdigit(tvbuff_t *tvb, const unsigned offset,
+	const unsigned length);
 
 /**
  * @brief Locate the end of a line in a tvbuff, optionally desegmenting.
@@ -3427,7 +3461,7 @@ WS_DLL_PUBLIC char *tvb_bytes_to_str_punct(wmem_allocator_t *scope, tvbuff_t *tv
  * @see tvb_bytes_to_str_punct
  */
 WS_DLL_PUBLIC char *tvb_bytes_to_str(wmem_allocator_t *allocator, tvbuff_t *tvb,
-    const int offset, const int len);
+    const unsigned offset, const unsigned len);
 
 /**
  * @brief Digit mapping table for BCD decoding.

@@ -4041,9 +4041,7 @@ dissect_quic_long_header_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *q
     uint32_t    dcil, scil;
     proto_item  *ti;
 
-    version = tvb_get_ntohl(tvb, offset);
-
-    ti = proto_tree_add_item(quic_tree, hf_quic_version, tvb, offset, 4, ENC_BIG_ENDIAN);
+    ti = proto_tree_add_item_ret_uint(quic_tree, hf_quic_version, tvb, offset, 4, ENC_BIG_ENDIAN, &version);
     if ((version & 0x0F0F0F0F) == 0x0a0a0a0a) {
         proto_item_append_text(ti, " (Forcing Version Negotiation)");
     }
@@ -5173,8 +5171,9 @@ follow_quic_tap_listener(void *tapdata, packet_info *pinfo, epan_dissect_t *edt 
     // XXX: Ideally, we should also deal with stream retransmission
     // and out of order packets in a similar manner to the TCP dissector,
     // using the offset, plus ACKs and other information.
-    follow_record->data = g_byte_array_sized_new(tvb_captured_length(follow_data->tvb));
-    follow_record->data = g_byte_array_append(follow_record->data, tvb_get_ptr(follow_data->tvb, 0, -1), tvb_captured_length(follow_data->tvb));
+    unsigned length = tvb_captured_length(follow_data->tvb);
+    follow_record->data = g_byte_array_sized_new(length);
+    follow_record->data = g_byte_array_append(follow_record->data, tvb_get_ptr(follow_data->tvb, 0, length), length);
     follow_record->packet_num = pinfo->fd->num;
     follow_record->abs_ts = pinfo->fd->abs_ts;
 

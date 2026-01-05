@@ -47,10 +47,10 @@
 #include <time.h>
 
 static uint64_t
-_tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bits);
+_tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const unsigned total_no_of_bits);
 
 static uint64_t
-_tvb_get_bits64_le(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bits);
+_tvb_get_bits64_le(tvbuff_t *tvb, unsigned bit_offset, const unsigned total_no_of_bits);
 
 static inline unsigned
 _tvb_captured_length_remaining(const tvbuff_t *tvb, const unsigned offset);
@@ -1111,8 +1111,8 @@ tvb_memdup(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned offset, size_t
 #if 0
 /* XXX - Is a _remaining variant of this necessary? The user would still need
  * to get the length from tvb_captured_length_remaining() to productively use
- * the (not necessarily null terminated) byte array. But see uses of
- * tvb_get_ptr(...,...,-1) in the repo, which is similar. */
+ * the (not necessarily null terminated) byte array. See also tvb_get_ptr(),
+ * which is similar. */
 void *
 tvb_memdup_remaining(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned offset)
 {
@@ -2362,7 +2362,7 @@ tvb_get_bits_array(wmem_allocator_t *scope, tvbuff_t *tvb, const unsigned bit_of
 
 /* Get 1 - 8 bits */
 uint8_t
-tvb_get_bits8(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits)
+tvb_get_bits8(tvbuff_t *tvb, unsigned bit_offset, const unsigned no_of_bits)
 {
 	DISSECTOR_ASSERT_HINT(no_of_bits <= 8, "Too many bits requested for 8-bit return type");
 	return (uint8_t)_tvb_get_bits64(tvb, bit_offset, no_of_bits);
@@ -2370,7 +2370,7 @@ tvb_get_bits8(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits)
 
 /* Get 1 - 16 bits */
 uint16_t
-tvb_get_bits16(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const unsigned encoding)
+tvb_get_bits16(tvbuff_t *tvb, unsigned bit_offset, const unsigned no_of_bits, const unsigned encoding)
 {
 	DISSECTOR_ASSERT_HINT(no_of_bits <= 16, "Too many bits requested for 16-bit return type");
 	return (uint16_t)tvb_get_bits64(tvb, bit_offset, no_of_bits, encoding);
@@ -2378,7 +2378,7 @@ tvb_get_bits16(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const u
 
 /* Get 1 - 32 bits */
 uint32_t
-tvb_get_bits32(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const unsigned encoding)
+tvb_get_bits32(tvbuff_t *tvb, unsigned bit_offset, const unsigned no_of_bits, const unsigned encoding)
 {
 	DISSECTOR_ASSERT_HINT(no_of_bits <= 32, "Too many bits requested for 32-bit return type");
 	return (uint32_t)tvb_get_bits64(tvb, bit_offset, no_of_bits, encoding);
@@ -2386,7 +2386,7 @@ tvb_get_bits32(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const u
 
 /* Get 1 - 64 bits */
 uint64_t
-tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const unsigned encoding)
+tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const unsigned no_of_bits, const unsigned encoding)
 {
 	DISSECTOR_ASSERT_HINT(no_of_bits <= 64, "Too many bits requested for 64-bit return type");
 
@@ -2406,7 +2406,7 @@ tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const int no_of_bits, const u
  * The function tolerates requests for more than 64 bits, but will only return the least significant 64 bits.
  */
 static uint64_t
-_tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bits)
+_tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const unsigned total_no_of_bits)
 {
 	uint64_t value;
 	unsigned	octet_offset = bit_offset >> 3;
@@ -2485,12 +2485,12 @@ _tvb_get_bits64(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bits)
  * The function tolerates requests for more than 64 bits, but will only return the least significant 64 bits.
  */
 static uint64_t
-_tvb_get_bits64_le(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bits)
+_tvb_get_bits64_le(tvbuff_t *tvb, unsigned bit_offset, const unsigned total_no_of_bits)
 {
 	uint64_t value = 0;
 	unsigned octet_offset = bit_offset / 8;
-	int remaining_bits = total_no_of_bits;
-	int shift = 0;
+	unsigned remaining_bits = total_no_of_bits;
+	unsigned shift = 0;
 
 	if (remaining_bits > 64)
 	{
@@ -2553,7 +2553,7 @@ _tvb_get_bits64_le(tvbuff_t *tvb, unsigned bit_offset, const int total_no_of_bit
 
 /* Get 1 - 32 bits (should be deprecated as same as tvb_get_bits32??) */
 uint32_t
-tvb_get_bits(tvbuff_t *tvb, const unsigned bit_offset, const int no_of_bits, const unsigned encoding)
+tvb_get_bits(tvbuff_t *tvb, const unsigned bit_offset, const unsigned no_of_bits, const unsigned encoding)
 {
 	return (uint32_t)tvb_get_bits64(tvb, bit_offset, no_of_bits, encoding);
 }
@@ -4391,16 +4391,15 @@ tvb_get_raw_bytes_as_string(tvbuff_t *tvb, const unsigned offset, char *buffer, 
 }
 
 bool
-tvb_ascii_isprint(tvbuff_t *tvb, const int offset, const int length)
+tvb_ascii_isprint(tvbuff_t *tvb, const unsigned offset, const unsigned length)
 {
-	const uint8_t* buf = tvb_get_ptr(tvb, offset, length);
-	unsigned abs_offset, abs_length = length;
+	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
-	if (length == -1) {
-		/* tvb_get_ptr has already checked for exceptions. */
-		compute_offset_and_remaining(tvb, offset, &abs_offset, &abs_length);
-	}
-	for (unsigned i = 0; i < abs_length; i++, buf++)
+	/* XXX - Perhaps this function should return false instead of throwing
+	 * an exception. */
+	const uint8_t* buf = ensure_contiguous_unsigned(tvb, offset, length);
+
+	for (unsigned i = 0; i < length; i++, buf++)
 		if (!g_ascii_isprint(*buf))
 			return false;
 
@@ -4408,30 +4407,65 @@ tvb_ascii_isprint(tvbuff_t *tvb, const int offset, const int length)
 }
 
 bool
-tvb_utf_8_isprint(tvbuff_t *tvb, const int offset, const int length)
+tvb_ascii_isprint_remaining(tvbuff_t *tvb, const unsigned offset)
 {
-	const uint8_t* buf = tvb_get_ptr(tvb, offset, length);
-	unsigned abs_offset, abs_length = length;
+	int exception;
+	unsigned length;
 
-	if (length == -1) {
-		/* tvb_get_ptr has already checked for exceptions. */
-		compute_offset_and_remaining(tvb, offset, &abs_offset, &abs_length);
-	}
+	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
-	return isprint_utf8_string((const char*)buf, abs_length);
+	exception = validate_offset_and_remaining(tvb, offset, &length);
+	if (exception)
+		THROW(exception);
+
+	const uint8_t* buf = ensure_contiguous_unsigned(tvb, offset, length);
+
+	for (unsigned i = 0; i < length; i++, buf++)
+		if (!g_ascii_isprint(*buf))
+			return false;
+
+	return true;
 }
 
 bool
-tvb_ascii_isdigit(tvbuff_t *tvb, const int offset, const int length)
+tvb_utf_8_isprint(tvbuff_t *tvb, const unsigned offset, const unsigned length)
 {
-	const uint8_t* buf = tvb_get_ptr(tvb, offset, length);
-	unsigned abs_offset, abs_length = length;
+	DISSECTOR_ASSERT(tvb && tvb->initialized);
 
-	if (length == -1) {
-		/* tvb_get_ptr has already checked for exceptions. */
-		compute_offset_and_remaining(tvb, offset, &abs_offset, &abs_length);
-	}
-	for (unsigned i = 0; i < abs_length; i++, buf++)
+	/* XXX - Perhaps this function should return false instead of throwing
+	 * an exception. */
+	const uint8_t* buf = ensure_contiguous_unsigned(tvb, offset, length);
+
+	return isprint_utf8_string((const char*)buf, length);
+}
+
+bool
+tvb_utf_8_isprint_remaining(tvbuff_t *tvb, const unsigned offset)
+{
+	int exception;
+	unsigned length;
+
+	DISSECTOR_ASSERT(tvb && tvb->initialized);
+
+	exception = validate_offset_and_remaining(tvb, offset, &length);
+	if (exception)
+		THROW(exception);
+
+	const uint8_t* buf = ensure_contiguous_unsigned(tvb, offset, length);
+
+	return isprint_utf8_string((const char*)buf, length);
+}
+
+bool
+tvb_ascii_isdigit(tvbuff_t *tvb, const unsigned offset, const unsigned length)
+{
+	DISSECTOR_ASSERT(tvb && tvb->initialized);
+
+	/* XXX - Perhaps this function should return false instead of throwing
+	 * an exception. */
+	const uint8_t* buf = ensure_contiguous_unsigned(tvb, offset, length);
+
+	for (unsigned i = 0; i < length; i++, buf++)
 		if (!g_ascii_isdigit(*buf))
 			return false;
 
@@ -5196,11 +5230,10 @@ tvb_bcd_dig_to_str_be(wmem_allocator_t *scope, tvbuff_t *tvb, const int offset, 
  * Format a bunch of data from a tvbuff as bytes, returning a pointer
  * to the string with the formatted data.
  */
-char *tvb_bytes_to_str(wmem_allocator_t *allocator, tvbuff_t *tvb,
-    const int offset, const int len)
+char *
+tvb_bytes_to_str(wmem_allocator_t *allocator, tvbuff_t *tvb, const unsigned offset, const unsigned len)
 {
-	DISSECTOR_ASSERT(len >= 0);
-	return bytes_to_str(allocator, ensure_contiguous(tvb, offset, len), len);
+	return bytes_to_str(allocator, ensure_contiguous_unsigned(tvb, offset, len), len);
 }
 
 /* Find a needle tvbuff within a haystack tvbuff. */
