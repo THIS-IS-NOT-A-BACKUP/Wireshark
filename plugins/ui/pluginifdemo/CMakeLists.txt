@@ -10,7 +10,7 @@
 include(WiresharkPlugin)
 
 # Plugin name and version info (major minor micro extra)
-set_module_info(pluginifdemo 0 0 2 0)
+set_module_info(pluginifdemo 0 0 3 0)
 
 SET(CMAKE_AUTOMOC ON)
 SET(CMAKE_AUTOUIC ON)
@@ -52,15 +52,15 @@ set_source_files_properties(
 )
 
 register_plugin_files(plugin.c
-	plugin
+	plugin_ui
 	${DISSECTOR_SRC}
 )
 
-add_wireshark_plugin_library(pluginifdemo epan)
+add_wireshark_plugin_library(pluginifdemo ui)
 
-target_link_libraries(pluginifdemo epan Qt${qtver}::Core Qt${qtver}::Widgets Qt${qtver}::PrintSupport)
+target_link_libraries(pluginifdemo epan uiqt_plugin Qt${qtver}::Core Qt${qtver}::Widgets Qt${qtver}::PrintSupport)
 
-install_plugin(pluginifdemo epan)
+install_plugin(pluginifdemo ui)
 
 file(GLOB DISSECTOR_HEADERS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.h")
 CHECKAPI(
