@@ -214,10 +214,24 @@ compatible_encoding_args['FT_STRINGZ'] = compatible_encoding_args['FT_STRING']
 compatible_encoding_multiple_flags_allowed = set(['FT_ABSOLUTE_TIME', 'FT_RELATIVE_TIME', 'FT_STRING', 'FT_STRINGZ'])
 
 
+# item type -> set<encodings>
+unsupported_encoding_args = {
+    'FT_STRINGZ':   set(['ENC_BCD_DIGITS_0_9',
+                         'ENC_KEYPAD_ABC_TBCD',
+                         'ENC_KEYPAD_BC_TBCD',
+                         'ENC_DECT_STANDARD_4BITS_TBCD',
+                         'ENC_3GPP_TS_23_038_7BITS_PACKED',
+                         'ENC_3GPP_TS_23_038_7BITS_UNPACKED',
+                         'ENC_ETSI_TS_102_221_ANNEX_A',
+                         'ENC_ASCII_7BITS',
+                         'ENC_APN_STR'])
+}
+
 class EncodingCheckerBasic:
-    def __init__(self, type, allowed_encodings, allow_multiple):
+    def __init__(self, type, allowed_encodings, unsupported_encodings, allow_multiple):
         self.type = type
         self.allowed_encodings = allowed_encodings
+        self.unsupported_encodings = unsupported_encodings
         self.allow_multiple = allow_multiple
         self.encodings_seen = 0
 
@@ -243,6 +257,13 @@ class EncodingCheckerBasic:
             result.warn(api_check.file + ':' + str(call.line_number),
                         api_check.fun_name + ' called for ' + type + ' field "' + call.hf_name + '"', ' - with bad encoding - ' + '"' + encoding + '"', '-',
                         compatible_encoding_args[type], 'allowed')
+
+        # Warn if encoding not supported for this type
+        if encoding in self.unsupported_encodings:
+            result.warn(api_check.file + ':' + str(call.line_number),
+                        api_check.fun_name + ' called for ' + type + ' field "' + call.hf_name + '"', ' - with unsupported encoding - ' + '"' + encoding + '"')
+
+
         self.encodings_seen += 1
 
 
@@ -251,7 +272,8 @@ class EncodingCheckerBasic:
 def create_enc_checker(type):
     if type in compatible_encoding_args:
         allow_multiple = type in compatible_encoding_multiple_flags_allowed
-        checker = EncodingCheckerBasic(type, compatible_encoding_args[type], allow_multiple)
+        checker = EncodingCheckerBasic(type, compatible_encoding_args[type],
+                                       unsupported_encoding_args[type] if type in unsupported_encoding_args else set(), allow_multiple)
         return checker
     else:
         return None
@@ -2171,11 +2193,20 @@ def find_item_extern_declarations(filename, lines):
             items.add(m.group(1))
     return items
 
+fetch_functions = [ 'tvb_get_ntohl', 'tvb_get_letohl', 'tvb_get_ntoh64', 'tvb_get_letoh64' ]
+
+def line_has_fetch_function(line):
+    for f in fetch_functions:
+        if f in line:
+            return True
+    return False
+
+
 def check_double_fetches(filename, contents, items, result):
     lines = contents.splitlines()
     contents = '\n'.join(line for line in lines if line.strip())
 
-    line_re = r'([a-zA-Z0-9_= ;\(\)\+\"\-\{\}\*\,\&\+\[\]\!]*?)\n'
+    line_re = r'([\*a-zA-Z0-9_= ;\(\)\+\"\-\{\}\*\,\&\+\[\]\!]*?)\n'
 
     # Look for all calls in this file - note line before and after item added
     matches = re.finditer(r'\n' + line_re +
@@ -2204,19 +2235,45 @@ def check_double_fetches(filename, contents, items, result):
 
         # TODO: verify same value of offset for both calls?
 
-        # Make sure item is of an integer type
-        if 'FT_UINT' not in item_type:
+        # Make sure item is a known integer type
+        if 'FT_UINT' in item_type:
+            signed_type = False
+        elif 'FT_INT' in item_type:
+            signed_type = True
+        else:
             continue
 
-        if 'tvb_get_ntohl' in prev_line and hf_name.endswith(first_prev_token) and '=' in prev_line_tokens:
+        # Need to get a notion of the width
+        if item_type in field_widths:
+            field_width = int(field_widths[item_type] / 8)
+        else:
+            field_width = 0
+
+        if field_width != 4 and field_width != 8:
+            continue
+
+        # Use width and signedness to decide which combined function to suggest
+        if field_width == 4:
+            if signed_type:
+                suggest = 'proto_tree_add_item_ret_int'
+            else:
+                suggest = 'proto_tree_add_item_ret_uint'
+        else:
+            if signed_type:
+                suggest = 'proto_tree_add_item_ret_int64'
+            else:
+                suggest = 'proto_tree_add_item_ret_uint64'
+
+
+        if line_has_fetch_function(prev_line) and hf_name.endswith(first_prev_token) and '=' in prev_line_tokens:
             result.warn(filename, 'PREV: val=', first_prev_token, 'hfname=', hf_name,
                         'mask=', mask_value, 'type=', item_type,
-                        '- use proto_tree_add_item_ret_uint() ?\n',
+                        '- use', suggest + '() ?\n',
                         m.group(0))
-        elif 'tvb_get_ntohl' in next_line and hf_name.endswith(first_next_token) and '=' in next_line_tokens:
+        elif line_has_fetch_function(next_line) and hf_name.endswith(first_next_token) and '=' in next_line_tokens:
             result.warn(filename, 'NEXT: val=', first_next_token, 'hfname=', hf_name,
                         'mask=', mask_value, 'type=', item_type,
-                        '- use proto_tree_add_item_ret_uint() ?\n',
+                        '- use', suggest + '() ?\n',
                         m.group(0))
 
 

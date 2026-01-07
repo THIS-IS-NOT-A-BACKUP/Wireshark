@@ -239,7 +239,7 @@ WS_DLL_PUBLIC void tvb_set_child_real_data_tvbuff(tvbuff_t *parent,
  * @return A new child tvbuff_t referencing the provided data.
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_new_child_real_data(tvbuff_t *parent,
-    const uint8_t *data, const unsigned length, const int reported_length);
+    const uint8_t *data, const unsigned length, const unsigned reported_length);
 
 /**
  * @brief Create a tvbuff backed by existing data.
@@ -255,7 +255,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_new_child_real_data(tvbuff_t *parent,
  * @return A pointer to the newly created tvbuff backed by the provided data.
  */
 WS_DLL_PUBLIC tvbuff_t *tvb_new_real_data(const uint8_t *data,
-    const unsigned length, const int reported_length);
+    const unsigned length, const unsigned reported_length);
 
 /**
  * @brief Create a subset tvbuff with an explicitly limited captured length.
@@ -2515,6 +2515,7 @@ static inline int tvb_ws_mempbrk_pattern_guint8(tvbuff_t* tvb, const int offset,
  * @return The size of the string, including the terminating NUL.
  *
  * @see tvb_strnlen
+ * @see tvb_strsize_enc
  */
 WS_DLL_PUBLIC unsigned tvb_strsize(tvbuff_t *tvb, const unsigned offset);
 
@@ -2531,8 +2532,35 @@ WS_DLL_PUBLIC unsigned tvb_strsize(tvbuff_t *tvb, const unsigned offset);
  * @param offset  The offset in the tvbuff to begin searching.
  *
  * @return The size of the string, including the terminating 16-bit NUL.
+ *
+ * @see tvb_strsize_enc
  */
 WS_DLL_PUBLIC unsigned tvb_unicode_strsize(tvbuff_t *tvb, const unsigned offset);
+
+/**
+ * @brief Determine the size of a NUL-terminated string in a given encoding in a tvbuff.
+ *
+ * Finds the size of a stringz (NUL-terminated string) in the given encoding by
+ * searching for the appropriate terminator starting at the given offset. The
+ * returned size includes the terminator.
+ *
+ * For most encodings the terminator is a single NUL byte. For UTF-16 and UCS-2,
+ * it is a 16-bit NUL value, and for UTF-32 a 32-bit NUL value. Some encodings
+ * do not support NUL-termination; for those encodings, this function will
+ * report a dissector bug.
+ *
+ * If the NUL is not found, this function throws the appropriate exception.
+ *
+ * @param tvb      The tvbuff_t to read from.
+ * @param offset   The offset in the tvbuff to begin searching.
+ * @param encoding The encoding to use.
+ *
+ * @return The size of the string, including the terminating NUL.
+ *
+ * @see tvb_strsize
+ * @see tvb_unicode_strsize
+ */
+WS_DLL_PUBLIC unsigned tvb_strsize_enc(tvbuff_t *tvb, const unsigned offset, const unsigned encoding);
 
 /**
  * @brief Find the length of a NUL-terminated string in a tvbuff, up to a maximum limit.
