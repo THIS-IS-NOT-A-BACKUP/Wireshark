@@ -3333,7 +3333,7 @@ WS_DLL_PUBLIC int tvb_get_token_len(tvbuff_t *tvb, const unsigned offset, int le
  * a delimiter, where the separators are space, line feed, or carriage return.
  *
  * If `tokenlen` is non-null and a delimiter is found, sets `*tokenlen`
- * to the length of the line, not including the delimter. If no delimiter
+ * to the length of the line, not including the delimiter. If no delimiter
  * is found, sets `*linelen` to the remaining captured length of the buffer.
  *
  * If `next_offset` is non-null and a terminator is found, sets `*next_offset` to the offset
@@ -4010,7 +4010,7 @@ WS_DLL_PUBLIC tvbuff_t *tvb_child_uncompress_zstd(tvbuff_t *parent,
  * This is useful for handling embedded base64 payloads in protocol dissectors.
  *
  * @param parent  The parent tvbuff_t to which the decoded tvbuff will be attached.
- * @param base64  The base64-encoded string to decode.
+ * @param base64  The base64-encoded string to decode. (Must be NULL-terminated.)
  *
  * @return A new tvbuff_t containing the decoded binary data, or NULL on failure.
  */
@@ -4034,7 +4034,7 @@ WS_DLL_PUBLIC tvbuff_t* base64_to_tvb(tvbuff_t *parent, const char *base64);
  *
  * @see base64_to_tvb
  */
-WS_DLL_PUBLIC tvbuff_t* base64_tvb_to_new_tvb(tvbuff_t* parent, int offset, int length);
+WS_DLL_PUBLIC tvbuff_t* base64_tvb_to_new_tvb(tvbuff_t* parent, unsigned offset, unsigned length);
 
 /**
  * @brief Decode a base64url-encoded string from a tvbuff region and attach the result to a parent tvbuff.
@@ -4055,7 +4055,7 @@ WS_DLL_PUBLIC tvbuff_t* base64_tvb_to_new_tvb(tvbuff_t* parent, int offset, int 
  *
  * @see base64_tvb_to_new_tvb
  */
-WS_DLL_PUBLIC tvbuff_t* base64uri_tvb_to_new_tvb(tvbuff_t* parent, int offset, int length);
+WS_DLL_PUBLIC tvbuff_t* base64uri_tvb_to_new_tvb(tvbuff_t* parent, unsigned offset, unsigned length);
 
 /* From tvbuff_hpackhuff.c */
 
