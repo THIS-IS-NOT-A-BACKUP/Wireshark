@@ -931,20 +931,20 @@ Section "-Plugins & Extensions"
 
 ;-------------------------------------------
 SetOutPath '$INSTDIR\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan'
-File "${STAGING_DIR}\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan\falco-events.dll"
+File "${STAGING_DIR}\plugins\stratoshark\${MAJOR_VERSION}.${MINOR_VERSION}\epan\falco-events.dll"
 SetOutPath '$INSTDIR\plugins\falco'
-File "${STAGING_DIR}\plugins\falco\cloudtrail.dll"
-File "${STAGING_DIR}\plugins\falco\gcpaudit.dll"
-File "${STAGING_DIR}\plugins\falco\k8saudit.dll"
+File "${STAGING_DIR}\plugins\stratoshark\falco\cloudtrail.dll"
+File "${STAGING_DIR}\plugins\stratoshark\falco\gcpaudit.dll"
+File "${STAGING_DIR}\plugins\stratoshark\falco\k8saudit.dll"
 !include "custom_plugins.txt"
 
 ;-------------------------------------------
 SetOutPath '$INSTDIR\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan'
-File "${STAGING_DIR}\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan\stats_tree.dll"
+File "${STAGING_DIR}\plugins\wireshark\${MAJOR_VERSION}.${MINOR_VERSION}\epan\stats_tree.dll"
 
 ;-------------------------------------------
 SetOutPath '$INSTDIR\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan'
-File "${STAGING_DIR}\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan\mate.dll"
+File "${STAGING_DIR}\plugins\wireshark\${MAJOR_VERSION}.${MINOR_VERSION}\epan\mate.dll"
 
 !include wireshark-profile-manifest.nsh
 
@@ -959,12 +959,6 @@ File "${SMI_DIR}\share\pibs\*"
 File "${SMI_DIR}\share\yang\*.yang"
 !include "custom_mibs.txt"
 !endif
-
-SetOutPath '$INSTDIR\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan'
-File "${STAGING_DIR}\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan\transum.dll"
-
-SetOutPath '$INSTDIR\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan'
-File "${STAGING_DIR}\plugins\${MAJOR_VERSION}.${MINOR_VERSION}\epan\stats_tree.dll"
 
 SectionEnd ; "Plugins / Extensions"
 
