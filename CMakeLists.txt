@@ -75,11 +75,11 @@ include( CMakeOptions.txt )
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# We require minimum C++11. libscap and libsinsp require C++ 17.
+# We require minimum C++14. libscap and libsinsp require C++ 17.
 if(BUILD_stratoshark OR BUILD_falcodump OR BUILD_dumpcalls)
 	set(CMAKE_CXX_STANDARD 17)
 else()
-	set(CMAKE_CXX_STANDARD 11)
+	set(CMAKE_CXX_STANDARD 14)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -1551,8 +1551,7 @@ if(FETCH_lua)
 	# Download and build lua
 	include(${CMAKE_SOURCE_DIR}/cmake/external/lua54/Lua54.cmake)
 else()
-	set(LUA_FIND_VERSIONS "5.4;5.3" CACHE STRING "Lua versions valid for the build (as a list)")
-	ws_find_package(Lua ENABLE_LUA HAVE_LUA)
+	ws_find_package(Lua ENABLE_LUA HAVE_LUA "5.3")
 endif()
 
 ws_find_package(NL ENABLE_NETLINK HAVE_LIBNL)
