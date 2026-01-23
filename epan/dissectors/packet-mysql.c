@@ -2173,7 +2173,6 @@ mysql_dissect_login(tvbuff_t *tvb, packet_info *pinfo, int offset,
 
 	if (!(conn_data->frame_start_ssl) && conn_data->clnt_caps & MYSQL_CAPS_SL) /* Next packet will be use SSL */
 	{
-		col_set_str(pinfo->cinfo, COL_INFO, "Response: SSL Handshake");
 		conn_data->frame_start_ssl = pinfo->num;
 		ssl_starttls_ack(tls_handle, pinfo, mysql_handle);
 	}
@@ -2204,6 +2203,14 @@ mysql_dissect_login(tvbuff_t *tvb, packet_info *pinfo, int offset,
 	} else { /* pre-4.1 */
 		proto_tree_add_item(login_tree, hf_mysql_max_packet, tvb, offset, 3, ENC_LITTLE_ENDIAN);
 		offset += 3;
+	}
+
+	// If client and server both set CLIENT_SSL then a lot of extra info is left out
+	// Protocol::SSLRequest: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_ssl_request.html
+	if ((conn_data->clnt_caps_ext & MYSQL_CAPS_SL)
+		&& (conn_data->srv_caps_ext & MYSQL_CAPS_SL)
+		&& !tvb_reported_length_remaining(tvb, offset)) {
+		return offset;
 	}
 
 	/* User name */
@@ -3251,6 +3258,7 @@ mysql_dissect_response(tvbuff_t *tvb, packet_info *pinfo, int offset,
 			if (conn_data->compressed_state == MYSQL_COMPRESS_INIT) {
 				/* This is the OK packet which follows the compressed protocol setup */
 				conn_data->compressed_state = MYSQL_COMPRESS_ACTIVE;
+				conn_data->frame_start_compressed = pinfo->num;
 			}
 			if (current_state == CLONE_INIT)
 				mysql_set_conn_state(pinfo, conn_data, CLONE_ACTIVE);
@@ -4803,15 +4811,15 @@ dissect_mysql_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* dat
 			col_set_str(pinfo->cinfo, COL_INFO, "Login Request");
 			offset = mysql_dissect_login(tvb, pinfo, offset, mysql_tree, conn_data);
 
-			// If both zlib and ZSTD flags are set then zlib is used.
-			if ((conn_data->srv_caps & MYSQL_CAPS_CP) && (conn_data->clnt_caps & MYSQL_CAPS_CP)) {
-				conn_data->frame_start_compressed = pinfo->num;
-				conn_data->compressed_state = MYSQL_COMPRESS_INIT;
-				conn_data->compressed_alg = MYSQL_COMPRESS_ALG_ZLIB;
-			} else if ((conn_data->srv_caps_ext & MYSQL_CAPS_ZS) && (conn_data->clnt_caps_ext & MYSQL_CAPS_ZS)) {
-				conn_data->frame_start_compressed = pinfo->num;
-				conn_data->compressed_state = MYSQL_COMPRESS_INIT;
-				conn_data->compressed_alg = MYSQL_COMPRESS_ALG_ZSTD;
+			if (conn_data->compressed_state == MYSQL_COMPRESS_NONE) {
+				// If both zlib and ZSTD flags are set then zlib is used.
+				if ((conn_data->srv_caps & MYSQL_CAPS_CP) && (conn_data->clnt_caps & MYSQL_CAPS_CP)) {
+					conn_data->compressed_state = MYSQL_COMPRESS_INIT;
+					conn_data->compressed_alg = MYSQL_COMPRESS_ALG_ZLIB;
+				} else if ((conn_data->srv_caps_ext & MYSQL_CAPS_ZS) && (conn_data->clnt_caps_ext & MYSQL_CAPS_ZS)) {
+					conn_data->compressed_state = MYSQL_COMPRESS_INIT;
+					conn_data->compressed_alg = MYSQL_COMPRESS_ALG_ZSTD;
+				}
 			}
 		} else if ((mysql_frame_data_p->state == CLONE_ACTIVE) || (mysql_frame_data_p->state == CLONE_EXIT)) {
 			col_set_str(pinfo->cinfo, COL_INFO, "Clone Request");
@@ -4930,6 +4938,7 @@ dissect_mysql_compressed_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 		conn_data = wmem_new0(wmem_file_scope(), mysql_conn_data_t);
 		conn_data->stmts = wmem_tree_new(wmem_file_scope());
 		conn_data->compressed_state = MYSQL_COMPRESS_ACTIVE;
+		conn_data->frame_start_compressed = pinfo->num;
 		conn_data->encoding_client = ENC_UTF_8;
 		conn_data->encoding_results = ENC_UTF_8;
 		conversation_add_proto_data(conversation, proto_mysql, conn_data);
