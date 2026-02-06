@@ -2740,7 +2740,8 @@ dissect_gsm_apdu(uint8_t ins, uint8_t p1, uint8_t p2, uint16_t p3, bool extended
 		proto_tree_add_item(sim_tree, hf_apdu_data, tvb, offset+data_offs, p3, ENC_NA);
 		dissect_storage_data_command(tvb, offset+data_offs, p3, pinfo, tree, sim_tree, gsm_sim_trans);
 		offset += data_offs + p3;
-		if (tvb_reported_length_remaining(tvb, offset)) {
+		if (p1 & 0x80) {
+			/* Le is mandatory for "Last block" and not present for "More blocks" */
 			dissect_apdu_le(sim_tree, tvb, offset, extended_len, false);
 			offset += (extended_len ? 2 : 1);
 		}
@@ -2874,10 +2875,10 @@ dissect_rsp_apdu_tvb(tvbuff_t *tvb, int offset, packet_info *pinfo, proto_tree *
 	if (ti) {
 		/* Always show status in info column when response only */
 		if (response_only && ins) {
-			col_add_fstr(pinfo->cinfo, COL_INFO, "Response, %s, %s",
+			col_append_sep_fstr(pinfo->cinfo, COL_INFO, " | ", "Response, %s, %s",
 				     val_to_str(pinfo->pool, ins, apdu_ins_vals, "%02x"), get_sw_string(pinfo->pool, sw));
 		} else if (response_only) {
-			col_add_fstr(pinfo->cinfo, COL_INFO, "Response, %s ", get_sw_string(pinfo->pool, sw));
+			col_append_sep_fstr(pinfo->cinfo, COL_INFO, " | ", "Response, %s ", get_sw_string(pinfo->pool, sw));
 		}
 	} else {
 		switch (sw >> 8) {
@@ -3024,10 +3025,10 @@ dissect_cmd_apdu_tvb(tvbuff_t *tvb, int offset, packet_info *pinfo, proto_tree *
 	offset += 2;
 
 	if ((cla & 0x50) == 0x40) {
-		col_append_fstr(pinfo->cinfo, COL_INFO, "%s ",
+		col_append_sep_fstr(pinfo->cinfo, COL_INFO, " | ", "%s ",
 				val_to_str(pinfo->pool, cla>>6, apdu_cla_coding_ext_vals, "%01x"));
 	} else {
-		col_append_fstr(pinfo->cinfo, COL_INFO, "%s ",
+		col_append_sep_fstr(pinfo->cinfo, COL_INFO, " | ", "%s ",
 				val_to_str(pinfo->pool, cla>>4, apdu_cla_coding_vals, "%01x"));
 	}
 
