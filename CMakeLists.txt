@@ -238,8 +238,8 @@ if(WIN32)
 	# Download Npcap required by the Windows installer.
 	# We do this here and not in FetchArtifacts.cmake because this
 	# is required by both the Visual Studio and MSYS2 builds.
-	set(NPCAP_VERSION "1.86")
-	set(NPCAP_SHA256 "a4f7ab0c5850b819dc7a131213c16a9deaf8d32bceed7131fea38740ea788503")
+	set(NPCAP_VERSION "1.87")
+	set(NPCAP_SHA256 "142c234f09a9618d7cdc2c37f607d6fc06615fad5581f728b60d4ad659f906bd")
 	set(NPCAP_FILENAME "npcap-${NPCAP_VERSION}.exe")
 	set(NPCAP_URL "${LIBS_URL}/Npcap/${NPCAP_FILENAME}")
 	FetchContent_Declare(Npcap
@@ -2352,28 +2352,6 @@ if(USE_REPOSITORY)
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${_dll_output_dir}"
 	)
 
-	# XXX Can (and should) we iterate over these similar to the way
-	# the top-level CMakeLists.txt iterates over the package list?
-
-	# Required DLLs and their corresponding PDBs.
-	add_custom_command(TARGET copy_cli_dlls PRE_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-			"$<IF:$<CONFIG:Debug>,${GLIB2_DLLS_DEBUG},${GLIB2_DLLS_RELEASE}>"
-			"$<IF:$<CONFIG:Debug>,${GLIB2_PDBS_DEBUG},${GLIB2_PDBS_RELEASE}>"
-			"${_dll_output_dir}"
-		WORKING_DIRECTORY $<IF:$<CONFIG:Debug>,${GLIB2_DLL_DIR_DEBUG},${GLIB2_DLL_DIR_RELEASE}>
-		COMMAND_EXPAND_LISTS
-	)
-
-	add_custom_command(TARGET copy_cli_dlls PRE_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-			"$<IF:$<CONFIG:Debug>,${PCRE2_DEBUG_DLL},${PCRE2_RELEASE_DLL}>"
-			"$<IF:$<CONFIG:Debug>,${PCRE2_DEBUG_PDB},${PCRE2_RELEASE_PDB}>"
-			"${_dll_output_dir}"
-		WORKING_DIRECTORY $<IF:$<CONFIG:Debug>,${PCRE2_DEBUG_DLL_DIR},${PCRE2_RELEASE_DLL_DIR}>
-		COMMAND_EXPAND_LISTS
-	)
-
 	if (MSVC AND VLD_FOUND)
 		add_custom_command(TARGET copy_cli_dlls PRE_BUILD
 			COMMAND ${CMAKE_COMMAND} -E "$<IF:$<CONFIG:Debug>,copy_if_different,true>"
@@ -2399,6 +2377,30 @@ if(USE_REPOSITORY)
 			list (APPEND THIRD_PARTY_DLLS "${LIBSSH_DLL_DIR}/${_dll}")
 		endforeach(_dll)
 	endif(LIBSSH_FOUND)
+	foreach(_dll ${GLIB2_DLLS_DEBUG})
+		list(APPEND THIRD_PARTY_DLLS "$<$<CONFIG:Debug>:${GLIB2_DLL_DIR_DEBUG}/${_dll}>")
+	endforeach()
+	foreach(_pdb ${GLIB2_PDBS_DEBUG})
+		list(APPEND THIRD_PARTY_PDBS "$<$<CONFIG:Debug>:${GLIB2_DLL_DIR_DEBUG}/${_pdb}>")
+	endforeach()
+	foreach(_dll ${GLIB2_DLLS_RELEASE})
+		list(APPEND THIRD_PARTY_DLLS "$<$<NOT:$<CONFIG:Debug>>:${GLIB2_DLL_DIR_RELEASE}/${_dll}>")
+	endforeach()
+	foreach(_pdb ${GLIB2_PDBS_RELEASE})
+		list(APPEND THIRD_PARTY_PDBS "$<$<NOT:$<CONFIG:Debug>>:${GLIB2_DLL_DIR_RELEASE}/${_pdb}>")
+	endforeach()
+	foreach(_dll ${PCRE2_DEBUG_DLL})
+		list(APPEND THIRD_PARTY_DLLS "$<$<CONFIG:Debug>:${PCRE2_DEBUG_DLL_DIR}/${_dll}>")
+	endforeach()
+	foreach(_pdb ${PCRE2_DEBUG_PDB})
+		list(APPEND THIRD_PARTY_PDBS "$<$<CONFIG:Debug>:${PCRE2_DEBUG_DLL_DIR}/${_pdb}>")
+	endforeach()
+	foreach(_dll ${PCRE2_RELEASE_DLL})
+		list(APPEND THIRD_PARTY_DLLS "$<$<NOT:$<CONFIG:Debug>>:${PCRE2_RELEASE_DLL_DIR}/${_dll}>")
+	endforeach()
+	foreach(_pdb ${PCRE2_RELEASE_PDB})
+		list(APPEND THIRD_PARTY_PDBS "$<$<NOT:$<CONFIG:Debug>>:${PCRE2_RELEASE_DLL_DIR}/${_pdb}>")
+	endforeach()
 	foreach( _dll ${GCRYPT_DLLS} )
 		list (APPEND THIRD_PARTY_DLLS "${GCRYPT_DLL_DIR}/${_dll}")
 	endforeach(_dll)
