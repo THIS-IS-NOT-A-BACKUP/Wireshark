@@ -230,6 +230,18 @@ static int hf_tcpip_admin_capability_configurable;
 static int hf_tcpip_admin_capability_reset_required;
 static int hf_tcpip_admin_capability_reserved;
 
+static int hf_tcpip_protocol_count;
+static int hf_tcpip_protocol_name;
+static int hf_tcpip_protocol_number;
+static int hf_tcpip_protocol_admin_state;
+static int hf_tcpip_protocol_admin_capability;
+static int hf_tcpip_protocol_admin_capability_configurable;
+static int hf_tcpip_protocol_admin_capability_reset_required;
+static int hf_tcpip_protocol_admin_capability_reserved;
+
+static int hf_tcpip_active_tcp_connections;
+static int hf_tcpip_non_cip_encp_msg_per_s;
+
 static int hf_elink_interface_flags;
 static int hf_elink_iflags_link_status;
 static int hf_elink_iflags_duplex;
@@ -305,6 +317,13 @@ static int hf_qos_dscp_scheduled;
 static int hf_qos_dscp_high;
 static int hf_qos_dscp_low;
 static int hf_qos_dscp_explicit;
+static int hf_qos_pcp_ptp_event;
+static int hf_qos_pcp_ptp_general;
+static int hf_qos_pcp_ptp_urgent;
+static int hf_qos_pcp_ptp_scheduled;
+static int hf_qos_pcp_ptp_high;
+static int hf_qos_pcp_ptp_low;
+static int hf_qos_pcp_ptp_explicit;
 
 static int hf_dlr_network_topology;
 static int hf_dlr_network_status;
@@ -415,6 +434,7 @@ static int ett_sockadd;
 static int ett_lsrcf;
 static int ett_tcpip_status;
 static int ett_tcpip_admin_capability;
+static int ett_tcpip_protocol_admin_capability;
 static int ett_tcpip_config_cap;
 static int ett_tcpip_config_control;
 static int ett_elink_interface_flags;
@@ -2505,6 +2525,74 @@ static int dissect_tcpip_set_port_admin_state(packet_info *pinfo, proto_tree *tr
    }
 }
 
+// Most of the information for the IANA Protocol Admin attribute and Set_Protocol_Admin_State service is the same.
+static int dissect_tcpip_protocol_information(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+   int offset, bool attribute_version)
+{
+   int start_offset = offset;
+
+   uint32_t protocol_count;
+   proto_tree_add_item_ret_uint(tree, hf_tcpip_protocol_count, tvb, offset, 1, ENC_LITTLE_ENDIAN, &protocol_count);
+   offset++;
+
+   for (uint32_t i = 0; i < protocol_count; ++i)
+   {
+      proto_item* protocol_item;
+      proto_tree* protocol_tree = proto_tree_add_subtree(tree, tvb, offset, 0, ett_cmd_data, &protocol_item, "Protocol: ");
+
+      if (attribute_version == true)
+      {
+         uint8_t length = tvb_get_uint8(tvb, offset);
+         const char* protocol_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, offset + 1, length, ENC_ASCII);
+
+         offset += dissect_cip_string_type(pinfo, protocol_tree, item, tvb, offset, hf_tcpip_protocol_name, CIP_SHORT_STRING_TYPE);
+
+         proto_item_append_text(protocol_item, "Name: %s: ", protocol_name);
+      }
+
+      uint32_t protocol_number;
+      proto_tree_add_item_ret_uint(protocol_tree, hf_tcpip_protocol_number, tvb, offset, 2, ENC_LITTLE_ENDIAN, &protocol_number);
+      offset += 2;
+      proto_item_append_text(protocol_item, "Number: %d", protocol_number);
+
+      proto_tree_add_item(protocol_tree, hf_tcpip_protocol_admin_state, tvb, offset, 1, ENC_LITTLE_ENDIAN);
+      offset++;
+
+      if (attribute_version == true)
+      {
+         static int* const capability[] = {
+            &hf_tcpip_protocol_admin_capability_configurable,
+            &hf_tcpip_protocol_admin_capability_reset_required,
+            &hf_tcpip_protocol_admin_capability_reserved,
+            NULL
+         };
+
+         proto_tree_add_bitmask(protocol_tree, tvb, offset, hf_tcpip_protocol_admin_capability, ett_tcpip_protocol_admin_capability, capability, ENC_LITTLE_ENDIAN);
+         offset++;
+      }
+   }
+
+   return offset - start_offset;
+}
+
+static int dissect_tcpip_protocol_admin(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len _U_)
+{
+   return dissect_tcpip_protocol_information(pinfo, tree, item, tvb, offset, true);
+}
+
+static int dissect_tcpip_set_protocol_admin_state(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb, int offset, bool request)
+{
+   if (request)
+   {
+      return dissect_tcpip_protocol_information(pinfo, tree, item, tvb, offset, false);
+   }
+   else
+   {
+      return 0;
+   }
+}
+
 int dissect_cip_mac_address(packet_info* pinfo _U_, proto_tree* tree, proto_item* item _U_, tvbuff_t* tvb,
     int offset, int total_len _U_)
 {
@@ -2525,20 +2613,23 @@ const attribute_info_t enip_attribute_vals[] = {
    {0xF5, true, 7, 6, CLASS_ATTRIBUTE_7_NAME, cip_uint, &hf_attr_class_num_inst_attr, NULL },
 
    /* TCP/IP object (instance attributes) */
-   {0xF5, false,  1, 0, "Status",                    cip_dissector_func,   NULL, dissect_tcpip_status},
-   {0xF5, false,  2, 1, "Configuration Capability",  cip_dissector_func,   NULL, dissect_tcpip_config_cap},
-   {0xF5, false,  3, 2, "Configuration Control",     cip_dissector_func,   NULL, dissect_tcpip_config_control},
-   {0xF5, false,  4, 3, "Physical Link Object",      cip_dissector_func,   NULL, dissect_tcpip_physical_link},
-   {0xF5, false,  5, 4, "Interface Configuration",   cip_dissector_func,   NULL, dissect_tcpip_interface_config},
-   {0xF5, false,  6, 5, "Host Name",                 cip_dissector_func,   NULL, dissect_tcpip_hostname},
-   {0xF5, false,  7, 6, "Safety Network Number", cip_dissector_func,   NULL, dissect_tcpip_snn},
-   {0xF5, false,  8, 7, "TTL Value", cip_usint,      &hf_tcpip_ttl_value,  NULL},
-   {0xF5, false,  9, 8, "Multicast Configuration",   cip_dissector_func,   NULL, dissect_tcpip_mcast_config},
-   {0xF5, false, 10, 9, "Select ACD", cip_bool,      &hf_tcpip_select_acd, NULL},
-   {0xF5, false, 11, 10, "Last Conflict Detected",    cip_dissector_func,   NULL, dissect_tcpip_last_conflict},
-   {0xF5, false, 12, 11, "EtherNet/IP Quick Connect", cip_bool,             &hf_tcpip_quick_connect, NULL},
-   {0xF5, false, 13, 12, "Encapsulation Inactivity Timeout", cip_uint,      &hf_tcpip_encap_inactivity, NULL},
-   {0xF5, false, 14, -1, "IANA Port Admin",           cip_dissector_func,   NULL, dissect_tcpip_port_admin },
+   {0xF5, false,  1, 0, "Status",                             cip_dissector_func,   NULL, dissect_tcpip_status},
+   {0xF5, false,  2, 1, "Configuration Capability",           cip_dissector_func,   NULL, dissect_tcpip_config_cap},
+   {0xF5, false,  3, 2, "Configuration Control",              cip_dissector_func,   NULL, dissect_tcpip_config_control},
+   {0xF5, false,  4, 3, "Physical Link Object",               cip_dissector_func,   NULL, dissect_tcpip_physical_link},
+   {0xF5, false,  5, 4, "Interface Configuration",            cip_dissector_func,   NULL, dissect_tcpip_interface_config},
+   {0xF5, false,  6, 5, "Host Name",                          cip_dissector_func,   NULL, dissect_tcpip_hostname},
+   {0xF5, false,  7, 6, "Safety Network Number",              cip_dissector_func,   NULL, dissect_tcpip_snn},
+   {0xF5, false,  8, 7, "TTL Value",                          cip_usint,            &hf_tcpip_ttl_value,  NULL},
+   {0xF5, false,  9, 8, "Multicast Configuration",            cip_dissector_func,   NULL, dissect_tcpip_mcast_config},
+   {0xF5, false, 10, 9, "Select ACD",                         cip_bool,             &hf_tcpip_select_acd, NULL},
+   {0xF5, false, 11, 10, "Last Conflict Detected",            cip_dissector_func,   NULL, dissect_tcpip_last_conflict},
+   {0xF5, false, 12, 11, "EtherNet/IP Quick Connect",         cip_bool,             &hf_tcpip_quick_connect, NULL},
+   {0xF5, false, 13, 12, "Encapsulation Inactivity Timeout",  cip_uint,             &hf_tcpip_encap_inactivity, NULL},
+   {0xF5, false, 14, -1, "IANA Port Admin",                   cip_dissector_func,   NULL, dissect_tcpip_port_admin },
+   {0xF5, false, 15, -1, "IANA Protocol Admin",               cip_dissector_func,   NULL, dissect_tcpip_protocol_admin },
+   {0xF5, false, 16, 13, "Active TCP Connections",            cip_uint,             &hf_tcpip_active_tcp_connections, NULL },
+   {0xF5, false, 17, 14, "Non-CIP Encap Messages Per Second", cip_udint,            &hf_tcpip_non_cip_encp_msg_per_s, NULL },
 
     /* Ethernet Link Object (class attributes) */
    {0xF6, true, 1, 0, CLASS_ATTRIBUTE_1_NAME, cip_uint, &hf_attr_class_revision, NULL },
@@ -2576,14 +2667,21 @@ const attribute_info_t enip_attribute_vals[] = {
    {0x48, true, 7, 6, CLASS_ATTRIBUTE_7_NAME, cip_uint, &hf_attr_class_num_inst_attr, NULL },
 
    /* QoS object (instance attributes) */
-   {0x48, false,  1, -1, "802.1Q Tag Enable",         cip_bool,             &hf_qos_8021q_enable,     NULL},
-   {0x48, false,  2, -1, "DSCP PTP Event",            cip_usint,            &hf_qos_dscp_ptp_event,   NULL},
-   {0x48, false,  3, -1, "DSCP PTP General",          cip_usint,            &hf_qos_dscp_ptp_general, NULL},
-   {0x48, false,  4, -1, "DSCP Urgent",               cip_usint,            &hf_qos_dscp_urgent,      NULL},
-   {0x48, false,  5, -1, "DSCP Scheduled",            cip_usint,            &hf_qos_dscp_scheduled,   NULL},
-   {0x48, false,  6, -1, "DSCP High",                 cip_usint,            &hf_qos_dscp_high,        NULL},
-   {0x48, false,  7, -1, "DSCP Low",                  cip_usint,            &hf_qos_dscp_low,         NULL},
-   {0x48, false,  8, -1, "DSCP Explicit",             cip_usint,            &hf_qos_dscp_explicit,    NULL},
+   {0x48, false,  1, -1, "802.1Q Tag Enable",         cip_bool,             &hf_qos_8021q_enable,      NULL},
+   {0x48, false,  2, -1, "DSCP PTP Event",            cip_usint,            &hf_qos_dscp_ptp_event,    NULL},
+   {0x48, false,  3, -1, "DSCP PTP General",          cip_usint,            &hf_qos_dscp_ptp_general,  NULL},
+   {0x48, false,  4, -1, "DSCP Urgent",               cip_usint,            &hf_qos_dscp_urgent,       NULL},
+   {0x48, false,  5, -1, "DSCP Scheduled",            cip_usint,            &hf_qos_dscp_scheduled,    NULL},
+   {0x48, false,  6, -1, "DSCP High",                 cip_usint,            &hf_qos_dscp_high,         NULL},
+   {0x48, false,  7, -1, "DSCP Low",                  cip_usint,            &hf_qos_dscp_low,          NULL},
+   {0x48, false,  8, -1, "DSCP Explicit",             cip_usint,            &hf_qos_dscp_explicit,     NULL},
+   {0x48, false,  9, -1, "PCP PTP Event",             cip_usint,            &hf_qos_pcp_ptp_event,     NULL},
+   {0x48, false, 10, -1, "PCP PTP General",           cip_usint,            &hf_qos_pcp_ptp_general,   NULL},
+   {0x48, false, 11, -1, "PCP PTP Urgent",            cip_usint,            &hf_qos_pcp_ptp_urgent,    NULL},
+   {0x48, false, 12, -1, "PCP PTP Scheduled",         cip_usint,            &hf_qos_pcp_ptp_scheduled, NULL},
+   {0x48, false, 13, -1, "PCP PTP High",              cip_usint,            &hf_qos_pcp_ptp_high,      NULL},
+   {0x48, false, 14, -1, "PCP PTP Low",               cip_usint,            &hf_qos_pcp_ptp_low,       NULL},
+   {0x48, false, 15, -1, "PCP PTP Explicit",          cip_usint,            &hf_qos_pcp_ptp_explicit,  NULL},
 
     /* DLR Object (class attributes) */
    {0x47, true, 1, 0, CLASS_ATTRIBUTE_1_NAME, cip_uint, &hf_attr_class_revision, NULL },
@@ -2707,6 +2805,7 @@ static cip_service_info_t enip_obj_spec_service_table[] = {
 
     // TCP/IP Interface
     { 0xF5, 0x4C, "Set_Port_Admin_State", dissect_tcpip_set_port_admin_state },
+    { 0xF5, 0x4D, "Set_Protocol_Admin_State", dissect_tcpip_set_protocol_admin_state },
 };
 
 // Look up a given CIP service from this dissector.
@@ -4487,6 +4586,26 @@ proto_register_enip(void)
       { &hf_tcpip_admin_capability_reset_required, { "Reset Required", "cip.tcpip.admin_capability.reset_required", FT_BOOLEAN, 8, NULL, 0x02, NULL, HFILL } },
       { &hf_tcpip_admin_capability_reserved, { "Reserved", "cip.tcpip.admin_capability_reserved", FT_UINT8, BASE_HEX, NULL, 0xFC, NULL, HFILL } },
 
+      { &hf_tcpip_protocol_count, { "Protocol Count", "cip.tcpip.protocol_count", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_tcpip_protocol_name, { "Protocol Name", "cip.tcpip.protocol_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_tcpip_protocol_number, { "Protocol Number", "cip.tcpip.protocol_number", FT_UINT16, BASE_PT_TCP, NULL, 0, NULL, HFILL } },
+      { &hf_tcpip_protocol_admin_state, { "Admin State", "cip.tcpip.protocol_admin_state", FT_BOOLEAN, BASE_NONE, TFS(&tfs_open_closed), 0, NULL, HFILL } },
+
+      { &hf_tcpip_protocol_admin_capability, { "Admin Capability", "cip.tcpip.protocol_admin_capability", FT_UINT8, BASE_HEX, NULL, 0, NULL, HFILL } },
+      { &hf_tcpip_protocol_admin_capability_configurable, { "Configurable", "cip.tcpip.protocol_admin_capability.configurable", FT_BOOLEAN, 8, NULL, 0x01, NULL, HFILL } },
+      { &hf_tcpip_protocol_admin_capability_reset_required, { "Reset Required", "cip.tcpip.protocol_admin_capability.reset_required", FT_BOOLEAN, 8, NULL, 0x02, NULL, HFILL } },
+      { &hf_tcpip_protocol_admin_capability_reserved, { "Reserved", "cip.tcpip.protocol_admin_capability_reserved", FT_UINT8, BASE_HEX, NULL, 0xFC, NULL, HFILL } },
+
+      { &hf_tcpip_active_tcp_connections,
+        { "Active TCP Connections", "cip.tcpip.active_tcp_connections",
+          FT_UINT16, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_tcpip_non_cip_encp_msg_per_s,
+        { "Non-CIP Encapsulation Messages Per Second", "cip.tcpip.non_cip_packets",
+          FT_UINT32, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
       { &hf_elink_interface_speed,
         { "Interface Speed", "cip.elink.interface_speed",
           FT_UINT32, BASE_DEC, NULL, 0,
@@ -4845,6 +4964,41 @@ proto_register_enip(void)
         { "DSCP Explicit", "cip.qos.explicit",
           FT_UINT8, BASE_DEC, NULL, 0,
           NULL, HFILL }},
+
+      { &hf_qos_pcp_ptp_event,
+        { "PCP PTP Event", "cip.qos.pcp_ptp_event",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_general,
+        { "PCP PTP General", "cip.qos.pcp_ptp_general",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_urgent,
+        { "PCP PTP Urgent", "cip.qos.pcp_ptp_urgent",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_scheduled,
+        { "PCP PTP Scheduled", "cip.qos.pcp_ptp_scheduled",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_high,
+        { "PCP PTP High", "cip.qos.pcp_ptp_high",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_low,
+        { "PCP PTP Low", "cip.qos.pcp_ptp_low",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_qos_pcp_ptp_explicit,
+        { "PCP PTP Explicit", "cip.qos.pcp_ptp_explicit",
+          FT_UINT8, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
 
       { &hf_dlr_network_topology,
         { "Network Topology", "cip.dlr.network_topology",
@@ -5219,6 +5373,7 @@ proto_register_enip(void)
       &ett_lsrcf,
       &ett_tcpip_status,
       &ett_tcpip_admin_capability,
+      &ett_tcpip_protocol_admin_capability,
       &ett_tcpip_config_cap,
       &ett_tcpip_config_control,
       &ett_elink_interface_flags,
