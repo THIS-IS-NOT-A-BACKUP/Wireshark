@@ -523,12 +523,12 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     connect(main_ui_->goToGo, &QPushButton::pressed, this, &WiresharkMainWindow::goToGoClicked);
     connect(main_ui_->goToCancel, &QPushButton::pressed, this, &WiresharkMainWindow::goToCancelClicked);
 
-// A billion-1 is equivalent to the inputMask 900000000 previously used
-// Avoid QValidator::Intermediate values by using a top value of all 9's
-#define MAX_GOTO_LINE 999999999
+    // A billion-1 is equivalent to the inputMask 900000000 previously used
+    // Avoid QValidator::Intermediate values by using a top value of all 9's
+    #define MAX_GOTO_LINE 999999999
 
-QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
-main_ui_->goToLineEdit->setValidator(goToLineQiv);
+    QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
+    main_ui_->goToLineEdit->setValidator(goToLineQiv);
 
 #ifdef HAVE_SOFTWARE_UPDATE
     QAction *update_sep = main_ui_->menuHelp->insertSeparator(main_ui_->actionHelpAbout);
@@ -974,15 +974,15 @@ void WiresharkMainWindow::closeEvent(QCloseEvent *event) {
            taking a long time? (#19831) We could set the capture file state
            to FILE_READ_ABORTED to make it stop quicker, but we might need to
            warn about unsaved packets. We don't know if we're waiting to save
-           in testCaptureFileClose() having already warned about that, or if
-           the capture was stopped via other means. Call testCaptureFileClose
+           in tryClosingCaptureFile() having already warned about that, or if
+           the capture was stopped via other means. Call tryClosingCaptureFile
            with special handling if capture_stopping_ is true? */
         event->ignore();
         return;
     }
 
     QString before_what(tr(" before quitting"));
-    if (!testCaptureFileClose(before_what, Quit)) {
+    if (!tryClosingCaptureFile(before_what, Quit)) {
         event->ignore();
         return;
     }
@@ -1388,7 +1388,7 @@ void WiresharkMainWindow::importCaptureFile() {
     ImportTextDialog import_dlg;
 
     QString before_what(tr(" before importing a capture"));
-    if (!testCaptureFileClose(before_what))
+    if (!tryClosingCaptureFile(before_what))
         return;
 
     import_dlg.exec();
@@ -1787,7 +1787,7 @@ void WiresharkMainWindow::exportDissections(export_type_e export_type) {
     ed_dlg->show();
 }
 
-bool WiresharkMainWindow::testCaptureFileClose(QString before_what, FileCloseContext context) {
+bool WiresharkMainWindow::tryClosingCaptureFile(QString before_what, FileCloseContext context) {
     bool capture_in_progress = false;
     bool do_close_file = false;
 

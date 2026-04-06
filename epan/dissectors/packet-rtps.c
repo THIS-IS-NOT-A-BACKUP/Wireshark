@@ -1318,7 +1318,6 @@ static int hf_rtps_source_participant_guid;
 static int hf_rtps_message_identity_source_guid;
 static int hf_rtps_pgm_message_class_id;
 static int hf_rtps_pgm_data_holder_class_id;
-static int hf_rtps_secure_session_key;
 /* static int hf_rtps_pgm_data_holder_stringseq_size; */
 /* static int hf_rtps_pgm_data_holder_stringseq_name; */
 /* static int hf_rtps_pgm_data_holder_long_long; */
@@ -21720,10 +21719,6 @@ void proto_register_rtps(void) {
     },
     { &hf_rtps_secure_secure_data,
       { "Secure Data", "rtps.secure.secure_data",
-        FT_BYTES, BASE_NONE, NULL, 0, "The user data transferred in a secure payload", HFILL }
-    },
-    { &hf_rtps_secure_session_key,
-      { "[Session Key]", "rtps.secure.session_key",
         FT_BYTES, BASE_NONE, NULL, 0, "The user data transferred in a secure payload", HFILL }
     },
     { &hf_rtps_pgm, {

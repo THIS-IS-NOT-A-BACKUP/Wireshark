@@ -106,7 +106,7 @@ InfoBannerWidget::InfoBannerWidget(QWidget *parent) :
     setMouseTracking(true);
     setFrameShape(QFrame::NoFrame);
     setFixedWidth(kCardWidth);
-    setMinimumHeight(kCardHeight);
+    setMinimumHeight(kCardHeightCompact);
     setMaximumHeight(kCardHeight);
 
     connect(auto_advance_timer_, &QTimer::timeout, this, &InfoBannerWidget::advanceSlide);
@@ -553,7 +553,7 @@ BannerSlide InfoBannerWidget::birthdaySlide()
 void InfoBannerWidget::advanceSlide()
 {
     if (slides_.isEmpty()) return;
-    
+
     int next = current_slide_ + 1;
     if (next >= static_cast<int>(slides_.size())) {
         // Cycle complete — advance per-type offsets and rebuild
@@ -617,7 +617,6 @@ void InfoBannerWidget::setCompactMode(bool compact)
         return;
     compact_mode_ = compact;
     int h = compact_mode_ ? kCardHeightCompact : kCardHeight;
-    setMinimumHeight(h);
     setMaximumHeight(h);
     updateGeometry();
     update();

@@ -36,15 +36,12 @@ public:
 
 private:
     QVBoxLayout *main_layout_;
-    ClickableLabel *header_label_;
-    QFrame *header_separator_;
     QWidget *link_container_;
     QWidget *compact_link_container_;
-    QPushButton *discord_button_;
-    QPushButton *donate_button_;
     QList<learn_link_t> links_;
     bool links_collapsed_;
 
+    void setupLayout();
     void setupHeader();
     void setupLinks();
     void setupActionButtons();

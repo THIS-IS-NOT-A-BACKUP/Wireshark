@@ -9,6 +9,7 @@
 
 #include <ui/qt/widgets/learn_card_widget.h>
 #include <ui/qt/utils/color_utils.h>
+#include <ui/qt/main_application.h>
 
 #include <QApplication>
 #include <QLabel>
@@ -22,7 +23,7 @@
 
 LearnCardWidget::LearnCardWidget(QWidget *parent) :
     QFrame(parent)
-    , main_layout_(new QVBoxLayout(this))
+    , main_layout_(nullptr)
     , link_container_(nullptr)
     , compact_link_container_(nullptr)
     , links_collapsed_(false)
@@ -54,6 +55,21 @@ LearnCardWidget::LearnCardWidget(QWidget *parent) :
         }
     };
 
+    connect(mainApp, &MainApplication::appInitialized, this, &LearnCardWidget::setupLayout);
+
+    setupLayout();
+}
+
+void LearnCardWidget::setupLayout()
+{
+    if (main_layout_) {
+        delete main_layout_;
+        qDeleteAll(findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly));
+
+        main_layout_ = nullptr;
+    }
+
+    main_layout_ = new QVBoxLayout(this);
     setLayout(main_layout_);
     main_layout_->setContentsMargins(0, 0, 0, 0);
     main_layout_->setSpacing(0);
@@ -65,7 +81,8 @@ LearnCardWidget::LearnCardWidget(QWidget *parent) :
 
 void LearnCardWidget::setupHeader()
 {
-    header_label_ = new ClickableLabel(this);
+    ClickableLabel * header_label_ = new ClickableLabel(this);
+    header_label_->setObjectName("learnHeader");
     header_label_->setText(tr("<h2>Learn</h2>"));
     header_label_->setAccessibleName(tr("Learn"));
     header_label_->setAccessibleDescription(tr("Opens the Wireshark documentation website"));
@@ -76,7 +93,8 @@ void LearnCardWidget::setupHeader()
     });
     main_layout_->addWidget(header_label_);
 
-    header_separator_ = new QFrame(this);
+    QFrame * header_separator_ = new QFrame(this);
+    header_separator_->setObjectName("learnHeaderSeparator");
     header_separator_->setFrameShape(QFrame::HLine);
     header_separator_->setFrameShadow(QFrame::Plain);
     header_separator_->setFixedHeight(1);
@@ -147,7 +165,8 @@ void LearnCardWidget::setupActionButtons()
     button_layout->setContentsMargins(16, 12, 16, 12);
     button_layout->setSpacing(8);
 
-    discord_button_ = new QPushButton(tr("Discord"), this);
+    QPushButton * discord_button_ = new QPushButton(tr("Discord"), this);
+    discord_button_->setObjectName("discord");
     discord_button_->setToolTip(tr("Join the Wireshark Discord server to chat with other users and developers."));
     discord_button_->setAccessibleDescription(tr("Join the Wireshark Discord server to chat with other users and developers."));
     discord_button_->setCursor(Qt::PointingHandCursor);
@@ -156,7 +175,8 @@ void LearnCardWidget::setupActionButtons()
     });
     button_layout->addWidget(discord_button_);
 
-    donate_button_ = new QPushButton(tr("Donate"), this);
+    QPushButton * donate_button_ = new QPushButton(tr("Donate"), this);
+    donate_button_->setObjectName("donate");
     donate_button_->setToolTip(tr("Support the Wireshark project by making a donation to the Wireshark Foundation."));
     donate_button_->setAccessibleDescription(tr("Support the Wireshark project by making a donation to the Wireshark Foundation."));
     donate_button_->setCursor(Qt::PointingHandCursor);
@@ -197,7 +217,9 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
     QColor hover_bg = ColorUtils::hoverBackground();
     QString link_style = ColorUtils::themeLinkStyle();
 
-    setStyleSheet(QStringLiteral(
+    QString styleSheet;
+
+    styleSheet.append(QStringLiteral(
             "LearnCardWidget {"
             "  background-color: %1;"
             "  border: 1px solid %2;"
@@ -206,25 +228,25 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
             )
             .arg(card_bg.name(), border_color.name()));
 
-    header_label_->setStyleSheet(QStringLiteral(
-            "QLabel {"
+    styleSheet.append(QStringLiteral(
+            "QLabel#learnHeader {"
             "  color: %1;"
             "  padding: 10px 12px;"
             "}"
-            "QLabel::hover {"
+            "QLabel#learnHeader:hover {"
             "  color: %2;"
             "}"
             )
             .arg(header_text_color.name(), header_hover_color.name()));
 
-    header_separator_->setStyleSheet(QStringLiteral(
-            "QFrame {"
+    styleSheet.append(QStringLiteral(
+            "QFrame#learnHeaderSeparator {"
             "  color: %1;"
             "}"
             )
             .arg(border_color.name()));
 
-    QString link_ss = QStringLiteral(
+    styleSheet.append(QStringLiteral(
             "QLabel#learnLink {"
             "  border-radius: 4px;"
             "}"
@@ -233,17 +255,11 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
             "}"
             "%2"
             )
-            .arg(hover_bg.name(QColor::HexArgb), link_style);
-
-    // Apply to each link label via the container
-    QList<QLabel *> link_labels = findChildren<QLabel *>("learnLink");
-    foreach (QLabel *label, link_labels) {
-        label->setStyleSheet(link_ss);
-    }
+            .arg(hover_bg.name(QColor::HexArgb), link_style));
 
     // Discord button: brand purple #5865F2
-    discord_button_->setStyleSheet(QStringLiteral(
-            "QPushButton {"
+    styleSheet.append(QStringLiteral(
+            "QPushButton#discord {"
             "  background-color: #5865F2;"
             "  color: white;"
             "  border: none;"
@@ -251,14 +267,14 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
             "  padding: 10px 12px;"
             "  font-weight: 500;"
             "}"
-            "QPushButton:hover {"
+            "QPushButton#discord:hover {"
             "  background-color: #4752C4;"
             "}"
             ));
 
     // Donate button: warm red
-    donate_button_->setStyleSheet(QStringLiteral(
-            "QPushButton {"
+    styleSheet.append(QStringLiteral(
+            "QPushButton#donate {"
             "  background-color: #C0392B;"
             "  color: white;"
             "  border: none;"
@@ -266,20 +282,19 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
             "  padding: 10px 12px;"
             "  font-weight: 500;"
             "}"
-            "QPushButton:hover {"
+            "QPushButton#donate:hover {"
             "  background-color: #A93226;"
             "}"
             ));
 
     // Button container top border (separator)
-    QWidget *button_container = findChild<QWidget *>("learnButtonContainer");
-    if (button_container) {
-        button_container->setStyleSheet(QStringLiteral(
+    styleSheet.append(QStringLiteral(
                 "QWidget#learnButtonContainer {"
                 "  border-top: 1px solid %1;"
                 "}"
                 )
                 .arg(border_color.name()));
-    }
+
+    setStyleSheet(styleSheet);
 }
 

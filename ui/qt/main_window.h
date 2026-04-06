@@ -90,6 +90,15 @@ protected:
         CopyListAsHTML,
     };
 
+    enum FileCloseContext {
+        Default,
+        Quit,
+        Restart,
+        Reload,
+        Update,
+        Export
+    };
+
     void showWelcome();
     void showCapture();
     void setTitlebarForCaptureInProgress();
@@ -145,7 +154,9 @@ protected:
      */
     virtual void openRecentCaptureFile(const QString &filename) = 0;
 
-    protected slots:
+    virtual bool tryClosingCaptureFile(QString before_what, FileCloseContext context = Default) = 0;
+
+protected slots:
     void addDisplayFilterTranslationActions(QMenu *copy_menu);
     void updateDisplayFilterTranslationActions(const QString &df_text);
     void updateTitlebar();

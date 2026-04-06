@@ -55,6 +55,10 @@ WelcomePage::WelcomePage(QWidget *parent) :
 {
     welcome_ui_->setupUi(this);
 
+	/* Ensures that we can shrink the height to at least around 450px */
+    welcome_ui_->openFileSectionRecentList->setMinimumHeight(150);
+    welcome_ui_->captureSectionInterfaceFrame->setMinimumHeight(150);
+
     setAccessibleName(tr("Welcome page"));
     setAccessibleDescription(tr("The %1 welcome page provides access to recent files, capture interfaces, and learning resources.").arg(mainApp->applicationName()));
 

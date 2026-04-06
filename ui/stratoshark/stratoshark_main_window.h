@@ -72,7 +72,6 @@ class PrintDialog;
 class FileSetDialog;
 class FilterDialog;
 class FunnelStatistics;
-class StratosharkWelcomePage;
 class PacketCommentDialog;
 class PacketList;
 class ProtoTree;
@@ -125,6 +124,9 @@ protected:
     void changeEvent(QEvent* event) override;
     void openRecentCaptureFile(const QString &filename) override;
 
+
+    bool tryClosingCaptureFile(QString before_what, FileCloseContext context = Default) override;
+
 private:
     // XXX Move to FilterUtils
     enum MatchSelected {
@@ -134,14 +136,6 @@ private:
         MatchSelectedNot,
         MatchSelectedAndNot,
         MatchSelectedOrNot
-    };
-
-    enum FileCloseContext {
-        Default,
-        Quit,
-        Restart,
-        Reload,
-        Update
     };
 
     Ui::StratosharkMainWindow *main_ui_;
@@ -189,7 +183,6 @@ private:
 #ifdef Q_OS_WIN
     void fileAddExtension(QString &file_name, int file_type, ws_compression_type compression_type);
 #endif // Q_OS_WIN
-    bool testCaptureFileClose(QString before_what, FileCloseContext context = Default);
     void captureStop();
 
     void initMainToolbarIcons();

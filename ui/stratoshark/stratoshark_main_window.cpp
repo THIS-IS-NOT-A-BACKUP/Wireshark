@@ -474,12 +474,12 @@ StratosharkMainWindow::StratosharkMainWindow(QWidget *parent) :
     connect(main_ui_->goToGo, &QPushButton::pressed, this, &StratosharkMainWindow::goToGoClicked);
     connect(main_ui_->goToCancel, &QPushButton::pressed, this, &StratosharkMainWindow::goToCancelClicked);
 
-// A billion-1 is equivalent to the inputMask 900000000 previously used
-// Avoid QValidator::Intermediate values by using a top value of all 9's
-#define MAX_GOTO_LINE 999999999
+    // A billion-1 is equivalent to the inputMask 900000000 previously used
+    // Avoid QValidator::Intermediate values by using a top value of all 9's
+    #define MAX_GOTO_LINE 999999999
 
-QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
-main_ui_->goToLineEdit->setValidator(goToLineQiv);
+    QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
+    main_ui_->goToLineEdit->setValidator(goToLineQiv);
 
 #ifdef HAVE_SOFTWARE_UPDATE
     QAction *update_sep = main_ui_->menuHelp->insertSeparator(main_ui_->actionHelpAbout);
@@ -569,8 +569,8 @@ main_ui_->goToLineEdit->setValidator(goToLineQiv);
 
     connect(main_ui_->mainStack, &QStackedWidget::currentChanged, this, &StratosharkMainWindow::mainStackChanged);
 
-    connect(welcome_page_, &StratosharkWelcomePage::startCapture, this, [this](QStringList) { startCapture(); });
-    connect(welcome_page_, &StratosharkWelcomePage::recentFileActivated, this, [this](QString cfile) { openCaptureFile(cfile); });
+    connect(welcome_page_, &WelcomePage::startCapture, this, [this](QStringList) { startCapture(); });
+    connect(welcome_page_, &WelcomePage::recentFileActivated, this, [this](QString cfile) { openCaptureFile(cfile); });
 
     connect(main_ui_->addressEditorFrame, &AddressEditorFrame::redissectPackets,
             this, &StratosharkMainWindow::redissectPackets);
@@ -641,11 +641,11 @@ main_ui_->goToLineEdit->setValidator(goToLineQiv);
     if (iface_tree) {
         connect(iface_tree, &QTreeWidget::itemSelectionChanged, this, &StratosharkMainWindow::interfaceSelectionChanged);
     }
-    connect(main_ui_->welcomePage, &StratosharkWelcomePage::captureFilterSyntaxChanged,
+    connect(main_ui_->welcomePage, &WelcomePage::captureFilterSyntaxChanged,
             this, &StratosharkMainWindow::captureFilterSyntaxChanged);
 
     connect(this, &StratosharkMainWindow::showExtcapOptions, this, &StratosharkMainWindow::showExtcapOptionsDialog);
-    connect(this->welcome_page_, &StratosharkWelcomePage::showExtcapOptions, this, &StratosharkMainWindow::showExtcapOptionsDialog);
+    connect(this->welcome_page_, &WelcomePage::showExtcapOptions, this, &StratosharkMainWindow::showExtcapOptionsDialog);
 
 #endif // HAVE_LIBPCAP
 
@@ -908,7 +908,7 @@ void StratosharkMainWindow::closeEvent(QCloseEvent *event) {
     }
 
     QString before_what(tr(" before quitting"));
-    if (!testCaptureFileClose(before_what, Quit)) {
+    if (!tryClosingCaptureFile(before_what, Quit)) {
         event->ignore();
         return;
     }
@@ -1310,7 +1310,7 @@ void StratosharkMainWindow::importCaptureFile() {
     ImportTextDialog import_dlg;
 
     QString before_what(tr(" before importing a capture"));
-    if (!testCaptureFileClose(before_what))
+    if (!tryClosingCaptureFile(before_what))
         return;
 
     import_dlg.exec();
@@ -1707,7 +1707,7 @@ void StratosharkMainWindow::exportDissections(export_type_e export_type) {
     ed_dlg->show();
 }
 
-bool StratosharkMainWindow::testCaptureFileClose(QString before_what, FileCloseContext context) {
+bool StratosharkMainWindow::tryClosingCaptureFile(QString before_what, FileCloseContext context) {
     bool capture_in_progress = false;
     bool do_close_file = false;
 

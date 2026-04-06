@@ -1095,7 +1095,7 @@ int main(int argc, char *qt_argv[])
      * rather than showing the user the welcome page, so we don't call
      * processEvents() here.
      */
-    wsApp->allSystemsGo(application_flavor_name_proper(), VERSION);
+    wsApp->allSystemsGo();
     ws_info("Wireshark is up and ready to go, elapsed time %.3fs", (float) (g_get_monotonic_time() - start_time) / 1000000);
     SimpleDialog::displayQueuedMessages(main_w);
 
