@@ -41,10 +41,18 @@ private:
     QList<learn_link_t> links_;
     bool links_collapsed_;
 
+    QString new_version_;
+
     void setupLayout();
     void setupHeader();
     void setupLinks();
+    void setupUpdateInfo();
     void setupActionButtons();
+
+private slots:
+    void setVersionInfo(QString newVersion = QString());
+    void resetVersionInfo();
+
 };
 
 #endif //LEARN_CARD_WIDGET_H

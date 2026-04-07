@@ -77,6 +77,7 @@ DIAG_ON(frame-larger-than=)
 #include <ui/qt/utils/stock_icon.h>
 #include <ui/qt/utils/variant_pointer.h>
 #include <ui/qt/utils/workspace_state.h>
+#include <ui/qt/utils/software_update.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -369,9 +370,8 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     recent_captures_menu_ = main_ui_->menuOpenRecentCaptureFile;
     no_recent_files_action_ = main_ui_->actionDummyNoFilesFound;
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    update_action_ = new QAction(tr("Check for Updates…"), main_ui_->menuHelp);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::plattformSupported());
+
 #if defined(HAVE_LIBNL) && defined(HAVE_NL80211)
     wireless_frame_ = new WirelessFrame(this);
     main_ui_->wirelessToolBar->addWidget(wireless_frame_);
@@ -442,11 +442,6 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     connect(WorkspaceState::instance(), &WorkspaceState::recentFileStatusChanged, this, &WiresharkMainWindow::updateRecentCaptures);
     connect(mainApp, &MainApplication::preferencesChanged, this, &WiresharkMainWindow::updateRecentCaptures);
     updateRecentCaptures();
-
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    connect(mainApp, &MainApplication::softwareUpdateRequested, this, &WiresharkMainWindow::softwareUpdateRequested,
-        Qt::BlockingQueuedConnection);
-#endif
 
     df_combo_box_ = new DisplayFilterCombo(this);
 
@@ -530,11 +525,15 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
     main_ui_->goToLineEdit->setValidator(goToLineQiv);
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    QAction *update_sep = main_ui_->menuHelp->insertSeparator(main_ui_->actionHelpAbout);
-    main_ui_->menuHelp->insertAction(update_sep, update_action_);
-    connect(update_action_, &QAction::triggered, this, &WiresharkMainWindow::checkForUpdates);
-#endif
+    if (SoftwareUpdate::plattformSupported())
+    {
+        connect(main_ui_->actionHelpCheckUpdates, &QAction::triggered,  this, []() {
+            SoftwareUpdate::instance()->performUIUpdate();
+        });
+    } else {
+        main_ui_->actionHelpCheckUpdates->setToolTip(tr("Software update checking is not available on this platform."));
+    }
+
     master_split_.setObjectName("splitterMaster");
     master_split_.setAccessibleName(tr("Main View Splitter"));
     master_split_.setAccessibleDescription(tr("Contains the packet list, protocol tree, and packet bytes."));
@@ -2444,10 +2443,8 @@ void WiresharkMainWindow::setMenusForCaptureFile(bool force_disable)
 
     main_ui_->actionViewReload->setEnabled(enable);
 
-#ifdef HAVE_SOFTWARE_UPDATE
     // We might want to enable or disable automatic checks here as well.
-    update_action_->setEnabled(!can_save);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::plattformSupported() && !can_save);
 }
 
 void WiresharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progress) {
@@ -2474,10 +2471,8 @@ void WiresharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progress)
 
     main_ui_->menuFileSet->setEnabled(!capture_in_progress);
     main_ui_->actionFileQuit->setEnabled(true);
-#ifdef HAVE_SOFTWARE_UPDATE
     // We might want to enable or disable automatic checks here as well.
-    update_action_->setEnabled(!capture_in_progress);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::plattformSupported() && !capture_in_progress);
 
     main_ui_->actionStatisticsCaptureFileProperties->setEnabled(capture_in_progress);
 
@@ -2502,9 +2497,7 @@ void WiresharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progress)
 
 void WiresharkMainWindow::setMenusForCaptureStopping() {
     main_ui_->actionFileQuit->setEnabled(false);
-#ifdef HAVE_SOFTWARE_UPDATE
-    update_action_->setEnabled(false);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(false);
     main_ui_->actionStatisticsCaptureFileProperties->setEnabled(false);
 #ifdef HAVE_LIBPCAP
     main_ui_->actionCaptureStart->setChecked(false);

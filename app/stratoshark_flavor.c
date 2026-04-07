@@ -52,8 +52,14 @@ application_get_vcs_version_info_short(void)
 #ifdef STRATOSHARK_VCS_VERSION
     return STRATOSHARK_VCS_VERSION;
 #else
-    return VERSION;
+    return STRATOSHARK_VERSION;
 #endif
+}
+
+const char*
+application_version(void)
+{
+    return STRATOSHARK_VERSION;
 }
 
 void application_file_extensions(const struct file_extension_info** file_extensions, unsigned* num_extensions)

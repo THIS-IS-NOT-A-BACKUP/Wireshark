@@ -70,6 +70,17 @@ extern const char* application_get_vcs_version_info(void);
 extern const char* application_get_vcs_version_info_short(void);
 
 /**
+ * @brief Retrieve the application version string.
+ *
+ * Returns a string containing the application version number.
+ * This does not include any version control metadata, even
+ * for builds from a source tree checked out via version control.
+ *
+ * @return  A constant string with the application version.
+ */
+extern const char* application_version(void);
+
+/**
  * @brief Get the list of application supported file extensions
  *
  * @param file_extensions Returned array of extensions supported by the application

@@ -2210,7 +2210,7 @@ elseif(APPLE)
 		ui/macosx/cocoa_bridge.mm
 	)
 	if (SPARKLE_FOUND)
-		list(APPEND PLATFORM_UI_SRC ui/macosx/sparkle_bridge.m)
+		list(APPEND PLATFORM_UI_SRC ui/macosx/sparkle_bridge.mm)
 	endif()
 endif()
 

@@ -289,6 +289,8 @@
     <addaction name="actionHelpReleaseNotes"/>
     <addaction name="separator"/>
     <addaction name="actionHelpAbout"/>
+    <addaction name="separator"/>
+    <addaction name="actionHelpCheckUpdates"/>
    </widget>
    <widget class="QMenu" name="menuGo">
     <property name="title">
@@ -606,7 +608,6 @@
    <addaction name="actionFileSave"/>
    <addaction name="actionFileClose"/>
    <addaction name="actionViewReload"/>
-   <!-- XXX - Need an icon <addaction name="actionViewRedissect"/> -->
    <addaction name="separator"/>
    <addaction name="actionEditFindPacket"/>
    <addaction name="actionGoPreviousPacket"/>
@@ -787,7 +788,7 @@
   </action>
   <action name="actionHelpWebsite">
    <property name="icon">
-    <iconset resource="../../resources/stock_icons.qrc">
+    <iconset>
      <normaloff>:/menu/help/ssicon16.png</normaloff>:/menu/help/ssicon16.png</iconset>
    </property>
    <property name="text">
@@ -806,7 +807,7 @@
   </action>
   <action name="actionHelpWiki">
    <property name="icon">
-    <iconset resource="../../resources/stock_icons.qrc">
+    <iconset>
      <normaloff>:/menu/help/ssicon16.png</normaloff>:/menu/help/ssicon16.png</iconset>
    </property>
    <property name="text">
@@ -2315,6 +2316,14 @@
   <action name="actionHelpReleaseNotes">
    <property name="text">
     <string>Release Notes</string>
+   </property>
+  </action>
+  <action name="actionHelpCheckUpdates">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Check for Updates…</string>
    </property>
   </action>
  </widget>

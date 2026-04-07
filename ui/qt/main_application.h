@@ -127,11 +127,7 @@ public:
     const QString windowTitleString(QStringList title_parts);
     const QString windowTitleString(QString title_part) { return windowTitleString(QStringList() << title_part); }
     void applyCustomColorsFromRecent();
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    void rejectSoftwareUpdate() { software_update_ok_ = false; }
-    bool softwareUpdateCanShutdown();
-    void softwareUpdateShutdownRequest();
-#endif
+
     MainWindow *mainWindow();
 
     QTranslator translator;
@@ -162,10 +158,6 @@ private:
     QList<AppSignal> app_signals_;
     int active_captures_;
     bool refresh_interfaces_pending_;
-
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    bool software_update_ok_;
-#endif
 
     void storeCustomColorsInRecent();
     void clearDynamicMenuGroupItems();
@@ -206,11 +198,6 @@ signals:
     void reloadLuaPlugins();
     void aggregationVisiblity();
     void aggregationChanged();
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    // Each of these are called from a separate thread.
-    void softwareUpdateRequested();
-    void softwareUpdateQuit();
-#endif
 
     void openStatCommandDialog(const QString &menu_path, const char *arg, void *userdata);
     void openTapParameterDialog(const QString cfg_str, const QString arg, void *userdata);

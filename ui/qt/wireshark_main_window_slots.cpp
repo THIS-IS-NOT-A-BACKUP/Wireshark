@@ -84,10 +84,6 @@ DIAG_ON(frame-larger-than=)
 #include "ui/qt/widgets/wireshark_file_dialog.h"
 #include <ui/qt/utils/workspace_state.h>
 
-#ifdef HAVE_SOFTWARE_UPDATE
-#include "ui/software_update.h"
-#endif
-
 #include "about_dialog.h"
 #include "bluetooth_att_server_attributes_dialog.h"
 #include "bluetooth_devices_dialog.h"
@@ -1738,17 +1734,6 @@ void WiresharkMainWindow::openTapParameterDialog()
     const QString cfg_str = tpa->data().toString();
     openTapParameterDialog(cfg_str, NULL, NULL);
 }
-
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-void WiresharkMainWindow::softwareUpdateRequested() {
-    // tryClosingCaptureFile doesn't use this string because we aren't
-    // going to launch another dialog, but maybe we'll change that.
-    QString before_what(tr(" before updating"));
-    if (!tryClosingCaptureFile(before_what, Update)) {
-        mainApp->rejectSoftwareUpdate();
-    }
-}
-#endif
 
 // File Menu
 
@@ -4045,13 +4030,6 @@ void WiresharkMainWindow::connectHelpMenuActions()
     connect(main_ui_->actionHelpSampleCaptures, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_SAMPLE_FILES); });
     connect(main_ui_->actionHelpReleaseNotes, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(LOCALPAGE_WIRESHARK_RELEASE_NOTES); });
 }
-
-#ifdef HAVE_SOFTWARE_UPDATE
-void WiresharkMainWindow::checkForUpdates()
-{
-    software_update_check();
-}
-#endif
 
 void WiresharkMainWindow::setPreviousFocus() {
     previous_focus_ = mainApp->focusWidget();

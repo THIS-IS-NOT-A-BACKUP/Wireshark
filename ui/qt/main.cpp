@@ -76,7 +76,6 @@
 #include "ui/capture_ui_utils.h"
 #include "ui/capture_globals.h"
 #include "ui/preference_utils.h"
-#include "ui/software_update.h"
 #include "ui/taps.h"
 #include "ui/profile.h"
 #include "ui/plugins/include/uiqt_plugin.h"
@@ -94,6 +93,7 @@
 #include <ui/qt/widgets/splash_overlay.h>
 #include "ui/qt/wireshark_application.h"
 #include "ui/qt/utils/workspace_state.h"
+#include "ui/qt/utils/software_update.h"
 
 #include "capture/capture-pcap-util.h"
 
@@ -240,10 +240,10 @@ gather_wireshark_qt_compiled_info(feature_list l)
 #endif
 #endif /* !Q_OS_WIN && !Q_OS_MAC */
 
-    const char *update_info = software_update_info();
-    if (update_info) {
+    QString update_info = SoftwareUpdate::info();
+    if (!update_info.isEmpty()) {
         with_feature(l, "automatic updates");
-        with_feature(l, "%s", update_info);
+        with_feature(l, "%s", update_info.toStdString().c_str());
     } else {
         without_feature(l, "automatic updates");
     }

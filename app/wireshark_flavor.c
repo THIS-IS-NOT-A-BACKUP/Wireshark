@@ -61,6 +61,12 @@ application_get_vcs_version_info_short(void)
 #endif
 }
 
+const char*
+application_version(void)
+{
+    return VERSION;
+}
+
 void application_file_extensions(const struct file_extension_info** file_extensions, unsigned* num_extensions)
 {
     static const struct file_extension_info wireshark_file_type_extensions_base[] = {

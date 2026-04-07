@@ -22,6 +22,7 @@
 #include <ui/qt/utils/tango_colors.h>
 #include <ui/qt/utils/color_utils.h>
 #include <ui/qt/utils/qt_ui_utils.h>
+#include <ui/qt/utils/software_update.h>
 #include <ui/qt/models/recentcapturefiles_list_model.h>
 #include <ui/qt/utils/workspace_state.h>
 #include "main_application.h"
@@ -172,29 +173,10 @@ void WelcomePage::interfaceListChanged()
     welcome_ui_->captureSectionInterfaceTypeButton->setMenu(welcome_ui_->captureSectionInterfaceFrame->getSelectionMenu());
 }
 
-QString WelcomePage::getReleaseLabel()
-{
-    return tr("You are running Wireshark ");
-}
-
 void WelcomePage::setReleaseLabel()
 {
-    // XXX Add a "check for updates" link?
-    QString full_release;
-    full_release = getReleaseLabel();
-    full_release += application_get_vcs_version_info();
-    full_release += ".";
-#ifdef HAVE_SOFTWARE_UPDATE
-    if (prefs.gui_update_enabled) {
-        full_release += tr(" You receive automatic updates.");
-    } else {
-        full_release += tr(" You have disabled automatic updates.");
-    }
-#else
-    // XXX Is there a way to tell if the user installed Wireshark via an
-    // external package manager? If so we could say so here. We could
-    // also add a link to the download page.
-#endif
+    QString full_release = tr("Version: %1").arg(application_get_vcs_version_info());
+
     welcome_ui_->titleSectionVersionLabel->setText(full_release);
 }
 

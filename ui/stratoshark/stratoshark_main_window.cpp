@@ -70,6 +70,7 @@ DIAG_ON(frame-larger-than=)
 #include <ui/qt/utils/stock_icon.h>
 #include <ui/qt/utils/variant_pointer.h>
 #include <ui/qt/utils/workspace_state.h>
+#include <ui/qt/utils/software_update.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -346,9 +347,7 @@ StratosharkMainWindow::StratosharkMainWindow(QWidget *parent) :
     recent_captures_menu_ = main_ui_->menuOpenRecentCaptureFile;
     no_recent_files_action_ = main_ui_->actionDummyNoFilesFound;
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    update_action_ = new QAction(tr("Check for Updates…"), main_ui_->menuHelp);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::plattformSupported());
 
     menu_groups_ = QList<register_stat_group_t>()
             << REGISTER_LOG_ANALYZE_GROUP_UNSORTED
@@ -397,12 +396,6 @@ StratosharkMainWindow::StratosharkMainWindow(QWidget *parent) :
     connect(WorkspaceState::instance(), &WorkspaceState::recentFileStatusChanged, this, &StratosharkMainWindow::updateRecentCaptures);
     connect(mainApp, &MainApplication::preferencesChanged, this, &StratosharkMainWindow::updateRecentCaptures);
     updateRecentCaptures();
-
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    connect(mainApp, &MainApplication::softwareUpdateRequested, this, &StratosharkMainWindow::softwareUpdateRequested,
-        Qt::BlockingQueuedConnection);
-#endif
-
     df_combo_box_ = new DisplayFilterCombo(this);
 
     funnel_statistics_ = new FunnelStatistics(this, capture_file_);
@@ -481,11 +474,14 @@ StratosharkMainWindow::StratosharkMainWindow(QWidget *parent) :
     QIntValidator *goToLineQiv = new QIntValidator(0,MAX_GOTO_LINE,this);
     main_ui_->goToLineEdit->setValidator(goToLineQiv);
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    QAction *update_sep = main_ui_->menuHelp->insertSeparator(main_ui_->actionHelpAbout);
-    main_ui_->menuHelp->insertAction(update_sep, update_action_);
-    connect(update_action_, &QAction::triggered, this, &StratosharkMainWindow::checkForUpdates);
-#endif
+   if (SoftwareUpdate::plattformSupported()) {
+        connect(main_ui_->actionHelpCheckUpdates, &QAction::triggered,  this, []() {
+            SoftwareUpdate::instance()->performUIUpdate();
+        });
+   } else {
+        main_ui_->actionHelpCheckUpdates->setToolTip(tr("Software update checking is not available on this platform."));
+    }
+
     master_split_.setObjectName("splitterMaster");
     master_split_.setAccessibleName(tr("Main View Splitter"));
     master_split_.setAccessibleDescription(tr("Contains the log list, protocol tree, and packet bytes."));
@@ -2292,10 +2288,8 @@ void StratosharkMainWindow::setMenusForCaptureFile(bool force_disable)
 
     main_ui_->actionViewReload->setEnabled(enable);
 
-#ifdef HAVE_SOFTWARE_UPDATE
     // We might want to enable or disable automatic checks here as well.
-    update_action_->setEnabled(!can_save);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::instance()->plattformSupported() && !can_save);
 }
 
 void StratosharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progress) {
@@ -2314,10 +2308,9 @@ void StratosharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progres
 
     main_ui_->menuFileSet->setEnabled(!capture_in_progress);
     main_ui_->actionFileQuit->setEnabled(true);
-#ifdef HAVE_SOFTWARE_UPDATE
+
     // We might want to enable or disable automatic checks here as well.
-    update_action_->setEnabled(!capture_in_progress);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(SoftwareUpdate::instance()->plattformSupported() && !capture_in_progress);
 
     main_ui_->actionStatisticsCaptureFileProperties->setEnabled(capture_in_progress);
 
@@ -2342,9 +2335,7 @@ void StratosharkMainWindow::setMenusForCaptureInProgress(bool capture_in_progres
 
 void StratosharkMainWindow::setMenusForCaptureStopping() {
     main_ui_->actionFileQuit->setEnabled(false);
-#ifdef HAVE_SOFTWARE_UPDATE
-    update_action_->setEnabled(false);
-#endif
+    main_ui_->actionHelpCheckUpdates->setEnabled(false);
     main_ui_->actionStatisticsCaptureFileProperties->setEnabled(false);
 #ifdef HAVE_LIBPCAP
     main_ui_->actionCaptureStart->setChecked(false);

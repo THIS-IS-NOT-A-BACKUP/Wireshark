@@ -7,8 +7,11 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include <epan/prefs.h>
+
 #include <ui/qt/widgets/learn_card_widget.h>
 #include <ui/qt/utils/color_utils.h>
+#include <ui/qt/utils/software_update.h>
 #include <ui/qt/main_application.h>
 
 #include <QApplication>
@@ -55,6 +58,8 @@ LearnCardWidget::LearnCardWidget(QWidget *parent) :
         }
     };
 
+    connect(SoftwareUpdate::instance(), &SoftwareUpdate::updateAvailable, this, &LearnCardWidget::setVersionInfo);
+    connect(SoftwareUpdate::instance(), &SoftwareUpdate::updateEngaged, this, &LearnCardWidget::resetVersionInfo);
     connect(mainApp, &MainApplication::appInitialized, this, &LearnCardWidget::setupLayout);
 
     setupLayout();
@@ -76,6 +81,7 @@ void LearnCardWidget::setupLayout()
 
     setupHeader();
     setupLinks();
+    setupUpdateInfo();
     setupActionButtons();
 }
 
@@ -155,6 +161,79 @@ void LearnCardWidget::setupLinks()
     main_layout_->addWidget(compact_link_container_);
 
     main_layout_->addStretch(1);
+}
+
+void LearnCardWidget::setVersionInfo(QString newVersion)
+{
+    new_version_ = newVersion;
+    setupUpdateInfo();
+}
+
+void LearnCardWidget::resetVersionInfo()
+{
+    new_version_.clear();
+    setupUpdateInfo();
+}
+
+void LearnCardWidget::setupUpdateInfo()
+{
+    if (!SoftwareUpdate::plattformSupported())
+        return;
+
+    QLabel * update_info_label = findChild<QLabel*>("learnUpdateInfoLabel");
+    QPushButton * update_button = findChild<QPushButton*>("learnUpdateButton");
+    /* reusing the label if it already exists, avoids having to define
+     * a label in the header */
+    if (!update_info_label) {
+        QWidget *update_info_container = new QWidget(this);
+        update_info_container->setObjectName("learnUpdateInfoContainer");
+        QHBoxLayout *update_layout = new QHBoxLayout(update_info_container);
+        update_layout->setContentsMargins(16, 4, 16, 4);
+        update_layout->setSpacing(0);
+
+        update_info_label = new QLabel(update_info_container);
+        update_info_label->setObjectName("learnUpdateInfoLabel");
+        update_info_label->setAccessibleName(tr("Software Update Information"));
+        update_info_label->setAccessibleDescription(tr("Information if a new update is available and if automatic updates are enabled"));
+        update_info_label->setVisible(false);
+        update_layout->addWidget(update_info_label);
+
+        update_button = new QPushButton(tr("Check for Updates"), update_info_container);
+        update_button->setObjectName("learnUpdateButton");
+        update_button->setToolTip(tr("Install a new software update"));
+        update_button->setAccessibleDescription(tr("This button is only shown when an update is available."));
+        update_button->setCursor(Qt::PointingHandCursor);
+        update_button->setVisible(false);
+        connect(update_button, &QPushButton::clicked, this, []() {
+            SoftwareUpdate::instance()->performUIUpdate();
+        });
+        update_layout->addWidget(update_button);
+
+        main_layout_->addWidget(update_info_container);
+    } else if (!prefs.gui_update_enabled && SoftwareUpdate::plattformSupported()) {
+        /** If automatic updates are disabled and the platform supports updates,
+         *  show a warning message in the label to inform the user that they won't
+         *  receive updates. This is set in this else path, as we only want to show
+         *  the info if the pref is set, which we only have knowledge about AFTER
+         *  the main app initialization.
+         */
+        update_info_label->setVisible(true);
+        update_info_label->setText(tr(" You have disabled automatic updates."));
+    }
+
+    if (prefs.gui_update_enabled) {
+        update_button->setVisible(false);
+        update_info_label->setVisible(false);
+
+        /* update the label text based on the current version and update information */
+        if (!new_version_.isEmpty()) {
+            update_button->setVisible(true);
+            update_button->setText(tr(" A new version (%1) is available.").arg(new_version_));
+        } else {
+            update_info_label->setVisible(true);
+            update_info_label->setText(tr(" You receive automatic updates."));
+        }
+    }
 }
 
 void LearnCardWidget::setupActionButtons()
@@ -256,6 +335,22 @@ void LearnCardWidget::updateStyleSheets(const QColor &header_text_color, const Q
             "%2"
             )
             .arg(hover_bg.name(QColor::HexArgb), link_style));
+
+    // Update button: brand purple #5865F2
+    styleSheet.append(QStringLiteral(
+            "QPushButton#learnUpdateButton {"
+            "  background-color: #5865F2;"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 6px;"
+            "  padding: 10px 12px;"
+            "  font-weight: 500;"
+            "}"
+            "QPushButton#learnUpdateButton:hover {"
+            "  background-color: #4752C4;"
+            "}"
+            ));
+
 
     // Discord button: brand purple #5865F2
     styleSheet.append(QStringLiteral(

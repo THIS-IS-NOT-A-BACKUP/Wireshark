@@ -175,10 +175,6 @@ private:
     info_data_t info_data_;
 #endif
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    QAction *update_action_;
-#endif
-
     QPoint dragStartPosition;
 
     QPointer<TLSKeylogDialog> tlskeylog_dialog_;
@@ -375,10 +371,6 @@ private slots:
     void openTapParameterDialog(const QString cfg_str, const QString arg, void *userdata);
     void openTapParameterDialog();
 
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    void softwareUpdateRequested();
-#endif
-
     // If you're manually connecting a signal to a slot, don't prefix its name
     // with "on_". Otherwise you'll get runtime warnings.
 
@@ -444,10 +436,6 @@ private slots:
     void statCommandExpertInfo(const char *, void *);
 
     void connectHelpMenuActions();
-
-#ifdef HAVE_SOFTWARE_UPDATE
-    void checkForUpdates();
-#endif
 
     void goToCancelClicked();
     void goToGoClicked();

@@ -164,10 +164,6 @@ private:
     info_data_t info_data_;
 #endif
 
-#ifdef HAVE_SOFTWARE_UPDATE
-    QAction *update_action_;
-#endif
-
     QPoint dragStartPosition;
 
     void freeze();
@@ -342,10 +338,6 @@ private slots:
     void openTapParameterDialog(const QString cfg_str, const QString arg, void *userdata);
     void openTapParameterDialog();
 
-#if defined(HAVE_SOFTWARE_UPDATE) && defined(Q_OS_WIN)
-    void softwareUpdateRequested();
-#endif
-
     void connectFileMenuActions();
     void printFile();
 
@@ -401,10 +393,6 @@ private slots:
     void connectToolsMenuActions();
 
     void connectHelpMenuActions();
-
-#ifdef HAVE_SOFTWARE_UPDATE
-    void checkForUpdates();
-#endif
 
     void goToCancelClicked();
     void goToGoClicked();

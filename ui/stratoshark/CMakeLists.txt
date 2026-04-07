@@ -92,6 +92,7 @@ set(WIRESHARK_UTILS_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/profile_switcher.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/proto_node.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/qt_ui_utils.h
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/stock_icon.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/tango_colors.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/variant_pointer.h
@@ -354,6 +355,7 @@ set(WIRESHARK_UTILS_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/profile_switcher.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/proto_node.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/qt_ui_utils.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/stock_icon.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/wireshark_mime_data.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/wireshark_zip_helper.cpp

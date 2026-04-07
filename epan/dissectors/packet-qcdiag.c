@@ -2043,7 +2043,7 @@ qcdictionary_load(wmem_array_t *hf_array _U_, GPtrArray *ett_array _U_)
     bool success = false;
 
     const char *data_dir = get_datafile_dir(epan_get_environment_prefix());
-    const char *safe_dir = g_build_filename(data_dir, "qualcomm", NULL);
+    char *safe_dir = g_build_filename(data_dir, "qualcomm", NULL);
 
     /* Reasoning for reading files in a particular folder
      *
@@ -2064,6 +2064,7 @@ qcdictionary_load(wmem_array_t *hf_array _U_, GPtrArray *ett_array _U_)
         }
         ws_dir_close(dir);
     }
+    g_free(safe_dir);
 
     if (success && dump_dict)
         qualcomm_dict_print(stdout, all_logcodes);

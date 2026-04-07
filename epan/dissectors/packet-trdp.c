@@ -477,7 +477,7 @@ static void XML_translate_element(TrdpDict* self, xmlNode* node, unsigned int* c
                 char* bit_name = (char*)xmlGetProp(bit, (const xmlChar*)"name");
                 char* position = (char*)xmlGetProp(bit, (const xmlChar*)"position");
                 Element_add_bit(el, bit_name, position, -1, &err);
-                xmlFree(name);
+                xmlFree(bit_name);
                 xmlFree(position);
 
                 bit = xmlNextElementSibling(bit);
@@ -2480,7 +2480,7 @@ static void add_reg_info(int *hf_ptr, const char *name, const char *abbrev, enum
 static void Element_add_reg_info(Element* el, const char* parentName) {
     char *name;
     char *abbrev;
-    const char *blurb;
+    char *blurb;
     int *pett_id = &el->ett_id;
 
     name = wmem_strdup(NULL, el->name);
@@ -2515,6 +2515,7 @@ static void Element_add_reg_info(Element* el, const char* parentName) {
                         }
                     }
                 }
+                wmem_free(NULL, blurb);
                 add_reg_info(&el->hf_id, name, abbrev, FT_UINT8, BASE_HEX, 0, NULL);
             } else {
                 add_reg_info(&el->hf_id, name, abbrev, FT_BOOLEAN, 8, 0, blurb);

@@ -182,9 +182,6 @@
    </layout>
   </widget>
   <widget class="QMenuBar" name="menuBar">
-   <property name="accessibleName">
-    <string>Main Menu</string>
-   </property>
    <property name="geometry">
     <rect>
      <x>0</x>
@@ -305,6 +302,8 @@
     <addaction name="actionHelpReleaseNotes"/>
     <addaction name="separator"/>
     <addaction name="actionHelpAbout"/>
+    <addaction name="separator"/>
+    <addaction name="actionHelpCheckUpdates"/>
    </widget>
    <widget class="QMenu" name="menuGo">
     <property name="title">
@@ -842,7 +841,6 @@
    <addaction name="actionFileSave"/>
    <addaction name="actionFileClose"/>
    <addaction name="actionViewReload"/>
-   <!-- XXX - Need an icon <addaction name="actionViewRedissect"/> -->
    <addaction name="separator"/>
    <addaction name="actionEditFindPacket"/>
    <addaction name="actionGoPreviousPacket"/>
@@ -3218,6 +3216,14 @@
   <action name="actionHelpReleaseNotes">
    <property name="text">
     <string>Release Notes</string>
+   </property>
+  </action>
+  <action name="actionHelpCheckUpdates">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Check for Updates…</string>
    </property>
   </action>
  </widget>
