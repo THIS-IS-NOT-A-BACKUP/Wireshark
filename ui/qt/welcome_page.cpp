@@ -202,18 +202,21 @@ void WelcomePage::appInitialized()
 
 void WelcomePage::applySidebarPreferences()
 {
+    // There are slides that will be shown EVEN if the section card is set hidden through the preferences.
+    // hasVisibleSlides() checks if there are any slides that should be shown, as well as the user's preferences.
+    bool slidesAreVisible = welcome_ui_->tipsSectionCard->hasVisibleSlides();
+
     welcome_ui_->tipsSectionCard->setSlideTypeVisible(BannerEvents, recent.gui_welcome_page_sidebar_tips_events);
     welcome_ui_->tipsSectionCard->setSlideTypeVisible(BannerSponsorship, recent.gui_welcome_page_sidebar_tips_sponsorship);
     welcome_ui_->tipsSectionCard->setSlideTypeVisible(BannerTips, recent.gui_welcome_page_sidebar_tips_tips);
     welcome_ui_->tipsSectionCard->setAutoAdvanceInterval(recent.gui_welcome_page_sidebar_tips_interval);
-    welcome_ui_->tipsSectionCard->setVisible(recent.gui_welcome_page_sidebar_tips_visible);
+    welcome_ui_->tipsSectionCard->setVisible(slidesAreVisible);
 
     welcome_ui_->learnSectionCard->setVisible(recent.gui_welcome_page_sidebar_learn_visible);
 
     // Hide the entire sidebar container when all sidebar widgets are disabled,
     // so the main content area can expand to fill the full window width.
-    bool sidebar_visible = recent.gui_welcome_page_sidebar_tips_visible ||
-                           recent.gui_welcome_page_sidebar_learn_visible;
+    bool sidebar_visible = slidesAreVisible || recent.gui_welcome_page_sidebar_learn_visible;
     welcome_ui_->sidebarContainer->setVisible(sidebar_visible);
 }
 

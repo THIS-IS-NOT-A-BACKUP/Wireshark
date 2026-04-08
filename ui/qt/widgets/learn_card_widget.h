@@ -19,13 +19,6 @@
 
 class QPushButton;
 
-struct learn_link_t {
-    QString url;
-    QString label;
-    QString short_label;
-    QString tooltip;
-};
-
 class LearnCardWidget : public QFrame {
     Q_OBJECT
 public:
@@ -35,13 +28,40 @@ public:
     bool isLinksCollapsed() const;
 
 private:
+
+    enum ValidityType {
+        AllVersions,
+        ReleaseOnly,
+        DevOnly
+    };
+
+    struct LinkType {
+        QString url;
+        QString label;
+        QString short_label;
+        QString tooltip;
+        ValidityType validity;
+    };
+
+    struct ButtonType {
+        QString url;
+        QString label;
+        QString tooltip;
+        QColor color;
+        QColor hover_color;
+        ValidityType validity;
+    };
+
+
     QVBoxLayout *main_layout_;
     QWidget *link_container_;
-    QWidget *compact_link_container_;
-    QList<learn_link_t> links_;
+    QList<LinkType> links_;
+    QList<ButtonType> buttons_;
     bool links_collapsed_;
 
     QString new_version_;
+
+    void loadLinksFromRessource();
 
     void setupLayout();
     void setupHeader();
@@ -52,6 +72,7 @@ private:
 private slots:
     void setVersionInfo(QString newVersion = QString());
     void resetVersionInfo();
+
 
 };
 

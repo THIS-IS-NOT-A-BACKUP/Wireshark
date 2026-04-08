@@ -97,6 +97,7 @@ InfoBannerWidget::InfoBannerWidget(QWidget *parent) :
     , default_color_end_(QColor(0x22, 0x22, 0x22))
 {
     qRegisterMetaType<BannerSlideType>();
+    slide_type_visible_[BannerSeasonal] = true;
     slide_type_visible_[BannerEvents] = true;
     slide_type_visible_[BannerSponsorship] = true;
     slide_type_visible_[BannerTips] = true;
@@ -130,6 +131,8 @@ BannerSlideType InfoBannerWidget::typeFromString(const QString &type_str)
         return BannerSponsorship;
     if (type_str == QLatin1String("tips"))
         return BannerTips;
+    if (type_str == QLatin1String("seasonal"))
+        return BannerSeasonal;
     return static_cast<BannerSlideType>(-1);
 }
 
@@ -143,8 +146,8 @@ BannerSlideType InfoBannerWidget::validTypeFromString(const QString &type_str,
         qWarning("InfoBannerWidget: unknown type \"%s\" in %s of %s, skipping",
                  qUtf8Printable(type_str), qUtf8Printable(context), qUtf8Printable(resource_path));
     }
-    if (is_custom && type == BannerSponsorship) {
-        qWarning("InfoBannerWidget: sponsorship type not allowed in custom file %s, skipping",
+    if (is_custom && (type == BannerSponsorship || type == BannerSeasonal)) {
+        qWarning("InfoBannerWidget: sponsorship or seasonal type not allowed in custom file %s, skipping",
                  qUtf8Printable(resource_path));
         return static_cast<BannerSlideType>(-1);
     }
@@ -187,19 +190,9 @@ void InfoBannerWidget::changeEvent(QEvent *event)
     QFrame::changeEvent(event);
 }
 
-QPair<QColor, QColor> InfoBannerWidget::gradientForType(BannerSlideType type) const
-{
-    if (type_config_.contains(type)) {
-        const SlideTypeConfig &cfg = type_config_[type];
-        if (cfg.color_start.isValid() && cfg.color_end.isValid())
-            return { cfg.color_start, cfg.color_end };
-    }
-    return { default_color_start_, default_color_end_ };
-}
-
 void InfoBannerWidget::setupSlides()
 {
-    all_slides_.clear();
+    slides_.clear();
     type_config_.clear();
     slides_by_type_.clear();
     type_offsets_.clear();
@@ -241,7 +234,7 @@ void InfoBannerWidget::setupSlides()
     }
 
     // Merge slides per type, respecting only and hidden flags
-    const QList<BannerSlideType> all_types = { BannerEvents, BannerSponsorship, BannerTips };
+    const QList<BannerSlideType> all_types = { BannerSeasonal, BannerEvents, BannerSponsorship, BannerTips };
     for (BannerSlideType type : all_types) {
         const SlideTypeConfig &cfg = type_config_[type];
 
@@ -282,11 +275,6 @@ void InfoBannerWidget::setupSlides()
     // Initialize per-type offsets
     for (auto it = slides_by_type_.constBegin(); it != slides_by_type_.constEnd(); ++it) {
         type_offsets_[it.key()] = 0;
-    }
-
-    // Populate all_slides_ for backward compat (used by applySlideFilter)
-    for (auto it = slides_by_type_.constBegin(); it != slides_by_type_.constEnd(); ++it) {
-        all_slides_.append(it.value());
     }
 }
 
@@ -337,22 +325,37 @@ void InfoBannerWidget::loadSlidesFromResource(const QString &resource_path,
         }
 
         // Parse per-type colors
-        const QStringList color_types = { QStringLiteral("events"), QStringLiteral("sponsorship"), QStringLiteral("tips") };
-        for (const QString &type_name : color_types) {
-            if (!colors_obj.contains(type_name))
-                continue;
-            BannerSlideType type = validTypeFromString(type_name, resource_path, "config.colors", is_custom);
+        for(auto it = colors_obj.constBegin(); it != colors_obj.constEnd(); ++it) {
+            if (it.key() == QLatin1String("default"))
+                continue; // already processed
+            BannerSlideType type = validTypeFromString(it.key(), resource_path, "config.colors", is_custom);
             if (static_cast<int>(type) < 0)
                 continue;
 
-            QJsonObject cobj = colors_obj.value(type_name).toObject();
+            QJsonObject cobj = it.value().toObject();
             SlideTypeConfig &cfg = file_config[type];
-            QColor start(cobj.value(QStringLiteral("start")).toString());
-            QColor end(cobj.value(QStringLiteral("end")).toString());
-            if (start.isValid())
-                cfg.color_start = start;
-            if (end.isValid())
-                cfg.color_end = end;
+            if (cobj.contains(QStringLiteral("steps"))) {
+                QJsonArray steps_array = cobj.value(QStringLiteral("steps")).toArray();
+                if ( steps_array.size() >= 2) {
+                    for (const QJsonValue &val : steps_array) {
+                        QColor step_color(val.toString());
+                        if (step_color.isValid())
+                            cfg.steps.append(step_color);
+                    }
+                } else {
+                    qWarning("InfoBannerWidget: type \"%s\" in config.colors of %s has less than 2 valid steps, ignoring steps and using defaults",
+                             qUtf8Printable(it.key()), qUtf8Printable(resource_path));
+                    cfg.steps = { default_color_start_, default_color_end_ };
+                }
+            } else {
+                QColor start(cobj.value(QStringLiteral("start")).toString());
+                QColor end(cobj.value(QStringLiteral("end")).toString());
+                if (start.isValid() && end.isValid()) {
+                    cfg.steps = { start, end };
+                }
+            }
+            if (cobj.contains(QStringLiteral("degrees")))
+                cfg.color_gradient = cobj.value(QStringLiteral("degrees")).toInt();
         }
 
         // Parse per-type settings
@@ -375,7 +378,9 @@ void InfoBannerWidget::loadSlidesFromResource(const QString &resource_path,
         }
     }
 
-    // Parse slides
+    QString flavor = application_flavor_is_wireshark() ? QStringLiteral("wireshark") : QStringLiteral("stratoshark");
+
+        // Parse slides
     QJsonArray slides_array = root.value(QStringLiteral("slides")).toArray();
     for (const QJsonValue &val : slides_array) {
         QJsonObject obj = val.toObject();
@@ -385,12 +390,11 @@ void InfoBannerWidget::loadSlidesFromResource(const QString &resource_path,
         if (static_cast<int>(type) < 0)
             continue;
 
-
         // Validate required fields before translation (check raw JSON values)
         QString raw_title = obj.value(QStringLiteral("title")).toString();
         QString raw_description = obj.value(QStringLiteral("description")).toString();
         QString raw_url = obj.value(QStringLiteral("url")).toString();
-        if (raw_title.isEmpty() || raw_description.isEmpty() || raw_url.isEmpty()) {
+        if (raw_title.isEmpty() || raw_url.isEmpty() || (type != BannerSeasonal && raw_description.isEmpty())) {
             qWarning("InfoBannerWidget: slide missing required field (title, description, or url) in %s, skipping",
                      qUtf8Printable(resource_path));
             continue;
@@ -406,19 +410,46 @@ void InfoBannerWidget::loadSlidesFromResource(const QString &resource_path,
         slide.button_label = resolveI18nField(obj, QStringLiteral("button_label"), is_custom);
         slide.url = resolveI18nField(obj, QStringLiteral("url"), is_custom);
         slide.image = obj.value(QStringLiteral("image")).toString();
-        QString date_from_str = obj.value(QStringLiteral("date_from")).toString();
-        if (!date_from_str.isEmpty())
-            slide.date_from = QDate::fromString(date_from_str, Qt::ISODate);
-        QString date_until_str = obj.value(QStringLiteral("date_until")).toString();
-        if (!date_until_str.isEmpty())
-            slide.date_until = QDate::fromString(date_until_str, Qt::ISODate);
+        slide.date_month = obj.value(QStringLiteral("date_month")).toInt();
+        slide.date_day = obj.value(QStringLiteral("date_day")).toInt();
+        if (type == BannerSeasonal && (slide.date_month < 1 || slide.date_month > 12 || slide.date_day < 1 || slide.date_day > 31)) {
+            qWarning("InfoBannerWidget: invalid or missing date_month/day for seasonal slide in %s, skipping",
+                     qUtf8Printable(resource_path));
+            continue;
+        }
+        if (slide.date_month > 0 && slide.date_day > 0) {
+            // For slides with valid month/day, if today doesn't match, skip it entirely
+            if (!(QDate::currentDate().month() == slide.date_month && QDate::currentDate().day() == slide.date_day)) {
+                continue;
+            }
+            // For slides with valid month/day, set the date to today
+            slide.date_from = QDate::currentDate();
+            slide.date_until = QDate::currentDate();
+        } else {
+            // The defined date_from and date_until fields (if any) are only used when month/day aren't specified.
+            QString date_from_str = obj.value(QStringLiteral("date_from")).toString();
+            if (!date_from_str.isEmpty())
+                slide.date_from = QDate::fromString(date_from_str, Qt::ISODate);
+            QString date_until_str = obj.value(QStringLiteral("date_until")).toString();
+            if (!date_until_str.isEmpty())
+                slide.date_until = QDate::fromString(date_until_str, Qt::ISODate);
+        }
+
+        slide.application = obj.value(QStringLiteral("application")).toString();
+        if (!slide.application.isEmpty() && slide.application != flavor) {
+            // Slide is targeted to a specific application and doesn't match current app, skip it
+            continue;
+        }
+
         file_slides[type].append(slide);
     }
 }
 
 void InfoBannerWidget::setSlideTypeVisible(BannerSlideType type, bool visible)
 {
-    slide_type_visible_[type] = visible;
+    if (type != BannerSeasonal) {
+        slide_type_visible_[type] = visible;
+    }
     applySlideFilter();
 }
 
@@ -432,29 +463,30 @@ void InfoBannerWidget::setAutoAdvanceInterval(unsigned seconds)
         auto_advance_timer_->start(auto_advance_ms_);
 }
 
-bool InfoBannerWidget::isAprilFoolsDay()
+bool InfoBannerWidget::hasVisibleSlides() const
 {
-    QDate today = QDate::currentDate();
-    return (today.month() == 4 && today.day() == 1);
+    QList <BannerSlideType> active_types = slides_by_type_.keys();
+    return (!recent.gui_welcome_page_sidebar_tips_visible && active_types.contains(BannerSeasonal)) ||
+            (recent.gui_welcome_page_sidebar_tips_visible && !slides_.isEmpty());
 }
 
 void InfoBannerWidget::applySlideFilter()
 {
-    if (!recent.gui_welcome_page_sidebar_tips_visible && isAprilFoolsDay()) {
-        // April Fools' override: show only the seasonal slide even when
-        // banners are disabled — that's part of the joke.
+    QList <BannerSlideType> active_types = slides_by_type_.keys();
+    if (!recent.gui_welcome_page_sidebar_tips_visible && active_types.contains(BannerSeasonal)) {
+        QList<BannerSlide> seasonal_slides = slides_by_type_.value(BannerSeasonal);
         slides_.clear();
-        slides_.append(aprilFoolsSlide(application_flavor_is_wireshark()));
+        slides_ << seasonal_slides;
         current_slide_ = 0;
         setVisible(true);
-    } else {
-        // Rebuild date-filtered per-type lists, then build the windowed sequence
-        buildSlideSequence();
-        if (current_slide_ >= slides_.size()) {
-            current_slide_ = 0;
-        }
-        setVisible(recent.gui_welcome_page_sidebar_tips_visible && !slides_.isEmpty());
     }
+
+    // Rebuild date-filtered per-type lists, then build the windowed sequence
+    buildSlideSequence();
+    if (current_slide_ >= slides_.size()) {
+        current_slide_ = 0;
+    }
+
     updateAccessibility();
     update();
 }
@@ -465,10 +497,10 @@ void InfoBannerWidget::buildSlideSequence()
     QDate today = QDate::currentDate();
 
     // Ordered type iteration for deterministic slide ordering
-    const QList<BannerSlideType> type_order = { BannerEvents, BannerSponsorship, BannerTips };
+    const QList<BannerSlideType> type_order = { BannerSeasonal, BannerEvents, BannerSponsorship, BannerTips };
 
     for (BannerSlideType type : type_order) {
-        if (!slide_type_visible_.value(type, true))
+        if (!slide_type_visible_.value(type, true) && type != BannerSeasonal)
             continue;
         if (!slides_by_type_.contains(type))
             continue;
@@ -500,54 +532,6 @@ void InfoBannerWidget::buildSlideSequence()
             }
         }
     }
-
-    addSeasonalSlides(today);
-}
-
-void InfoBannerWidget::addSeasonalSlides(const QDate &today)
-{
-    bool is_wireshark = application_flavor_is_wireshark();
-
-    if (today.month() == 7 && today.day() == 14 && is_wireshark) {
-        slides_.prepend(birthdaySlide());
-    }
-
-    if (isAprilFoolsDay()) {
-        slides_.prepend(aprilFoolsSlide(is_wireshark));
-    }
-}
-
-BannerSlide InfoBannerWidget::aprilFoolsSlide(bool is_wireshark)
-{
-    BannerSlide af;
-    af.type = BannerSeasonal;
-    af.tag = tr("April 1st");
-    af.title = tr("Happy April Fools' Day!");
-    af.description = "";
-    af.description_sub = "";
-    af.body_text = is_wireshark
-        ? tr("Sniffing the glue that holds the Internet together")
-        : tr("Sniffing the glue that holds your system together");
-    af.url = QStringLiteral("https://en.wikipedia.org/wiki/April_Fools%27_Day");
-    af.image = QStringLiteral("sharksbeingsharks.png");
-    return af;
-}
-
-BannerSlide InfoBannerWidget::birthdaySlide()
-{
-    BannerSlide bday;
-    bday.type = BannerSeasonal;
-    bday.tag = tr("Birthday");
-    bday.title = tr("Happy Birthday, Wireshark!");
-    bday.description = "";
-    bday.description_sub = "";
-    bday.body_text = tr("On this day in 1998, the first version of Ethereal (later renamed "
-                        "Wireshark) was released. Thank you to the community that has kept "
-                        "the project thriving ever since!");
-    bday.button_label = tr("Our History");
-    bday.url = QStringLiteral("https://wiki.wireshark.org/WiresharkHistory");
-    bday.image = QStringLiteral("sharkscelebratingsharks.png");
-    return bday;
 }
 
 void InfoBannerWidget::advanceSlide()
@@ -657,7 +641,15 @@ void InfoBannerWidget::paintEvent(QPaintEvent * /* event */)
     const bool is_seasonal = (slide.type == BannerSeasonal);
 
     // --- Card background gradient ---
-    double angle_rad = qDegreesToRadians(is_seasonal ? 45.0 : 145.0);
+    double angle_rad = qDegreesToRadians(static_cast<double>(type_config_[slide.type].color_gradient));
+
+    QList<QColor> gradient_colors;
+    if (type_config_.contains(slide.type)) {
+        gradient_colors = type_config_[slide.type].steps;
+    } else {
+        gradient_colors = { default_color_start_, default_color_end_ };
+    }
+
     double cx = r.width() / 2.0;
     double cy = r.height() / 2.0;
     double dx = qCos(angle_rad - M_PI / 2.0) * r.width();
@@ -668,18 +660,11 @@ void InfoBannerWidget::paintEvent(QPaintEvent * /* event */)
         QPointF(cx + dx / 2.0, cy + dy / 2.0)
     );
 
-    if (is_seasonal) {
-        // Rainbow gradient for seasonal slides (darkened for readability)
-        gradient.setColorAt(0.0, QColor(120, 30, 50));
-        gradient.setColorAt(0.2, QColor(140, 80, 20));
-        gradient.setColorAt(0.4, QColor(50, 120, 50));
-        gradient.setColorAt(0.6, QColor(30, 90, 130));
-        gradient.setColorAt(0.8, QColor(60, 40, 130));
-        gradient.setColorAt(1.0, QColor(100, 30, 100));
-    } else {
-        QPair<QColor, QColor> colors = gradientForType(slide.type);
-        gradient.setColorAt(0, colors.first);
-        gradient.setColorAt(1, colors.second);
+    auto gradSize = gradient_colors.size();
+    Q_ASSERT_X (gradSize > 1, "InfoBannerWidget::paintEvent", "Gradient must have at least 2 colors");
+
+    for (auto i = 0; i < gradSize; i++) {
+        gradient.setColorAt(i / (double)(gradSize - 1), gradient_colors.at(i));
     }
 
     painter.setPen(Qt::NoPen);

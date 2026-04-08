@@ -1240,7 +1240,8 @@ dissect_kmd(proto_tree *mka_tree, packet_info *pinfo _U_, tvbuff_t *tvb, int off
   proto_tree_add_uint(kmd_set_tree, hf_mka_param_body_length, tvb, offset, 2, param_body_len);
   offset += 2;
 
-  proto_tree_add_item(kmd_set_tree, hf_mka_kmd, tvb, offset, param_body_len, ENC_NA);
+  // Ref 802.1X-2020, 12.6 KMD: A string of up to 253 UTF-8 characters.
+  proto_tree_add_item(kmd_set_tree, hf_mka_kmd, tvb, offset, param_body_len, ENC_UTF_8);
 
   return kmd_set_tree;
 }
@@ -1279,6 +1280,7 @@ dissect_announcement(proto_tree *mka_tree, packet_info *pinfo, tvbuff_t *tvb, in
     offset2 += 2;
 
     if (tlv_length > 0) {
+      // See IEEE 802.1X-2010, Section 11.11.1, Figure 11-15 and Section 11.12
       switch (tlv_type) {
       case 112: // MACsec Cipher Suites
         for (uint16_t tlv_item_offset = 0; tlv_item_offset + 10 <= tlv_length; tlv_item_offset += 8) {
@@ -1297,10 +1299,12 @@ dissect_announcement(proto_tree *mka_tree, packet_info *pinfo, tvbuff_t *tvb, in
         }
         break;
 
-      case 111: // Access Information
       case 113: // Key Management Domain
+        proto_tree_add_item(tlv_tree, hf_mka_kmd, tvb, offset + offset2, tlv_length, ENC_UTF_8);
+        break;
+
+      case 111: // Access Information
       case 114: // NID (Network Identifier)
-        // See IEEE 802.1X-2010, Section 11.11.1, Figure 11-15 and Section 11.12
         proto_tree_add_expert(tlv_tree, pinfo, &ei_mka_unimplemented, tvb, offset + offset2, tlv_length);
         proto_tree_add_item(tlv_tree, hf_mka_tlv_data, tvb, offset + offset2, tlv_length, ENC_NA);
         break;
@@ -1693,7 +1697,7 @@ proto_register_mka(void) {
     { &hf_mka_aes_key_wrap_cak,             { "AES Key Wrap of CAK", "mka.aes_key_wrap_cak", FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }},
     { &hf_mka_macsec_cipher_suite,          { "MACsec Cipher Suite", "mka.macsec_cipher_suite", FT_UINT64, BASE_HEX|BASE_VAL64_STRING, VALS64(macsec_cipher_suite_vals), 0x0, NULL, HFILL }},
 
-    { &hf_mka_kmd,                          { "Key Management Domain", "mka.kmd", FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }},
+    { &hf_mka_kmd,                          { "Key Management Domain", "mka.kmd", FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }},
 
     { &hf_mka_suspension_time,              { "Suspension time", "mka.suspension_time", FT_UINT8, BASE_DEC, NULL, 0x0, NULL, HFILL }},
     { &hf_mka_latest_lowest_accept_pn_msb,  { "Latest Key: Lowest Acceptable PN (32 MSB)", "mka.latest_lowest_acceptable_pn_msb", FT_UINT32, BASE_DEC_HEX, NULL, 0x0, NULL, HFILL }},

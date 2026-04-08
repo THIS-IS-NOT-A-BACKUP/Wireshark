@@ -265,6 +265,14 @@ void WorkspaceState::onFileStatusChecked(const QString &filename, qint64 size, b
     }
 }
 
+bool WorkspaceState::isDevelopmentBuild()
+{
+    // VERSION_FLAVOR is always defined in config.h — it is set to
+    // "Development Build" by default and to an empty string for
+    // release builds (via the WIRESHARK_VERSION_FLAVOR env var).
+    return strlen(VERSION_FLAVOR) > 0;
+}
+
 bool WorkspaceState::isPortableApplication()
 {
 #ifdef Q_OS_WIN
