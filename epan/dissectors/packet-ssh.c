@@ -1931,6 +1931,7 @@ ssh_dissect_kex_ecdh(uint8_t msg_code, tvbuff_t *tvb,
      *   - PQ server ciphertext: 1568 bytes
      *   - nistp384 pubkey:      97 bytes
      *
+     * OpenSSH uses `sntrup761x25519-sha512@openssh.com` as an (old) alias for `sntrup761x25519-sha512`
      *
      * This matches how OpenSSH serializes the hybrid key material, and allows Wireshark
      * to compute the correct key exchange hash and derive session keys accurately.
@@ -2039,7 +2040,7 @@ ssh_dissect_kex_pq_hybrid(uint8_t msg_code, tvbuff_t *tvb,
 
         uint32_t pq_len;
         uint32_t t_len;
-        if (strcmp(kex_name, "sntrup761x25519-sha512") == 0) {
+        if (g_str_has_prefix(kex_name, "sntrup761x25519-sha512")) {
             pq_len = 1158;
             t_len = 32;
         } else if (strcmp(kex_name, "mlkem768x25519-sha256") == 0) {
@@ -2172,7 +2173,7 @@ ssh_dissect_kex_pq_hybrid(uint8_t msg_code, tvbuff_t *tvb,
 
         uint32_t pq_len;
         uint32_t t_len;
-        if (strcmp(kex_name, "sntrup761x25519-sha512") == 0) {
+        if (g_str_has_prefix(kex_name, "sntrup761x25519-sha512")) {
             pq_len = 1039;
             t_len = 32;
         } else if (strcmp(kex_name, "mlkem768x25519-sha256") == 0) {
@@ -2438,7 +2439,7 @@ static void ssh_set_kex_specific_dissector(struct ssh_flow_data *global_data)
     {
         global_data->kex_specific_dissector = ssh_dissect_kex_dh;
     }
-    else if (strcmp(kex_name, "sntrup761x25519-sha512") == 0 ||
+    else if (g_str_has_prefix(kex_name, "sntrup761x25519-sha512") ||
         strcmp(kex_name, "mlkem768x25519-sha256") == 0 ||
         strcmp(kex_name, "mlkem768nistp256-sha256") == 0 ||
         strcmp(kex_name, "mlkem1024nistp384-sha384") == 0)

@@ -6914,6 +6914,10 @@ static int hf_ieee80211_vs_aerohive_hostname_length;
 static int hf_ieee80211_vs_aerohive_hostname;
 static int hf_ieee80211_vs_aerohive_data;
 
+static int hf_ieee80211_vs_huawei_subtype;
+static int hf_ieee80211_vs_huawei_apname;
+static int hf_ieee80211_vs_huawei_data;
+
 static int hf_ieee80211_vs_mist_ap_name;
 static int hf_ieee80211_vs_mist_data;
 
@@ -6963,6 +6967,9 @@ static int hf_ieee80211_vs_ubiquiti_data;
 static int hf_ieee80211_vs_meter_type;
 static int hf_ieee80211_vs_meter_ap_name;
 static int hf_ieee80211_vs_meter_data;
+
+static int hf_ieee80211_vs_telecom_ap_name;
+static int hf_ieee80211_vs_telecom_data;
 
 static int hf_ieee80211_rsn_ie_ptk_keyid;
 
@@ -21891,6 +21898,42 @@ dissect_vendor_ie_aerohive(proto_item *item _U_, proto_tree *ietree,
   }
 }
 
+#define HUAWEI_APNAME  1
+static const value_string ieee80211_vs_huawei_subtype_vals[] = {
+  { HUAWEI_APNAME, "AP Name"},
+  { 0,                 NULL }
+};
+static void
+dissect_vendor_ie_huawei(proto_item *item, proto_tree *ietree,
+                          tvbuff_t *tvb, int offset, uint32_t tag_len, packet_info *pinfo)
+{
+  uint8_t type;
+  const uint8_t* name;
+
+  offset += 1; /* VS OUI Type */
+  tag_len -= 1;
+
+  proto_tree_add_item_ret_uint8(ietree, hf_ieee80211_vs_huawei_subtype, tvb, offset, 1, ENC_NA, &type);
+  proto_item_append_text(item, ": %s", val_to_str_const(type, ieee80211_vs_huawei_subtype_vals, "Unknown"));
+  offset += 1;
+  tag_len -= 1;
+
+  switch (type) {
+  case HUAWEI_APNAME:
+    offset += 1;
+    tag_len -= 1;
+
+    proto_tree_add_item_ret_string(ietree, hf_ieee80211_vs_huawei_apname, tvb,
+                         offset, tag_len, ENC_ASCII|ENC_NA, pinfo->pool, &name);
+    proto_item_append_text(item, " (%s)", name);
+    break;
+
+  default:
+    proto_tree_add_item(ietree, hf_ieee80211_vs_huawei_data, tvb, offset, tag_len, ENC_NA);
+    break;
+  }
+}
+
 #define MIST_APNAME 1
 static const value_string ieee80211_vs_mist_type_vals[] = {
     { MIST_APNAME, "AP Name"},
@@ -21980,6 +22023,37 @@ dissect_vendor_ie_meter(proto_item *item _U_, proto_tree *ietree,
 
         default:
             proto_tree_add_item(ietree, hf_ieee80211_vs_meter_data, tvb, offset, tag_len, ENC_NA);
+            break;
+    }
+}
+
+#define TELECOM_APNAME 2
+static const value_string ieee80211_vs_telecom_type_vals[] = {
+    { TELECOM_APNAME, "AP Name"},
+    { 0,           NULL }
+};
+static void
+dissect_vendor_ie_telecom(proto_item *item _U_, proto_tree *ietree,
+                       tvbuff_t *tvb, int offset, uint32_t tag_len, packet_info *pinfo)
+{
+    uint32_t type, length;
+    const uint8_t* apname;
+
+    /* VS OUI Type */
+    type = tvb_get_uint8(tvb, offset);
+    proto_item_append_text(item, ": %s", val_to_str_const(type, ieee80211_vs_telecom_type_vals, "Unknown"));
+    offset += 1;
+    tag_len -= 1;
+
+    switch(type){
+        case TELECOM_APNAME:
+            length = tag_len;
+            proto_tree_add_item_ret_string(ietree, hf_ieee80211_vs_telecom_ap_name, tvb, offset, length, ENC_ASCII|ENC_NA, pinfo->pool, &apname);
+            proto_item_append_text(item, " (%s)", apname);
+            break;
+
+        default:
+            proto_tree_add_item(ietree, hf_ieee80211_vs_telecom_data, tvb, offset, tag_len, ENC_NA);
             break;
     }
 }
@@ -34258,6 +34332,9 @@ ieee80211_tag_vendor_specific_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
     case OUI_AEROHIVE:
       dissect_vendor_ie_aerohive(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
       break;
+    case OUI_HUAWEI:
+      dissect_vendor_ie_huawei(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
+      break;
     case OUI_MIST:
       dissect_vendor_ie_mist(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
       break;
@@ -34266,6 +34343,9 @@ ieee80211_tag_vendor_specific_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
       break;
     case OUI_METER:
       dissect_vendor_ie_meter(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
+      break;
+    case OUI_TELECOM:
+      dissect_vendor_ie_telecom(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
       break;
     case OUI_RUCKUS:
       dissect_vendor_ie_ruckus(field_data->item_tag, tree, tvb, offset, tag_vs_len, pinfo);
@@ -55696,6 +55776,22 @@ proto_register_ieee80211(void)
       FT_BYTES, BASE_NONE, NULL, 0,
       NULL, HFILL }},
 
+    /* Vendor Specific : Huawei */
+    {&hf_ieee80211_vs_huawei_subtype,
+     {"Subtype", "wlan.vs.huawei.subtype",
+       FT_UINT8, BASE_DEC, VALS(ieee80211_vs_huawei_subtype_vals), 0,
+       NULL, HFILL }},
+
+    {&hf_ieee80211_vs_huawei_apname,
+     {"AP Name", "wlan.vs.huawei.ap_name",
+       FT_STRINGZ, BASE_NONE, NULL, 0,
+       NULL, HFILL }},
+
+    {&hf_ieee80211_vs_huawei_data,
+     {"Data", "wlan.vs.huawei.data",
+       FT_BYTES, BASE_NONE, NULL, 0,
+       NULL, HFILL }},
+
     /* Vendor Specific : Mist */
     {&hf_ieee80211_vs_mist_ap_name,
      {"AP Name", "wlan.vs.mist.apname",
@@ -55735,6 +55831,17 @@ proto_register_ieee80211(void)
 
     {&hf_ieee80211_vs_meter_data,
      {"Data", "wlan.vs.meter.data",
+       FT_BYTES, BASE_NONE, NULL, 0,
+       NULL, HFILL }},
+
+    /* Vendor Specific : Telecom Infra Project */
+    {&hf_ieee80211_vs_telecom_ap_name,
+     {"AP Name", "wlan.vs.telecom.apname",
+       FT_STRING, BASE_NONE, NULL, 0,
+       NULL, HFILL }},
+
+    {&hf_ieee80211_vs_telecom_data,
+     {"Data", "wlan.vs.telecom.data",
        FT_BYTES, BASE_NONE, NULL, 0,
        NULL, HFILL }},
 

@@ -425,6 +425,27 @@ static int hf_id_status_minor_fault_unrec;
 static int hf_id_status_major_fault_rec;
 static int hf_id_status_major_fault_unrec;
 static int hf_id_status_extended2;
+static int hf_id_active_language;
+static int hf_id_supported_language_list;
+static int hf_id_int_product_name;
+static int hf_id_semaphore_client_key;
+static int hf_id_semaphore_vendor;
+static int hf_id_semaphore_client_sn;
+static int hf_id_semaphore_timer;
+static int hf_id_assigned_name;
+static int hf_id_assigned_description;
+static int hf_id_geographic_location;
+static int hf_id_modbus_identity_vendor_name;
+static int hf_id_modbus_identity_product_code;
+static int hf_id_modbus_identity_revision;
+static int hf_id_modbus_identity_vendor_url;
+static int hf_id_modbus_identity_product_name;
+static int hf_id_modbus_identity_model_name;
+static int hf_id_modbus_identity_app_name;
+static int hf_id_protection_mode;
+static int hf_id_protection_mode_implicit;
+static int hf_id_protection_mode_explicit;
+static int hf_id_uptime;
 static int hf_msg_rout_num_classes;
 static int hf_msg_rout_classes;
 static int hf_msg_rout_num_available;
@@ -670,6 +691,10 @@ static int ett_time_sync_port_profile_id_info;
 static int ett_time_sync_port_phys_addr_info;
 static int ett_time_sync_port_proto_addr_info;
 static int ett_id_status;
+static int ett_id_semaphore;
+static int ett_id_semaphore_client_key;
+static int ett_id_modbus_info;
+static int ett_id_protection_mode;
 static int ett_32bitheader_tree;
 
 static int ett_connection_info;
@@ -678,6 +703,10 @@ static int ett_stringi_entry;
 
 static expert_field ei_mal_identity_revision;
 static expert_field ei_mal_identity_status;
+static expert_field ei_mal_identity_active_language;
+static expert_field ei_mal_identity_supported_language_list;
+static expert_field ei_mal_identity_semaphore;
+static expert_field ei_mal_identity_protection_mode;
 static expert_field ei_mal_msg_rout_num_classes;
 static expert_field ei_mal_time_sync_gm_clock;
 static expert_field ei_mal_time_sync_parent_clock;
@@ -1015,6 +1044,30 @@ static const value_string cip_con_rtf_vals[] = {
 
    { 0,        NULL             }
 };
+
+/* Identity Stats Extended Device Status Value */
+static const value_string cip_id_status_extended_vals[] =
+{
+   {0,        "Self-Testing or Unknown"},
+   {1,        "Firmware Update in Progress"},
+   {2,        "At least one faulted I/O connection"},
+   {3,        "No I/O connections established"},
+   {4,        "Non-Volatile Configuration bad"},
+   {5,        "Major Fault"},
+   {6,        "At least one I/O connection in run modes"},
+   {7,        "At least one I/O connection established, all in idle mode"},
+   {8,        "The Status attribute is not applicable to this instance."},
+   {9,        "Reserved"},
+   {10,       "Vendor specific"},
+   {11,       "Vendor specific"},
+   {12,       "Vendor specific"},
+   {13,       "Vendor specific"},
+   {14,       "Vendor specific"},
+   {15,       "Vendor specific"},
+
+   {0,        NULL}
+};
+static value_string_ext cip_id_status_extended_vals_ext = VALUE_STRING_EXT_INIT(cip_id_status_extended_vals);
 
 /* Translate function to string - CCO change type */
 static const value_string cip_cco_change_type_vals[] = {
@@ -3946,6 +3999,112 @@ int dissect_cip_id_status(packet_info *pinfo, proto_tree *tree, proto_item *item
    return 2;
 }
 
+static int dissect_cip_id_active_language(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len)
+{
+   if (total_len != 3)
+   {
+      expert_add_info(pinfo, item, &ei_mal_identity_active_language);
+      return total_len;
+   }
+
+   proto_tree_add_item(tree, hf_id_active_language, tvb, offset, 3, ENC_ASCII);
+
+   return 3;
+}
+
+static int dissect_cip_id_supported_language_list(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len)
+{
+   if (total_len % 3 != 0)
+   {
+      expert_add_info(pinfo, item, &ei_mal_identity_supported_language_list);
+      return total_len;
+   }
+
+   int num_languages = total_len / 3;
+
+   for (int i = 0; i < num_languages; i++)
+   {
+      int lang_offset = offset + (i * 3);
+      char* lang = (char*)tvb_get_string_enc(pinfo->pool, tvb, lang_offset, 3, ENC_ASCII);
+      proto_tree_add_string_format(tree, hf_id_supported_language_list, tvb, lang_offset, 3, lang, "Language %d: %s", i + 1, lang);
+   }
+
+   return total_len;
+}
+
+static int dissect_cip_id_semaphore(packet_info* pinfo, proto_tree* tree _U_, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len)
+{
+   if (total_len != 8)
+   {
+      expert_add_info(pinfo, item, &ei_mal_identity_semaphore);
+      return total_len;
+   }
+
+   int current_offset = offset;
+
+   /* Top-level subtree: Semaphore */
+   proto_tree* semaphore_tree = proto_item_add_subtree(item, ett_id_semaphore);
+
+   /* ---- Client Electronic Key subtree ---- */
+   proto_item* cek_item = proto_tree_add_none_format(semaphore_tree, hf_id_semaphore_client_key, tvb, current_offset, 6, "Client Electronic Key");
+   proto_tree* cek_tree = proto_item_add_subtree(cek_item,ett_id_semaphore_client_key);
+
+   proto_tree_add_item(cek_tree, hf_id_semaphore_vendor, tvb, current_offset, 2, ENC_LITTLE_ENDIAN);
+   current_offset += 2;
+
+   proto_tree_add_item(cek_tree, hf_id_semaphore_client_sn, tvb, current_offset, 4, ENC_LITTLE_ENDIAN);
+   current_offset += 4;
+
+   proto_tree_add_item(semaphore_tree, hf_id_semaphore_timer, tvb, current_offset, 2, ENC_LITTLE_ENDIAN);
+
+   return 8;
+}
+
+static int dissect_cip_id_modbus_identity_info(packet_info* pinfo, proto_tree* tree _U_, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len _U_)
+{
+   int current_offset = offset;
+
+   /* Top-level subtree: Modbus Identity Info */
+   proto_tree* modbus_identity = proto_item_add_subtree(
+      item,
+      ett_id_modbus_info
+   );
+
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_vendor_name, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_product_code, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_revision, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_vendor_url, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_product_name, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_model_name, CIP_SHORT_STRING_TYPE);
+   current_offset += dissect_cip_string_type(pinfo, modbus_identity, item, tvb, current_offset, hf_id_modbus_identity_app_name, CIP_SHORT_STRING_TYPE);
+
+   return current_offset - offset;
+}
+
+int dissect_cip_id_protection_mode(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+   int offset, int total_len)
+{
+   static int* const protection_mode[] = {
+      &hf_id_protection_mode_implicit,
+      &hf_id_protection_mode_explicit,
+      NULL
+   };
+
+   if (total_len < 2)
+   {
+      expert_add_info(pinfo, item, &ei_mal_identity_protection_mode);
+      return total_len;
+   }
+
+   proto_tree_add_bitmask(tree, tvb, offset, hf_id_protection_mode, ett_id_protection_mode, protection_mode, ENC_LITTLE_ENDIAN);
+
+   return 2;
+}
+
 static int dissect_msg_rout_num_classes(packet_info *pinfo, proto_tree *tree, proto_item *item, tvbuff_t *tvb,
                              int offset, int total_len)
 {
@@ -4898,6 +5057,16 @@ static const attribute_info_t cip_attribute_vals[] = {
    {0x01, false, 8, 7, "State", cip_usint, &hf_id_state, NULL},
    {0x01, false, 9, 8, "Configuration Consistency Value", cip_uint, &hf_id_config_value, NULL},
    {0x01, false, 10, 9, "Heartbeat Interval", cip_usint, &hf_id_heartbeat, NULL},
+   {0x01, false, 11, -1, "Active Language", cip_dissector_func, NULL, dissect_cip_id_active_language},
+   {0x01, false, 12, -1, "Supported Language List", cip_dissector_func, NULL, dissect_cip_id_supported_language_list},
+   {0x01, false, 13, -1, "International Product Name", cip_stringi, &hf_id_int_product_name, NULL},
+   {0x01, false, 14, -1, "Semaphore", cip_dissector_func, NULL, dissect_cip_id_semaphore},
+   {0x01, false, 15, -1, "Assigned Name", cip_stringi, &hf_id_assigned_name, NULL},
+   {0x01, false, 16, -1, "Assigned Description", cip_stringi, &hf_id_assigned_description, NULL},
+   {0x01, false, 17, -1, "Assigned Geographic Location", cip_stringi, &hf_id_geographic_location, NULL},
+   {0x01, false, 18, -1, "Modbus Identity Info", cip_dissector_func, NULL, dissect_cip_id_modbus_identity_info},
+   {0x01, false, 19, -1, "Protection Mode", cip_dissector_func, NULL, dissect_cip_id_protection_mode},
+   {0x01, false, 20, -1, "Uptime", cip_udint, &hf_id_uptime, NULL},
    {0x01, false, 21, -1, "Catalog Number", cip_short_string, &hf_id_catalog_number, NULL},
    {0x01, false, 22, -1, "Manufacture Date", cip_date, &hf_id_manufacture_date, NULL},
 
@@ -6876,7 +7045,7 @@ int dissect_cip_string_type(packet_info *pinfo, proto_tree *tree, proto_item *it
         break;
 
     case CIP_STRINGN_TYPE:
-       char_size = tvb_get_letohs(tvb, offset) * 2;
+       char_size = tvb_get_letohs(tvb, offset);
        string_size = tvb_get_letohs(tvb, offset+2) * char_size;
 
        /* Determine the string encoding; only 1-, 2-, or 4-byte character widths are supported. */
@@ -10569,19 +10738,40 @@ proto_register_cip(void)
       { &hf_id_status, { "Status", "cip.id.status", FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL }},
       { &hf_id_serial_number, { "Serial Number", "cip.id.serial_number", FT_UINT32, BASE_HEX, NULL, 0, NULL, HFILL }},
       { &hf_id_product_name, { "Product Name", "cip.id.product_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL }},
-      { &hf_id_state, { "State", "cip.id.state", FT_UINT8, BASE_HEX, VALS(cip_id_state_vals), 0, NULL, HFILL } },
+      { &hf_id_state, { "State", "cip.id.state", FT_UINT8, BASE_DEC, VALS(cip_id_state_vals), 0, NULL, HFILL } },
       { &hf_id_config_value, { "Configuration Consistency Value", "cip.id.config_value", FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL } },
-      { &hf_id_heartbeat, { "Heartbeat Interval", "cip.id.heartbeat", FT_UINT8, BASE_HEX, NULL, 0, NULL, HFILL } },
+      { &hf_id_heartbeat, { "Heartbeat Interval", "cip.id.heartbeat", FT_UINT8, BASE_DEC | BASE_UNIT_STRING, UNS(&units_second_seconds), 0, NULL, HFILL } },
       { &hf_id_catalog_number, { "Catalog Number", "cip.id.catalog_number", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL }},
       { &hf_id_manufacture_date, { "Manufacture Date", "cip.id.manufacture_date", FT_UINT16, BASE_DEC, NULL, 0, NULL, HFILL } },
       { &hf_id_status_owned, { "Owned", "cip.id.owned", FT_UINT16, BASE_DEC, NULL, 0x0001, NULL, HFILL } },
       { &hf_id_status_conf, { "Configured", "cip.id.conf", FT_UINT16, BASE_DEC, NULL, 0x0004, NULL, HFILL } },
-      { &hf_id_status_extended1, { "Extended Device Status", "cip.id.ext", FT_UINT16, BASE_HEX, NULL, 0x00F0, NULL, HFILL } },
+      { &hf_id_status_extended1, { "Extended Device Status", "cip.id.ext", FT_UINT16, BASE_DEC | BASE_EXT_STRING, &cip_id_status_extended_vals_ext, 0x00F0, NULL, HFILL } },
       { &hf_id_status_minor_fault_rec, { "Minor Recoverable Fault", "cip.id.minor_fault1", FT_UINT16, BASE_DEC, NULL, 0x0100, NULL, HFILL } },
       { &hf_id_status_minor_fault_unrec, { "Minor Unrecoverable Fault", "cip.id.minor_fault2", FT_UINT16, BASE_DEC, NULL, 0x0200, NULL, HFILL } },
       { &hf_id_status_major_fault_rec, { "Major Recoverable Fault", "cip.id.major_fault1", FT_UINT16, BASE_DEC, NULL, 0x0400, NULL, HFILL } },
       { &hf_id_status_major_fault_unrec, { "Major Unrecoverable Fault", "cip.id.major_fault2", FT_UINT16, BASE_DEC, NULL, 0x0800, NULL, HFILL } },
       { &hf_id_status_extended2, { "Extended Device Status 2", "cip.id.ext2", FT_UINT16, BASE_HEX, NULL, 0xF000, NULL, HFILL } },
+      { &hf_id_active_language, { "Active Language", "cip.id.active_language", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_supported_language_list, { "Supported Language List", "cip.id.supported_language_list", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_int_product_name, { "International Product Name", "cip.id.int_product_name", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_id_semaphore_client_key, { "Client Electronic Key", "cip.id.semaphore.client_key", FT_NONE, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_semaphore_vendor, { "Vendor Number", "cip.id.semaphore.vendor", FT_UINT16, BASE_HEX | BASE_EXT_STRING, &cip_vendor_vals_ext, 0, NULL, HFILL } },
+      { &hf_id_semaphore_client_sn, { "Client Serial Number", "cip.id.v.client_serial_number", FT_UINT32, BASE_HEX, NULL, 0, NULL, HFILL } },
+      { &hf_id_semaphore_timer, { "Semaphore Timer", "cip.id.semaphore.timer", FT_UINT16, BASE_DEC | BASE_UNIT_STRING, UNS(&units_millisecond_milliseconds), 0, NULL, HFILL } },
+      { &hf_id_assigned_name, { "Assigned Name", "cip.id.assigned_name", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_id_assigned_description, { "Assigned Description", "cip.id.assigned_description", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_id_geographic_location, { "Geographic Location", "cip.id.geographic_location", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_vendor_name, { "Modbus Identity Vendor Name", "cip.id.modbus_identity.vendor_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_product_code, { "Modbus Identity Product Code", "cip.id.modbus_identity.product_code", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_revision, { "Modbus Identity Major Minor Revision", "cip.id.modbus_identity.revision", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_vendor_url, { "Modbus Identity Vendor URL", "cip.id.modbus_identity.vendor_url", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_product_name, { "Modbus Identity Product Name", "cip.id.modbus_identity.product_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_model_name, { "Modbus Identity Model Name", "cip.id.modbus_identity.model_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_modbus_identity_app_name, { "Modbus Identity User App Name", "cip.id.modbus_identity.app_name", FT_STRING, BASE_NONE, NULL, 0, NULL, HFILL } },
+      { &hf_id_protection_mode, { "Protection Mode", "cip.id.protection_mode", FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL } },
+      { &hf_id_protection_mode_implicit, { "Implicit Protection Setting", "cip.id.protection_mode.implicit", FT_UINT16, BASE_HEX, NULL, 0x0007, NULL, HFILL } },
+      { &hf_id_protection_mode_explicit, { "Explicit Protection Setting", "cip.id.protection_mode.explicit", FT_UINT16, BASE_DEC, NULL, 0x0008, NULL, HFILL } },
+      { &hf_id_uptime, { "Uptime", "cip.id.uptime", FT_UINT32, BASE_DEC | BASE_UNIT_STRING, UNS(&units_second_seconds), 0, NULL, HFILL } },
 
       { &hf_msg_rout_num_classes, { "Number of Classes", "cip.mr.num_classes", FT_UINT16, BASE_DEC, NULL, 0, NULL, HFILL }},
       { &hf_msg_rout_classes, { "Class", "cip.mr.class", FT_UINT16, BASE_HEX|BASE_EXT_STRING, &cip_class_names_vals_ext, 0, NULL, HFILL }},
@@ -10978,6 +11168,9 @@ proto_register_cip(void)
       &ett_time_sync_port_phys_addr_info,
       &ett_time_sync_port_proto_addr_info,
       &ett_id_status,
+      &ett_id_semaphore,
+      &ett_id_modbus_info,
+      &ett_id_protection_mode,
       &ett_file_revision,
       &ett_file_save_params,
       &ett_32bitheader_tree,
@@ -11027,6 +11220,10 @@ proto_register_cip(void)
    static ei_register_info ei[] = {
       { &ei_mal_identity_revision, { "cip.malformed.id.revision", PI_MALFORMED, PI_ERROR, "Malformed Identity revision", EXPFILL }},
       { &ei_mal_identity_status, { "cip.malformed.id.status", PI_MALFORMED, PI_ERROR, "Malformed Identity status", EXPFILL } },
+      { &ei_mal_identity_active_language, { "cip.malformed.id.active_language", PI_MALFORMED, PI_ERROR, "Malformed Identity Active Language", EXPFILL } },
+      { &ei_mal_identity_supported_language_list, { "cip.malformed.id.supported_language_list", PI_MALFORMED, PI_ERROR, "Malformed Identity Supported Language List", EXPFILL } },
+      { &ei_mal_identity_semaphore, { "cip.malformed.id.semaphore", PI_MALFORMED, PI_ERROR, "Malformed Identity Semaphore", EXPFILL } },
+      { &ei_mal_identity_protection_mode, { "cip.malformed.id.protection_mode", PI_MALFORMED, PI_ERROR, "Malformed Identity Protection Mode", EXPFILL } },
       { &ei_mal_msg_rout_num_classes, { "cip.malformed.msg_rout.num_classes", PI_MALFORMED, PI_ERROR, "Malformed Message Router Attribute 1", EXPFILL }},
       { &ei_mal_time_sync_gm_clock, { "cip.malformed.time_sync.gm_clock", PI_MALFORMED, PI_ERROR, "Malformed Grandmaster clock info", EXPFILL }},
       { &ei_mal_time_sync_parent_clock, { "cip.malformed.time_sync.parent_clock", PI_MALFORMED, PI_ERROR, "Malformed Parent clock info", EXPFILL }},

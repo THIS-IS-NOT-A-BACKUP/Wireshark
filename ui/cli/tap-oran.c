@@ -385,8 +385,8 @@ oran_stat_draw(void *phs)
         truncate_column(sectionids_strbuf, 28);
 
 
-        /* Beams. Only showing for DL CP..  */
-        if (!row->base_info.uplink && !row->base_info.userplane) {
+        /* Beams. Only showing for CP.  */
+        if (!row->base_info.userplane) {
             for (int b=0; b < MIN(row->base_info.num_beams, MAX_BEAMS_IN_FRAME); b++) {
                 wmem_strbuf_append_printf(beams_strbuf, " %u", row->base_info.beams[b]);
             }
