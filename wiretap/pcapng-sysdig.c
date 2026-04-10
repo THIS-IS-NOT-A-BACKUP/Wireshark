@@ -98,8 +98,8 @@ pcapng_read_sysdig_event_block(wtap* wth, FILE_T fh, uint32_t block_type,
     // Event header
     if (ckd_sub(&block_remaining, block_remaining, event_header_len)) {
         *err = WTAP_ERR_BAD_FILE;
-        *err_info = ws_strdup_printf("pcapng: block content length %u of a Sysdig event block is too small for a preamble of length %u)",
-            block_content_length, preamble_len);
+        *err_info = ws_strdup_printf("pcapng: block content length %u of a Sysdig event block is too small for an event header of length %u)",
+            block_content_length, event_header_len);
         return false;
     }
     if (!wtap_read_bytes(fh, &ts, sizeof ts, err, err_info)) {

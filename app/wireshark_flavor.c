@@ -139,6 +139,11 @@ unsigned application_num_columns(void)
     return 7;
 }
 
+const char *application_flavor_release_notes_url(void)
+{
+    return "https://www.wireshark.org/docs/relnotes/";
+}
+
 bool application_flavor_is_wireshark(void)
 {
     return true;

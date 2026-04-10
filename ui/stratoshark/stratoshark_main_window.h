@@ -416,7 +416,7 @@ private slots:
     void on_actionContextFilterFieldReference_triggered();
 
     void extcap_options_finished(int result);
-    void showExtcapOptionsDialog(QString & device_name, bool startCaptureOnClose);
+    void showExtcapOptionsDialog(QString device_name, bool startCaptureOnClose);
 
     friend class MainApplication;
 };

@@ -1766,8 +1766,8 @@ dissect_qcdiag_log_wcdma_rrc_states(tvbuff_t *tvb, uint32_t offset, packet_info 
     /* RRC State */
     proto_tree_add_item_ret_uint8(log_tree, hf_qcdiag_wcdma_rrc_state, tvb, offset, 1, ENC_NA, &state);
 
-    state_str = val_to_str_const(state, wcdma_rrc_states_vals, "Unknown State");
-    col_append_fstr(pinfo->cinfo, COL_INFO, ", %s (%d)", state_str, state);
+    state_str = val_to_str(pinfo->pool, state, wcdma_rrc_states_vals, "Unknown State (%d)");
+    col_append_fstr(pinfo->cinfo, COL_INFO, ", %s", state_str);
 }
 
 static void
@@ -2092,8 +2092,7 @@ static void
 dissect_qcdiag_log_wcdma_rlc_dl_am_cipher_pdu(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo _U_, proto_tree *log_tree, proto_tree *tree _U_)
 {
     proto_tree *subtree;
-    uint32_t i;
-    uint16_t num;
+    uint16_t i, num;
 
     /* Number of PDUs */
     proto_tree_add_item_ret_uint16(log_tree, hf_qcdiag_wcdma_rlc_num_pdu, tvb, offset, 2, ENC_LITTLE_ENDIAN, &num);
@@ -2130,8 +2129,7 @@ static void
 dissect_qcdiag_log_wcdma_rlc_ul_am_cipher_pdu(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo _U_, proto_tree *log_tree, proto_tree *tree _U_)
 {
     proto_tree *subtree;
-    uint32_t i;
-    uint16_t num;
+    uint16_t i, num;
 
     /* Number of PDUs */
     proto_tree_add_item_ret_uint16(log_tree, hf_qcdiag_wcdma_rlc_num_pdu, tvb, offset, 2, ENC_LITTLE_ENDIAN, &num);
@@ -2473,7 +2471,7 @@ dissect_qcdiag_log_lte_rrc(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, p
     tvbuff_t *payload_tvb, *gsmtap_hdr_tvb, *gsmtap_tvb;
     uint32_t version, sfn, pdu, subtype, subslot, arfcn, earfcn, frame_nr;
     uint8_t rnum, rmajmin;
-    char buf[ITEM_LABEL_LENGTH];
+    wmem_strbuf_t *buf;
     bool direction;
 
     /* Packet Version */
@@ -2483,22 +2481,22 @@ dissect_qcdiag_log_lte_rrc(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, p
     rnum    = tvb_get_uint8(tvb, offset);
     rmajmin = tvb_get_uint8(tvb, offset+1);
 
-    /* proto_tree_add_string() creates its own internal wmem copy of 'buf' */
-    snprintf(buf, ITEM_LABEL_LENGTH, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
+    buf = wmem_strbuf_new(pinfo->pool, "");
+    wmem_strbuf_append_printf(buf, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
 
     /* LTE Release Number */
-    proto_tree_add_string(log_tree, hf_qcdiag_lte_rrc_rel, tvb, offset, 2, buf);
+    proto_tree_add_string(log_tree, hf_qcdiag_lte_rrc_rel, tvb, offset, 2, wmem_strbuf_get_str(buf));
     offset += 2;
 
     if (version > 24) {
         rnum    = tvb_get_uint8(tvb, offset);
         rmajmin = tvb_get_uint8(tvb, offset+1);
 
-        /* proto_tree_add_string() creates its own internal wmem copy of 'buf' */
-        snprintf(buf, ITEM_LABEL_LENGTH, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
+        buf = wmem_strbuf_new(pinfo->pool, "");
+        wmem_strbuf_append_printf(buf, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
 
         /* NR Release Number */
-        proto_tree_add_string(log_tree, hf_qcdiag_nr_rrc_rel, tvb, offset, 2, buf);
+        proto_tree_add_string(log_tree, hf_qcdiag_nr_rrc_rel, tvb, offset, 2, wmem_strbuf_get_str(buf));
         offset += 2;
     }
 
@@ -2578,7 +2576,7 @@ dissect_qcdiag_log_lte_nas(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, p
     tvbuff_t *payload_tvb, *gsmtap_hdr_tvb, *gsmtap_tvb;
     uint16_t arfcn;
     uint8_t msgtype, number, major, minor;
-    char buf[ITEM_LABEL_LENGTH];
+    wmem_strbuf_t *buf;
     bool direction;
 
     /* Version */
@@ -2589,11 +2587,11 @@ dissect_qcdiag_log_lte_nas(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, p
     major  = tvb_get_uint8(tvb, offset+1);
     minor  = tvb_get_uint8(tvb, offset+2);
 
-    /* proto_tree_add_string() creates its own internal wmem copy of 'buf' */
-    snprintf(buf, ITEM_LABEL_LENGTH, "%u.%u.%u", number, major, minor);
+    buf = wmem_strbuf_new(pinfo->pool, "");
+    wmem_strbuf_append_printf(buf, "%u.%u.%u", number, major, minor);
 
     /* Release Version */
-    proto_tree_add_string(log_tree, hf_qcdiag_lte_nas_rel, tvb, offset, 3, buf);
+    proto_tree_add_string(log_tree, hf_qcdiag_lte_nas_rel, tvb, offset, 3, wmem_strbuf_get_str(buf));
     offset += 3;
 
     /* Message Type */
@@ -2635,7 +2633,7 @@ dissect_qcdiag_log_nr_rrc(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, pr
     uint32_t version;
     uint8_t pdu, rnum, rmajmin;
     uint64_t ncgi;
-    char buf[ITEM_LABEL_LENGTH];
+    wmem_strbuf_t *buf;
     int hf_pdu;
 
     /* Version */
@@ -2647,11 +2645,11 @@ dissect_qcdiag_log_nr_rrc(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, pr
     rnum    = tvb_get_uint8(tvb, offset);
     rmajmin = tvb_get_uint8(tvb, offset+1);
 
-    /* proto_tree_add_string() creates its own internal wmem copy of 'buf' */
-    snprintf(buf, ITEM_LABEL_LENGTH, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
+    buf = wmem_strbuf_new(pinfo->pool, "");
+    wmem_strbuf_append_printf(buf, "%u.%u.%u", rnum, rmajmin / 16, rmajmin % 16);
 
     /* NR Release Number */
-    proto_tree_add_string(log_tree, hf_qcdiag_nr_rrc_rel, tvb, offset, 2, buf);
+    proto_tree_add_string(log_tree, hf_qcdiag_nr_rrc_rel, tvb, offset, 2, wmem_strbuf_get_str(buf));
     offset += 2;
 
     /* Radio Bearer Id */
@@ -2736,7 +2734,7 @@ dissect_qcdiag_log_nr_nas(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, pr
 {
     tvbuff_t *payload_tvb, *nr5g_tvb;
     uint8_t number, major, minor;
-    char buf[ITEM_LABEL_LENGTH];
+    wmem_strbuf_t *buf;
 
     /* Version */
     proto_tree_add_item(log_tree, hf_qcdiag_log_ver_4, tvb, offset, 4, ENC_LITTLE_ENDIAN);
@@ -2746,11 +2744,11 @@ dissect_qcdiag_log_nr_nas(tvbuff_t *tvb, uint32_t offset, packet_info *pinfo, pr
     major  = tvb_get_uint8(tvb, offset+1);
     minor  = tvb_get_uint8(tvb, offset+2);
 
-    /* proto_tree_add_string() creates its own internal wmem copy of 'buf' */
-    snprintf(buf, ITEM_LABEL_LENGTH, "%u.%u.%u", number, major, minor);
+    buf = wmem_strbuf_new(pinfo->pool, "");
+    wmem_strbuf_append_printf(buf, "%u.%u.%u", number, major, minor);
 
     /* Release Version */
-    proto_tree_add_string(log_tree, hf_qcdiag_nr_nas_rel, tvb, offset, 3, buf);
+    proto_tree_add_string(log_tree, hf_qcdiag_nr_nas_rel, tvb, offset, 3, wmem_strbuf_get_str(buf));
     offset += 3;
 
     payload_tvb = tvb_new_subset_remaining(tvb, offset);

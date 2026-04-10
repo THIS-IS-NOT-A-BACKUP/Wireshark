@@ -12,20 +12,24 @@
 
 #include <QWidget>
 #include <QFrame>
-#include <QVBoxLayout>
 #include <QColor>
 
-#include "clickable_label.h"
-
 class QPushButton;
+
+namespace Ui {
+class LearnCardWidget;
+}
 
 class LearnCardWidget : public QFrame {
     Q_OBJECT
 public:
     explicit LearnCardWidget(QWidget *parent = nullptr);
-    void updateStyleSheets(const QColor &header_text_color, const QColor &header_hover_color);
+    ~LearnCardWidget();
     void setLinksCollapsed(bool collapsed);
     bool isLinksCollapsed() const;
+
+protected:
+    bool event(QEvent *event) override;
 
 private:
 
@@ -52,28 +56,16 @@ private:
         ValidityType validity;
     };
 
-
-    QVBoxLayout *main_layout_;
-    QWidget *link_container_;
+    Ui::LearnCardWidget *ui_;
     QList<LinkType> links_;
     QList<ButtonType> buttons_;
     bool links_collapsed_;
 
-    QString new_version_;
-
     void loadLinksFromRessource();
 
-    void setupLayout();
-    void setupHeader();
     void setupLinks();
-    void setupUpdateInfo();
     void setupActionButtons();
-
-private slots:
-    void setVersionInfo(QString newVersion = QString());
-    void resetVersionInfo();
-
-
+    void updateStyleSheet();
 };
 
 #endif //LEARN_CARD_WIDGET_H

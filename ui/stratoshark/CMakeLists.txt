@@ -19,6 +19,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/additional_toolbar.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/apply_line_edit.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/base_data_source_view.h
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_combo.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_edit.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/clickable_label.h
@@ -64,6 +65,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tab.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tree.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_types_list.h
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/wireshark_file_dialog.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/customplot.h
 )
@@ -283,6 +285,7 @@ set (STRATOSHARK_QT_HEADERS
 set(WIRESHARK_WIDGET_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/additional_toolbar.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/apply_line_edit.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_combo.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_filter_edit.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/clickable_label.cpp
@@ -328,6 +331,7 @@ set(WIRESHARK_WIDGET_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tab.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_tree.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/traffic_types_list.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/wireshark_file_dialog.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/customplot.cpp
 )
@@ -617,6 +621,12 @@ set(WIRESHARK_QT_UI
 	${CMAKE_SOURCE_DIR}/ui/qt/welcome_page_preferences_frame.ui
 )
 
+set(WIRESHARK_QT_WIDGETS_UI
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/capture_card_widget.ui
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/learn_card_widget.ui
+	${CMAKE_SOURCE_DIR}/ui/qt/widgets/welcome_header_widget.ui
+)
+
 if(HAVE_PCAP_REMOTE)
 	list(APPEND WIRESHARK_QT_UI
 		${CMAKE_SOURCE_DIR}/ui/qt/remote_capture_dialog.ui
@@ -627,6 +637,7 @@ endif()
 set (STRATOSHARK_QT_UI
 	stratoshark_main_window.ui
 	${WIRESHARK_QT_UI}
+	${WIRESHARK_QT_WIDGETS_UI}
 )
 
 set(WIRESHARK_QT_TS
@@ -690,6 +701,24 @@ GENERATE_JSON_TR_STRINGS(
 	        buttons:label,tooltip
 )
 
+# Stylesheet resources
+set(STYLESHEET_QSS_FILES
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/capture-card-light.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/learn-card-light.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-dark.qss
+	${CMAKE_SOURCE_DIR}/ui/stylesheets/widgets/welcome-header-light.qss
+)
+set(_stylesheet_qrc_files "")
+foreach(_qss ${STYLESHEET_QSS_FILES})
+	file(RELATIVE_PATH _qss_alias "${CMAKE_SOURCE_DIR}/ui/stylesheets" "${_qss}")
+	string(APPEND _stylesheet_qrc_files
+		"        <file alias=\"${_qss_alias}\">${_qss}</file>\n")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc"
+	"<RCC>\n    <qresource prefix=\"/stylesheets\">\n${_stylesheet_qrc_files}    </qresource>\n</RCC>\n")
+
 # JSON data resources
 set(_json_qrc_files
 	"        <file alias=\"slides.json\">${CMAKE_SOURCE_DIR}/resources/json/slides.json</file>\n")
@@ -734,6 +763,7 @@ qt_add_resources(STRATOSHARK_QT_QRC
 	${CMAKE_CURRENT_BINARY_DIR}/i18n.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/authors.qrc
 	${CMAKE_CURRENT_BINARY_DIR}/json_resource.qrc
+	${CMAKE_CURRENT_BINARY_DIR}/stylesheets.qrc
 	OPTIONS ${CMAKE_AUTORCC_OPTIONS}
 )
 

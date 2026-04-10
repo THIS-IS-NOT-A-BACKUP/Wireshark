@@ -98,6 +98,11 @@ unsigned application_num_columns(void)
     return 11;
 }
 
+const char *application_flavor_release_notes_url(void)
+{
+    return "https://stratoshark.org/docs/relnotes/";
+}
+
 bool application_flavor_is_wireshark(void)
 {
     return false;

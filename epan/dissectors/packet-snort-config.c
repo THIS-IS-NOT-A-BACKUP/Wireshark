@@ -362,6 +362,7 @@ static bool parse_variables_line(SnortConfig_t *snort_config, const char *line)
     /* Now value */
     value = read_token(line + accumulated_length, ' ', &length, &accumulated_length, true);
     if (value == NULL) {
+        g_free(variable_name);
         return false;
     }
 

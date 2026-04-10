@@ -16,6 +16,7 @@
 #endif
 
 #include "stratoshark_main_window.h"
+#include <ui/qt/widgets/capture_card_widget.h>
 
 /*
  * The generated Ui_StratosharkMainWindow::setupUi() can grow larger than our configured limit,
@@ -130,6 +131,7 @@ DIAG_ON(frame-larger-than=)
 #include "tap_parameter_dialog.h"
 #include "time_shift_dialog.h"
 #include "uat_dialog.h"
+#include <ui/qt/interface_frame.h>
 
 #include <functional>
 #include <QClipboard>
@@ -2726,7 +2728,7 @@ void StratosharkMainWindow::showCaptureOptionsDialog()
         connect(capture_options_dialog_, &CaptureOptionsDialog::captureFilterTextEdited,
                 this->welcome_page_, &WelcomePage::setCaptureFilterText);
         // Propagate selection changes from main UI to dialog.
-        connect(this->welcome_page_, &WelcomePage::interfacesChanged,
+        connect(this->welcome_page_->captureCard(), &CaptureCardWidget::interfacesChanged,
                 capture_options_dialog_, &CaptureOptionsDialog::interfaceSelected);
 
         connect(capture_options_dialog_, &CaptureOptionsDialog::setFilterValid,
@@ -3255,7 +3257,7 @@ void StratosharkMainWindow::extcap_options_finished(int result)
     this->welcome_page_->getInterfaceFrame()->interfaceListChanged();
 }
 
-void StratosharkMainWindow::showExtcapOptionsDialog(QString &device_name, bool startCaptureOnClose)
+void StratosharkMainWindow::showExtcapOptionsDialog(QString device_name, bool startCaptureOnClose)
 {
     ExtcapOptionsDialog * extcap_options_dialog = ExtcapOptionsDialog::createForDevice(device_name, startCaptureOnClose, this);
     /* The dialog returns null, if the given device name is not a valid extcap device */

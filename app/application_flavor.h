@@ -99,6 +99,13 @@ extern const char** application_columns(void);
 extern unsigned application_num_columns(void);
 
 /**
+ * @brief Get the default release notes URL for the application.
+ *
+ * @return The release notes URL. Must not be freed.
+ */
+extern const char *application_flavor_release_notes_url(void);
+
+/**
  * @brief Convenience routine for checking the application flavor.
  * @return true if the application flavor is APPLICATION_FLAVOR_WIRESHARK.
  */

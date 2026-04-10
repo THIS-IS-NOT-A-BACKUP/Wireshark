@@ -62,7 +62,6 @@ class InfoBannerWidget : public QFrame {
 public:
     explicit InfoBannerWidget(QWidget *parent = nullptr);
 
-    void updateStyleSheets();
     void setCompactMode(bool compact);
     bool isCompactMode() const;
     void setSlideTypeVisible(BannerSlideType type, bool visible);
@@ -71,6 +70,7 @@ public:
     bool hasVisibleSlides() const;
 
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
     void startRotation();
 
@@ -80,6 +80,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void changeEvent(QEvent *event) override;
+    bool event(QEvent *event) override;
 
 private:
     QList<BannerSlide> slides_;

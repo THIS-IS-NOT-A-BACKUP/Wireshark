@@ -9,6 +9,7 @@
 
 #include "main_application.h"
 #include "wireshark_main_window.h"
+#include <ui/qt/widgets/capture_card_widget.h>
 
 /*
  * The generated Ui_WiresharkMainWindow::setupUi() can grow larger than our configured limit,
@@ -620,7 +621,7 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
 
     connect(main_ui_->mainStack, &QStackedWidget::currentChanged, this, &WiresharkMainWindow::mainStackChanged);
 
-    connect(welcome_page_, &WelcomePage::startCapture, this, [this](QStringList interfaces) { startCapture(interfaces); });
+    connect(welcome_page_->captureCard(), &CaptureCardWidget::startCapture, this, [this](QStringList interfaces) { startCapture(interfaces); });
     connect(welcome_page_, &WelcomePage::recentFileActivated, this, [this](QString cfile) { openCaptureFile(cfile); });
 
     connect(main_ui_->addressEditorFrame, &AddressEditorFrame::redissectPackets,
@@ -699,11 +700,11 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     if (iface_tree) {
         connect(iface_tree, &QTreeWidget::itemSelectionChanged, this, &WiresharkMainWindow::interfaceSelectionChanged);
     }
-    connect(main_ui_->welcomePage, &WelcomePage::captureFilterSyntaxChanged,
+    connect(welcome_page_->captureCard(), &CaptureCardWidget::captureFilterSyntaxChanged,
             this, &WiresharkMainWindow::captureFilterSyntaxChanged);
 
     connect(this, &WiresharkMainWindow::showExtcapOptions, this, &WiresharkMainWindow::showExtcapOptionsDialog);
-    connect(this->welcome_page_, &WelcomePage::showExtcapOptions, this, &WiresharkMainWindow::showExtcapOptionsDialog);
+    connect(welcome_page_->captureCard(), &CaptureCardWidget::showExtcapOptions, this, &WiresharkMainWindow::showExtcapOptionsDialog);
 
 #endif // HAVE_LIBPCAP
 

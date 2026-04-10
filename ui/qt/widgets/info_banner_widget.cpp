@@ -557,9 +557,19 @@ void InfoBannerWidget::advanceSlide()
     update();
 }
 
-void InfoBannerWidget::updateStyleSheets()
+bool InfoBannerWidget::event(QEvent *event)
 {
-    update();
+    switch (event->type()) {
+    case QEvent::ApplicationPaletteChange:
+        update();
+        break;
+    case QEvent::LanguageChange:
+        update();
+        break;
+    default:
+        break;
+    }
+    return QFrame::event(event);
 }
 
 void InfoBannerWidget::updateAccessibility()
@@ -613,7 +623,15 @@ bool InfoBannerWidget::isCompactMode() const
 
 QSize InfoBannerWidget::sizeHint() const
 {
-    return QSize(kCardWidth, compact_mode_ ? kCardHeightCompact : kCardHeight);
+    // Always return the full preferred size regardless of compact state.
+    // Compact mode is expressed through maximumHeight(), not sizeHint().
+    // This allows parent layouts to know the ideal size for layout decisions.
+    return QSize(kCardWidth, kCardHeight);
+}
+
+QSize InfoBannerWidget::minimumSizeHint() const
+{
+    return QSize(kCardWidth, kCardHeightCompact);
 }
 
 void InfoBannerWidget::paintEvent(QPaintEvent * /* event */)

@@ -355,12 +355,6 @@ void __cdecl SoftwareUpdate::shutdownRequestCallback() {
      }
 }
 
-void SoftwareUpdate::softwareUpdateIsAvailable() {
-    if (instance_) {
-        emit instance_->updateAvailable(QString());
-    }
-}
-
 void SoftwareUpdate::softwareUpdateEngaged() {
     if (instance_) {
 
@@ -519,6 +513,7 @@ void SoftwareUpdate::onNetworkReplyFinished(QNetworkReply* reply)
     #endif
 
     QVersionNumber bestVersion = QVersionNumber::fromString("0.0.0");
+    QString bestReleaseNotes;
     for (const auto &item : items) {
         // Filter by OS: empty os means "all platforms"
         if (!item.os.isEmpty() && item.os.compare(target_os, Qt::CaseInsensitive) != 0) {
@@ -527,6 +522,7 @@ void SoftwareUpdate::onNetworkReplyFinished(QNetworkReply* reply)
 
         if (item.version > bestVersion) {
             bestVersion = item.version;
+            bestReleaseNotes = item.releaseNotesUrl.toString();
         }
     }
 
@@ -536,6 +532,6 @@ void SoftwareUpdate::onNetworkReplyFinished(QNetworkReply* reply)
 
     QVersionNumber appVersion = QVersionNumber::fromString(QString(application_version()), &suffix);
     if (bestVersion > appVersion) {
-        emit updateAvailable(bestVersion.toString());
+        emit updateAvailable(bestVersion.toString(), bestReleaseNotes);
     }
 }

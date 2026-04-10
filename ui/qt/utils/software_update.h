@@ -111,7 +111,7 @@ public:
 
 signals:
     /** Emitted when a new software update is available. */
-    void updateAvailable(QString newVersion);
+    void updateAvailable(QString newVersion, QString releaseNotes);
     /** Emitted when the update check fails. */
     void updateCheckFailed(const QString& errorString);
     /** Emitted when the update process is engaged.
@@ -140,7 +140,6 @@ private:
 #if defined(_WIN32)
     static int __cdecl softwareUpdateCanShutdownCallback();
     static void __cdecl shutdownRequestCallback();
-    static void __cdecl softwareUpdateIsAvailable();
     static void __cdecl softwareUpdateEngaged();
 #elif defined(__APPLE__)
     static void onPostponeRelaunch(void (*proceed)(void *ctx), void *ctx);

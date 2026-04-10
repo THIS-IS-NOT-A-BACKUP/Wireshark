@@ -482,7 +482,7 @@ private slots:
     void on_actionContextFilterFieldReference_triggered();
 
     void extcap_options_finished(int result);
-    void showExtcapOptionsDialog(QString & device_name, bool startCaptureOnClose);
+    void showExtcapOptionsDialog(QString device_name, bool startCaptureOnClose);
 
     QString findRtpStreams(QVector<rtpstream_id_t *> *stream_ids, bool reverse);
 

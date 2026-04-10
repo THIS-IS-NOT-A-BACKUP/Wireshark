@@ -16,6 +16,7 @@
 #endif
 
 #include "wireshark_main_window.h"
+#include <ui/qt/widgets/capture_card_widget.h>
 
 /*
  * The generated Ui_WiresharkMainWindow::setupUi() can grow larger than our configured limit,
@@ -167,6 +168,7 @@ DIAG_ON(frame-larger-than=)
 #include "wlan_statistics_dialog.h"
 #include <ui/qt/widgets/wireless_timeline.h>
 #include <ui/qt/utils/workspace_state.h>
+#include <ui/qt/interface_frame.h>
 
 #include <functional>
 #include <QClipboard>
@@ -3083,7 +3085,7 @@ void WiresharkMainWindow::showCaptureOptionsDialog()
         connect(capture_options_dialog_, &CaptureOptionsDialog::captureFilterTextEdited,
                 this->welcome_page_, &WelcomePage::setCaptureFilterText);
         // Propagate selection changes from main UI to dialog.
-        connect(this->welcome_page_, &WelcomePage::interfacesChanged,
+        connect(this->welcome_page_->captureCard(), &CaptureCardWidget::interfacesChanged,
                 capture_options_dialog_, &CaptureOptionsDialog::interfaceSelected);
 
         connect(capture_options_dialog_, &CaptureOptionsDialog::setFilterValid,
@@ -4138,7 +4140,7 @@ void WiresharkMainWindow::extcap_options_finished(int result)
     this->welcome_page_->getInterfaceFrame()->interfaceListChanged();
 }
 
-void WiresharkMainWindow::showExtcapOptionsDialog(QString &device_name, bool startCaptureOnClose)
+void WiresharkMainWindow::showExtcapOptionsDialog(QString device_name, bool startCaptureOnClose)
 {
     ExtcapOptionsDialog * extcap_options_dialog = ExtcapOptionsDialog::createForDevice(device_name, startCaptureOnClose, this);
     /* The dialog returns null, if the given device name is not a valid extcap device */
