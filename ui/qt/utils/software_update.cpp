@@ -122,7 +122,7 @@ SoftwareUpdate* SoftwareUpdate::instance()
     return instance_;
 }
 
-void SoftwareUpdate::init()
+void SoftwareUpdate::init(bool runWithoutSilentCheck)
 {
     #ifdef HAVE_SOFTWARE_UPDATE
         /* Disable automatic updates for PortableApps installations */
@@ -143,7 +143,12 @@ void SoftwareUpdate::init()
 
             win_sparkle_set_registry_path(regKey.toUtf8().constData());
             win_sparkle_set_appcast_url(updateUrl.toString().toUtf8().constData());
-            win_sparkle_set_automatic_check_for_updates(0);
+            if (prefs.gui_update_enabled && runWithoutSilentCheck) {
+                win_sparkle_set_automatic_check_for_updates(1);
+                win_sparkle_set_update_check_interval(prefs.gui_update_interval);
+            } else {
+                win_sparkle_set_automatic_check_for_updates(0);
+            }
             win_sparkle_set_update_cancelled_callback(&SoftwareUpdate::softwareUpdateEngaged);
             win_sparkle_set_update_postponed_callback(&SoftwareUpdate::softwareUpdateEngaged);
             win_sparkle_set_update_skipped_callback(&SoftwareUpdate::softwareUpdateEngaged);
@@ -156,7 +161,12 @@ void SoftwareUpdate::init()
             }
             win_sparkle_init();
         #elif defined(__APPLE__)
-            SparkleBridge::updateInit(updateUrl.toString().toUtf8().constData(), false, 0);
+
+            if (runWithoutSilentCheck && prefs.gui_update_enabled) {
+                SparkleBridge::updateInit(updateUrl.toString().toUtf8().constData(), prefs.gui_update_enabled, prefs.gui_update_interval);
+            } else {
+                SparkleBridge::updateInit(updateUrl.toString().toUtf8().constData(), false, 0);
+            }
 
             SparkleBridge::setUpdateCallbacks(
                 // engage callback
@@ -183,10 +193,11 @@ void SoftwareUpdate::init()
         #endif /* if */
 
     /** Start the automatic update check if enabled in preferences */
-    if (prefs.gui_update_enabled) {
+    if (prefs.gui_update_enabled && !runWithoutSilentCheck) {
         startAutoCheck(prefs.gui_update_interval);
     }
-
+    #else
+        Q_UNUSED(runWithoutSilentCheck);
     #endif /** HAVE_SOFTWARE_UPDATE */
 }
 

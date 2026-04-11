@@ -8045,6 +8045,7 @@ proto_register_bthci_evt(void)
             FT_UINT8, BASE_DEC, NULL, 0x0,
             "Number of Connection Handles and Num_HCI_Data_Packets parameter pairs", HFILL }
         },
+        /* TODO: should have mask of 0x0fff ? */
         { &hf_bthci_evt_connection_handle,
           { "Connection Handle",            "bthci_evt.connection_handle",
             FT_UINT16, BASE_HEX, NULL, 0x0,

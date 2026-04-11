@@ -62,12 +62,15 @@ ProtoTree::ProtoTree(QWidget *parent, epan_dissect_t *edt_fixed) :
     cap_file_(NULL),
     edt_(edt_fixed)
 {
-    setAccessibleName(tr("Packet details"));
-    setAccessibleDescription(tr("Tree view of the selected packet's fields"));
     // Leave the uniformRowHeights property as-is (false) since items might have
     // have multiple lines (e.g. packet or event comments). If this slows things
     // down too much we should add a custom delegate which handles SizeHintRole.
     setHeaderHidden(true);
+    setFocusPolicy(Qt::StrongFocus);
+
+#ifdef Q_OS_MAC
+    setAttribute(Qt::WA_MacShowFocusRect, true);
+#endif
 
     setStyleSheet(QStringLiteral(
         "QTreeView:item:hover {"
@@ -78,6 +81,9 @@ ProtoTree::ProtoTree(QWidget *parent, epan_dissect_t *edt_fixed) :
     // Shrink down to a small but nonzero size in the main splitter.
     int one_em = fontMetrics().height();
     setMinimumSize(one_em, one_em);
+
+    verticalScrollBar()->setFocusPolicy(Qt::NoFocus);
+    horizontalScrollBar()->setFocusPolicy(Qt::NoFocus);
 
     setModel(proto_tree_model_);
 
@@ -517,6 +523,28 @@ void ProtoTree::keyReleaseEvent(QKeyEvent *event)
             break;
         default:
             break;
+    }
+}
+
+void ProtoTree::focusInEvent(QFocusEvent *event)
+{
+    QTreeView::focusInEvent(event);
+
+    if (event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason) {
+        if (model() && model()->rowCount() > 0 && selectionModel()) {
+            if (!selectionModel()->hasSelection()) {
+                QModelIndex first = model()->index(0, 0);
+                if (first.isValid()) {
+                    selectionModel()->setCurrentIndex(first, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                    setCurrentIndex(first);
+                }
+            }
+
+            // ALWAYS scroll to the current index if we have one
+            if (currentIndex().isValid()) {
+                scrollTo(currentIndex());
+            }
+        }
     }
 }
 

@@ -55,11 +55,6 @@ WelcomeHeaderWidget::WelcomeHeaderWidget(QWidget *parent) :
     else
         header_ui_->headerBuildLabel->setText(buildLabel);
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    qDebug() << "Setting version to 5.0.0 for testing purposes";
-#endif
-    new_version_ = "5.0.0";
-
     // Connecting software update mechanism. The real information if we are allowed to do the update is only available AFTER
     // the main app has initialized, so we need to connect to the appInitialized signal to update the UI with the correct information.
     header_ui_->updateHeader->setVisible(false);
@@ -90,6 +85,11 @@ WelcomeHeaderWidget::WelcomeHeaderWidget(QWidget *parent) :
         pulseAnimation_->setEasingCurve(QEasingCurve::InOutSine);
         pulseAnimation_->setLoopCount(-1);
     }
+}
+
+WelcomeHeaderWidget::~WelcomeHeaderWidget()
+{
+    delete header_ui_;
 }
 
 void WelcomeHeaderWidget::updateSoftwareUpdateInfo()

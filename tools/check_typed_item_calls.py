@@ -1740,6 +1740,7 @@ class Item:
                 return
             n += 1
 
+
     def get_field_width_in_bits(self):
         if self.item_type == 'FT_BOOLEAN':
             if self.display == 'BASE_NONE':    # 'NULL' ?
@@ -2317,7 +2318,7 @@ def check_double_fetches(filename, contents, items, result):
                         m.group(0))
         elif line_has_fetch_function(next_line) and hf_name.endswith(first_next_token) and '=' in next_line_tokens:
             result.warn(filename, 'NEXT: val=', first_next_token, 'hfname=', hf_name,
-                        'mask=', mask_value, 'type=', item_type,
+                        'mask=', hex(mask_value), 'type=', item_type,
                         '- use', suggest + '() ?\n',
                         m.group(0))
 

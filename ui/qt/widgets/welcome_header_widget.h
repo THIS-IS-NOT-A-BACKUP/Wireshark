@@ -22,6 +22,7 @@ class WelcomeHeaderWidget : public QWidget {
     Q_OBJECT
 public:
     explicit WelcomeHeaderWidget(QWidget *parent = nullptr);
+    ~WelcomeHeaderWidget();
     void updateStyleSheets();
 
 protected:

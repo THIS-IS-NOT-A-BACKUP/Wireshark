@@ -925,7 +925,9 @@ void MainApplication::allSystemsGo()
         pending_open_files_.pop_front();
     }
 
-    SoftwareUpdate::instance()->init();
+    bool sideBarVisible = recent.gui_welcome_page_sidebar_tips_visible ||
+                           recent.gui_welcome_page_sidebar_learn_visible;
+    SoftwareUpdate::instance()->init(!sideBarVisible);
 
 #ifdef HAVE_LIBPCAP
     int err;

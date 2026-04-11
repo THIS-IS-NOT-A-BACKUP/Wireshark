@@ -76,6 +76,7 @@ public slots:
     void layoutPanes();
     void applyRecentPaneGeometry();
     void updateForUnsavedChanges();
+    void cyclePane(bool reverse = false);
 
 protected:
     enum CopySelected {

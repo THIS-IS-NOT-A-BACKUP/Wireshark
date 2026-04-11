@@ -35,6 +35,7 @@ PacketListRecord::PacketListRecord(frame_data *frameData) :
     conv_index_(0),
     read_failed_(false),
     row_(0),
+    expert_severity_(0),
     color_filters_(NULL),
     color_filter_count_(0)
 {
@@ -190,6 +191,7 @@ void PacketListRecord::dissect(capture_file *cap_file, bool dissect_columns, boo
      * attempt to recover from it.
      */
     epan_dissect_run(&edt, cap_file->cd_t, &rec, fdata_, cinfo);
+    expert_severity_ = edt.pi.expert_severity;
 
     if (dissect_columns) {
         /* "Stringify" non frame_data vals */

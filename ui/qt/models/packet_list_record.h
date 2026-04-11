@@ -64,6 +64,7 @@ public:
     inline int lineCountChanged() { return line_count_changed_; }
     inline void setRow(int row) { row_ = row; }
     inline int row() const { return row_; }
+    inline uint32_t expertSeverity() const { return expert_severity_; }
 
 private:
     /** The column text for some columns */
@@ -84,6 +85,7 @@ private:
 
     bool read_failed_;
     int row_;
+    uint32_t expert_severity_;
 
     /** All matching color filters (only if multi-color enabled) */
     GSList *color_filters_;

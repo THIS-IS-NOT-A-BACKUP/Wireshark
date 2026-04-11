@@ -69,8 +69,12 @@ public:
      * far enough that the update frameworks can be initialized. Together with that
      * the automatic update check will also be started, if the user has enabled it
      * in the preferences. The interval used will be the one set in the preferences as well.
+     *
+     * @param runWithoutSilentCheck If true, the update check will be performed as it had
+     * been before the silent check was implemented, by using the API versions of the silent
+     * checks.
      */
-    void init();
+    void init(bool runWithoutSilentCheck = false);
 
     /**
      * Cleans up the update framework and stops the automatic update check.

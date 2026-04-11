@@ -13440,6 +13440,17 @@ static void dissect_parameterized_serialized_data(proto_tree *tree, tvbuff_t *tv
       deserialized_size += 4;
     }
 
+    /* Sanity check: if the buffer holds fewer bytes than member_length
+     * claims, the packet is truncated or malformed. Add whatever bytes
+     * remain so the partial data is still visible in the tree, then stop
+     * iterating to avoid reading past the end of the tvb. */
+    if ((unsigned)tvb_reported_length_remaining(tvb, offset) < member_length) {
+      int remaining = tvb_reported_length_remaining(tvb, offset);
+      proto_tree_add_item(member_tree, hf_rtps_pl_cdr_member, tvb, offset,
+              remaining, encoding);
+      deserialized_size += remaining;
+      break;
+    }
     proto_tree_add_item(member_tree, hf_rtps_pl_cdr_member, tvb, offset,
             member_length, encoding);
     offset = check_offset_addition(offset, member_length, tree, NULL, tvb);

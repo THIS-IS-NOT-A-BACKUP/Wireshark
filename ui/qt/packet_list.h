@@ -127,6 +127,7 @@ protected:
     virtual void mouseMoveEvent (QMouseEvent *event) override;
     virtual void resizeEvent(QResizeEvent *event) override;
     virtual void keyPressEvent(QKeyEvent *event) override;
+    virtual void focusInEvent(QFocusEvent *event) override;
 
 protected slots:
     void rowsInserted(const QModelIndex &parent, int start, int end) override;

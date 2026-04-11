@@ -52,7 +52,6 @@
  * ----------------------------------------------------------------- */
 #headerTitle {
     color: #ffffff;
-    font-family: "IBM Plex Sans";
     font-size: 16px;
     font-weight: 600;
     /* No background — sits on the gradient */
@@ -66,7 +65,6 @@
  * ----------------------------------------------------------------- */
 #headerVersion {
     color: rgba(255, 255, 255, 128);   /* ~50% white */
-    font-family: "JetBrains Mono";
     font-size: 11px;
     font-weight: 400;
     background: transparent;
@@ -83,7 +81,6 @@
  * ----------------------------------------------------------------- */
 #headerBuildLabel {
     color: #ffffff;
-    font-family: "IBM Plex Sans";
     font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
@@ -153,7 +150,6 @@
  * ----------------------------------------------------------------- */
 #updateText {
     color: #a8ddb5;
-    font-family: "IBM Plex Sans";
     font-size: 12px;
     font-weight: 400;
     background: transparent;
@@ -166,7 +162,6 @@
  * ----------------------------------------------------------------- */
 #updateReleaseNotes {
     color: #7ab888;
-    font-family: "IBM Plex Sans";
     font-size: 11px;
     font-weight: 500;
     text-decoration: underline;
@@ -189,7 +184,6 @@
  * ----------------------------------------------------------------- */
 #updateDownload {
     color: #ffffff;
-    font-family: "IBM Plex Sans";
     font-size: 11px;
     font-weight: 500;
     background-color: #4caf50;
@@ -224,7 +218,6 @@
  * ----------------------------------------------------------------- */
 #updateDismiss {
     color: #7ab888;
-    font-family: "IBM Plex Sans";
     font-size: 15px;
     font-weight: 500;
     background: transparent;

@@ -22,7 +22,7 @@
     <number>0</number>
    </property>
    <property name="topMargin">
-    <number>12</number>
+    <number>0</number>
    </property>
    <property name="rightMargin">
     <number>0</number>
@@ -111,7 +111,7 @@
           <item>
            <widget class="QListView" name="openFileSectionRecentList">
             <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Ignored">
+             <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
               <horstretch>0</horstretch>
               <verstretch>1</verstretch>
              </sizepolicy>

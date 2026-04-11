@@ -367,6 +367,9 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     // The fewer children we have at this point the better.
     main_ui_->setupUi(this);
 
+    main_ui_->mainStack->setFocusPolicy(Qt::NoFocus);
+    main_ui_->centralWidget->setFocusPolicy(Qt::NoFocus);
+
     // Initialize base class menu pointers for recent captures handling
     recent_captures_menu_ = main_ui_->menuOpenRecentCaptureFile;
     no_recent_files_action_ = main_ui_->actionDummyNoFilesFound;
@@ -538,9 +541,11 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     master_split_.setObjectName("splitterMaster");
     master_split_.setAccessibleName(tr("Main View Splitter"));
     master_split_.setAccessibleDescription(tr("Contains the packet list, protocol tree, and packet bytes."));
+    master_split_.setFocusPolicy(Qt::NoFocus);
     extra_split_.setObjectName("splitterExtra");
     extra_split_.setAccessibleName(tr("Extra View Splitter"));
     extra_split_.setAccessibleDescription(tr("Contains packet extras and bytes views."));
+    extra_split_.setFocusPolicy(Qt::NoFocus);
     master_split_.setChildrenCollapsible(false);
     extra_split_.setChildrenCollapsible(false);
     main_ui_->mainStack->addWidget(&master_split_);
@@ -601,6 +606,7 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
 
     setTabOrder(df_combo_box_->lineEdit(), packet_list_);
     setTabOrder(packet_list_, proto_tree_);
+    setTabOrder(proto_tree_, data_source_tab_);
 
     connect(&capture_file_, &CaptureFile::captureEvent, this, &WiresharkMainWindow::captureEventHandler);
     connect(&capture_file_, &CaptureFile::captureEvent, mainApp, &WiresharkApplication::captureEventHandler);
@@ -936,6 +942,16 @@ void WiresharkMainWindow::keyPressEvent(QKeyEvent *event) {
     // Explicitly focus on the display filter combo.
     if (event->modifiers() & Qt::ControlModifier && event->key() == Qt::Key_Slash) {
         df_combo_box_->setFocus(Qt::ShortcutFocusReason);
+        return;
+    }
+
+    if (event->modifiers() & Qt::ControlModifier && event->key() == Qt::Key_Tab) {
+        cyclePane();
+        return;
+    }
+
+    if (event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier) && event->key() == Qt::Key_Backtab) {
+        cyclePane(true);
         return;
     }
 
@@ -2538,6 +2554,10 @@ void WiresharkMainWindow::setForCapturedPackets(bool have_captured_packets)
     main_ui_->actionStatisticsProtocolHierarchy->setEnabled(have_captured_packets);
     main_ui_->actionStatisticsIOGraph->setEnabled(have_captured_packets);
     main_ui_->actionStatisticsPlot->setEnabled(have_captured_packets);
+
+    if (have_captured_packets && !packet_list_->hasFocus()) {
+        packet_list_->setFocus();
+    }
 }
 
 void WiresharkMainWindow::setMenusForFileSet(bool enable_list_files) {
