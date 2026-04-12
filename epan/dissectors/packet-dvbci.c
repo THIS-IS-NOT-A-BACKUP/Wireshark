@@ -3659,8 +3659,7 @@ dissect_dvbci_ami_file_ack(tvbuff_t *tvb, unsigned offset,
         proto_tree_add_item(tree, hf_dvbci_req_ok,
                 tvb, offset, 1, ENC_BIG_ENDIAN);
     }
-    file_ok = ((tvb_get_uint8(tvb, offset) & 0x01) == 0x01);
-    proto_tree_add_item(tree, hf_dvbci_file_ok, tvb, offset, 1, ENC_BIG_ENDIAN);
+    proto_tree_add_item_ret_boolean(tree, hf_dvbci_file_ok, tvb, offset, 1, ENC_BIG_ENDIAN, &file_ok);
     offset++;
     proto_tree_add_item(tree, hf_dvbci_req_type, tvb, offset, 1, ENC_BIG_ENDIAN);
     col_append_sep_str(pinfo->cinfo, COL_INFO, ": ",
@@ -4506,8 +4505,7 @@ dissect_dvbci_tpdu_status(tvbuff_t *tvb, unsigned offset,
         return -1;
     }
 
-    t_c_id = tvb_get_uint8(tvb, offset_new);
-    pi = proto_tree_add_item(tree, hf_dvbci_t_c_id, tvb, offset_new, 1, ENC_BIG_ENDIAN);
+    pi = proto_tree_add_item_ret_uint8(tree, hf_dvbci_t_c_id, tvb, offset_new, 1, ENC_BIG_ENDIAN, &t_c_id);
     /* tcid in transport header and link layer must only match for data
      * transmission commands */
     if (t_c_id!=lpdu_tcid) {
@@ -4606,8 +4604,7 @@ dissect_dvbci_tpdu_hdr(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
         return -1;
     }
 
-    t_c_id = tvb_get_uint8(tvb, offset);
-    pi = proto_tree_add_item(tree, hf_dvbci_t_c_id, tvb, offset, 1, ENC_BIG_ENDIAN);
+    pi = proto_tree_add_item_ret_uint8(tree, hf_dvbci_t_c_id, tvb, offset, 1, ENC_BIG_ENDIAN, &t_c_id);
     /* tcid in transport header and link layer must only match for
      * data transmission commands */
     if (t_c_id!=lpdu_tcid) {
@@ -5979,7 +5976,7 @@ proto_register_dvbci(void)
         },
         { &hf_dvbci_file_ok,
           { "FileOK", "dvb-ci.ami.file_ok",
-            FT_UINT8, BASE_HEX, NULL, 0x01, NULL, HFILL }
+            FT_BOOLEAN, 8, NULL, 0x01, NULL, HFILL }
         },
         { &hf_dvbci_abort_req_code,
           { "Abort request code", "dvb-ci.ami.abort_req_code",

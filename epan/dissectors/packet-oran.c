@@ -1360,53 +1360,53 @@ static const true_false_string tfs_lbtBufErr =
 };
 
 static const true_false_string tfs_partial_full_sf = {
-  "partial SF",
-  "full SF"
+    "partial SF",
+    "full SF"
 };
 
 static const true_false_string disable_tdbfns_tfs = {
-  "beam numbers excluded",
-  "beam numbers included"
+    "beam numbers excluded",
+    "beam numbers included"
 };
 
 static const true_false_string continuity_indication_tfs = {
-  "continuity between current and next bundle",
-  "discontinuity between current and next bundle"
+    "continuity between current and next bundle",
+    "discontinuity between current and next bundle"
 };
 
 static const true_false_string prb_mode_tfs = {
-  "PRB-BLOCK mode",
-  "PRB-MASK mode"
+    "PRB-BLOCK mode",
+    "PRB-MASK mode"
 };
 
 static const true_false_string symbol_direction_tfs = {
-  "DL symbol",
-  "UL symbol"
+    "DL symbol",
+    "UL symbol"
 };
 
 static const true_false_string symbol_guard_tfs = {
-  "guard symbol",
-  "non-guard symbol"
+    "guard symbol",
+    "non-guard symbol"
 };
 
 static const true_false_string beam_numbers_included_tfs = {
-  "time-domain beam numbers excluded in this command",
-  "time-domain beam numbers included in this command"
+    "time-domain beam numbers excluded in this command",
+    "time-domain beam numbers included in this command"
 };
 
 static const true_false_string measurement_flag_tfs = {
-  "at least one additional measurement report or command after the current one",
-  "no additional measurement report or command"
+    "at least one additional measurement report or command after the current one",
+    "no additional measurement report or command"
 };
 
 static const true_false_string repetition_se6_tfs = {
-  "repeated highest priority data section in the C-Plane message",
-  "no repetition"
+    "repeated highest priority data section in the C-Plane message",
+    "no repetition"
 };
 
 static const true_false_string repetition_se19_tfs = {
-  "per port information not present in the extension",
-  "per port info present in the extension"
+    "per port information not present in the extension",
+    "per port info present in the extension"
 };
 
 static const true_false_string tfs_report_no_report_pos_meas =
@@ -1423,18 +1423,18 @@ static int dissect_udcompparam(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree
 
 
 static const true_false_string ready_tfs = {
-  "message is a \"ready\" message",
-  "message is a ACK message"
+    "message is a \"ready\" message",
+    "message is a ACK message"
 };
 
 static const true_false_string multi_sd_scope_tfs = {
-  "Puncturing pattern applies to current and following sections",
-  "Puncturing pattern applies to current section"
+    "Puncturing pattern applies to current and following sections",
+    "Puncturing pattern applies to current section"
 };
 
 static const true_false_string tfs_ueid_reset = {
-  "cannot assume same UE as in preceding slot",
-  "can assume same UE as in preceding slot"
+    "cannot assume same UE as in preceding slot",
+    "can assume same UE as in preceding slot"
 };
 
 
@@ -2609,7 +2609,7 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
     bool prbs_for_st10_type5[MAX_PRBS];
     memset(&prbs_for_st10_type5, 0, sizeof(prbs_for_st10_type5));
 
-
+    /* These UEIds are set by ST5, ST10 (single value), and extended by SE10 */
 #define MAX_UEIDS 16
     uint32_t ueids[MAX_UEIDS];
     uint32_t number_of_ueids = 0;
@@ -4026,15 +4026,17 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                 break;
             }
 
-            case 17:  /* SE 17: Indication of user port group */
+            case 17:  /* SE 17: Indication of user port group. Applies to ST5 + SE10 with group type 1 (beam matrix indication) */
             {
                 uint32_t extlen_remaining_bytes = (extlen*4) - 2;
                 uint32_t end_bit = (offset+extlen_remaining_bytes) * 8;
                 uint32_t ueid_index = 1;
-                /* TODO: just filling up all available bytes - some may actually be padding.. */
+
                 /* "the preceding Section Type and extension messages implicitly provide the number of scheduled users" */
-                for (uint32_t bit_offset=offset*8; bit_offset < end_bit; bit_offset+=4, ueid_index++) {
+                for (uint32_t bit_offset=offset*8; (bit_offset < end_bit) && (ueid_index <= number_of_ueids); bit_offset+=4, ueid_index++) {
+                    /* numUeId (Number of UE Ids per user) */
                     proto_item *ti = proto_tree_add_bits_item(extension_tree, hf_oran_num_ueid, tvb, bit_offset, 4, ENC_BIG_ENDIAN);
+                    /* TODO: show ueids[ueid_index] here too? */
                     proto_item_append_text(ti, " (user #%u)", ueid_index);
                 }
                 break;

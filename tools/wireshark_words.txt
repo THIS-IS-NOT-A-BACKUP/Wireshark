@@ -104,6 +104,7 @@ allocators
 alteon
 altera
 altsvc
+alveo
 american
 ampdu
 amperage
@@ -925,6 +926,7 @@ elseif
 elsif
 emlmr
 emlsr
+emmitsburg
 emption
 emulates
 emule
@@ -1260,6 +1262,7 @@ hartip
 hasattr
 hashed
 hashes
+hauppauge
 hazelcast
 hbreq
 hbresp
@@ -2175,7 +2178,9 @@ overridable
 p2pstar
 p4rpc
 p8118e
+p8118x
 p8118z
+p8128z
 pacch
 packard
 packetcable
@@ -2580,6 +2585,7 @@ rekey
 rekeying
 relephem
 relocatable
+relposned
 remapping
 remediation
 removability
@@ -2846,6 +2852,7 @@ showtechnic
 shtdn
 siapp
 sidelink
+sigcfgmask
 sigcomp
 sighup
 siginfo
@@ -2938,6 +2945,7 @@ srcdst
 srcip
 srcport
 sresmask
+sriov
 srtcp
 srvcc
 srvreq
@@ -3154,6 +3162,7 @@ thunderx
 thursday
 tieto
 timefmt
+timegps
 timeout
 timeserv
 timeslot
@@ -3673,6 +3682,8 @@ yyextra
 yyscanner
 yyterminate
 yytext
+z36xxx
+z37xxx
 z3950
 zbncp
 zboss

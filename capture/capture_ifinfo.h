@@ -32,7 +32,9 @@ typedef enum {
 	IF_DIALUP	= 6,
 	IF_USB		= 7,
 	IF_EXTCAP	= 8,
-	IF_VIRTUAL	= 9
+	IF_VIRTUAL	= 9,
+        IF_LOOPBACK	= 10,
+        IF_TUNNEL	= 11,
 } interface_type;
 
 /*

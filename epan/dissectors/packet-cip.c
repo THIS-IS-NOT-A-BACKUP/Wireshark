@@ -4085,7 +4085,7 @@ static int dissect_cip_id_modbus_identity_info(packet_info* pinfo, proto_tree* t
    return current_offset - offset;
 }
 
-int dissect_cip_id_protection_mode(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
+static int dissect_cip_id_protection_mode(packet_info* pinfo, proto_tree* tree, proto_item* item, tvbuff_t* tvb,
    int offset, int total_len)
 {
    static int* const protection_mode[] = {
@@ -11169,6 +11169,7 @@ proto_register_cip(void)
       &ett_time_sync_port_proto_addr_info,
       &ett_id_status,
       &ett_id_semaphore,
+      &ett_id_semaphore_client_key,
       &ett_id_modbus_info,
       &ett_id_protection_mode,
       &ett_file_revision,

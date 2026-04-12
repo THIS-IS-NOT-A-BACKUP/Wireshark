@@ -20022,7 +20022,7 @@ dissect_vendor_ie_wpawme(tvbuff_t* tvb, packet_info* pinfo, proto_tree* tree, vo
     }
     case 4: /* WPS: Wifi Protected Setup */
     {
-      dissect_wps_tlvs(tree, tvb, offset, tvb_reported_length_remaining(tvb, offset) - 1, pinfo, false);
+      dissect_wps_tlvs(tree, tvb, offset, tvb_reported_length_remaining(tvb, offset), pinfo, false);
     }
     break;
     case 17: /* Network Cost: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nct/88f0cdf4-cdf2-4455-b849-4abf1e5c11ac */

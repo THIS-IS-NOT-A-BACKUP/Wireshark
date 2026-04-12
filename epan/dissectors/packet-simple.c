@@ -453,8 +453,7 @@ static int dissect_simple(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, v
     packet_size -= 8;
     offset++;
 
-    proto_tree_add_item(simple_tree, hf_simple_packet_type, tvb, offset, 1, ENC_NA);
-    packet_type = tvb_get_uint8(tvb, offset);
+    proto_tree_add_item_ret_uint(simple_tree, hf_simple_packet_type, tvb, offset, 1, ENC_NA, &packet_type);
     offset++;
 
     proto_tree_add_item(simple_tree, hf_simple_transit_time, tvb, offset, 2, ENC_LITTLE_ENDIAN);

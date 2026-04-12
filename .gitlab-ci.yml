@@ -434,7 +434,7 @@ openSUSE 16.0 RPM Test:
   script:
     - zypper --no-gpg-checks --no-remote install -y build/packaging/rpm/RPMS/x86_64/*.rpm
     - tshark --version
-  needs: [ 'openSUSE 15.6 RPM Package' ]
+  needs: [ 'openSUSE 16.0 RPM Package' ]
 
 Rocky Linux 9 RPM Package:
   extends: .build-rpm

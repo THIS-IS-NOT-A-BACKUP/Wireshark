@@ -1621,6 +1621,7 @@ BACnetVendorIdentifiers[] = {
     { 1610, "Venaera Inc." },
     { 1611, "HumiPure" },
     { 1612, "Humber Horizons" },
+    { 1613, "Automated Facility Systems, Inc." },
     { 0, NULL }
 };
 value_string_ext BACnetVendorIdentifiers_ext = VALUE_STRING_EXT_INIT(BACnetVendorIdentifiers);
