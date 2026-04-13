@@ -206,6 +206,9 @@ BuildRequires:	libmaxminddb-devel
 %endif
 
 %if %{use_wireshark_group} || "%{use_stratoshark_group}" == "1"
+%if v"%{rpmversion}" >= v"4.19"
+Provides:	group(wireshark)
+%endif
 %if 0%{?suse_version}
 # SUSE's groupadd is in this package:
 Requires(pre):	pwdutils
@@ -591,7 +594,9 @@ update-mime-database %{_datadir}/mime &> /dev/null || :
 %exclude %{_bindir}/dftest
 %exclude %{_bindir}/idl2wrs
 # Don't pick up the stratoshark or strato binaries here
+%if %{with stratoshark}
 %exclude %{_bindir}/strato*
+%endif
 %{_bindir}/*
 
 # This generates a warning because dumpcap is listed twice. That's

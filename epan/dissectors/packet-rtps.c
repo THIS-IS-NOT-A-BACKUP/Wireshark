@@ -10062,7 +10062,7 @@ static int rtps_util_add_fragment_number_set(proto_tree *tree, packet_info *pinf
   /* removes all the ending '0' */
   last_one = strrchr(wmem_strbuf_get_str(temp_buff), '1');
   if (last_one) {
-    wmem_strbuf_truncate(temp_buff, (size_t) (last_one - wmem_strbuf_get_str(temp_buff)));
+    wmem_strbuf_truncate(temp_buff, (size_t) (last_one - wmem_strbuf_get_str(temp_buff)) + 1);
   }
 
   if (base_size == 8) {

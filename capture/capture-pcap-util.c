@@ -180,7 +180,7 @@ static int get_unix_sdl_type(const char *ifname)
 	freeifaddrs(ifap);
 	return type;
 }
-#else
+#elif !defined(_WIN32)
 static int get_unix_sdl_type(const char *ifname _U_)
 {
 	return -1;
@@ -357,6 +357,9 @@ add_unix_interface_ifinfo(if_info_t *if_info, const char *name _U_,
 	if_info->friendly_name = g_strdup(description);
 }
 #endif
+
+static if_info_t *
+if_info_new(const char *name, const char *description, bool loopback);
 
 if_info_t *
 if_info_get(const char *name)
@@ -660,7 +663,7 @@ get_windows_iftype(const char *name)
 }
 #endif
 
-if_info_t *
+static if_info_t *
 if_info_new(const char *name, const char *description, bool loopback)
 {
 	if_info_t *if_info;
@@ -926,9 +929,9 @@ if_info_ip(if_info_t *if_info, pcap_if_t *d)
 
 #ifdef HAVE_PCAP_REMOTE
 GList *
-get_interface_list_findalldevs_ex(const char *hostname, const char *port,
-			  int auth_type, const char *username,
-			  const char *passwd, int *err, char **err_str)
+get_remote_interface_list_common(const char *hostname, const char *port,
+				 int auth_type, const char *username,
+				 const char *passwd, int *err, char **err_str)
 {
 	char source[PCAP_BUF_SIZE];
 	struct pcap_rmtauth auth;
@@ -1015,14 +1018,14 @@ get_interface_list_findalldevs_ex(const char *hostname, const char *port,
 #endif
 
 GList *
-get_interface_list_findalldevs(bool wire_interface, int *err, char **err_str)
+get_local_interface_list(int *err, char **err_str)
 {
 	GList  *il = NULL;
-	pcap_if_t *alldevs = NULL, *dev;
+	pcap_if_t *alldevs, *dev;
 	if_info_t *if_info;
 	char errbuf[PCAP_ERRBUF_SIZE];
 
-	if (wire_interface && pcap_findalldevs(&alldevs, errbuf) == -1) {
+	if (pcap_findalldevs(&alldevs, errbuf) == -1) {
 		*err = CANT_GET_INTERFACE_LIST;
 		if (err_str != NULL)
 			*err_str = cant_get_if_list_error_message(errbuf);
@@ -1048,6 +1051,19 @@ get_interface_list_findalldevs(bool wire_interface, int *err, char **err_str)
 	pcap_freealldevs(alldevs);
 
 	return il;
+}
+
+GList*
+get_local_interface_list_ss(int* err, char** err_str)
+{
+	/*
+	 * This is for Stratoshark/strato, so we don't look for
+	 * intrfaces.
+	 */
+	*err = 0;
+	if (err_str != NULL)
+		*err_str = NULL;
+	return NULL;
 }
 
 static void

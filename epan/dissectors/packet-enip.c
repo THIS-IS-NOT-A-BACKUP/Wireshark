@@ -301,6 +301,9 @@ static int hf_elink_hc_icount_out_mcast;
 static int hf_elink_hc_icount_out_broadcast;
 static int hf_elink_ethernet_errors;
 static int hf_elink_link_down_counter;
+static int hf_elink_t1s_phy_mode;
+static int hf_elink_t1s_phy_node_id;
+static int hf_elink_t1s_phy_commissioning_status;
 static int hf_elink_hc_mcount_stats_align_errors;
 static int hf_elink_hc_mcount_stats_fcs_errors;
 static int hf_elink_hc_mcount_stats_internal_mac_transmit_errors;
@@ -712,6 +715,13 @@ static const value_string enip_elink_interface_state_vals[] = {
 static const value_string enip_elink_admin_state_vals[] = {
    { 1,  "Enabled"         },
    { 2,  "Disabled"        },
+
+   { 0,  NULL              }
+};
+
+static const value_string enip_elink_phy_mode_vals[] = {
+   { 0,  "CSMA/CD"         },
+   { 1,  "PLCA"            },
 
    { 0,  NULL              }
 };
@@ -1869,6 +1879,16 @@ dissect_elink_interface_control(packet_info *pinfo, proto_tree *tree, proto_item
 }
 
 static int
+dissect_elink_t1s_phy_configuration(packet_info* pinfo _U_, proto_tree* tree, proto_item* item _U_, tvbuff_t* tvb,
+   int offset, int total_len _U_)
+{
+   proto_tree_add_item(tree, hf_elink_t1s_phy_mode,    tvb, offset,     1, ENC_LITTLE_ENDIAN);
+   proto_tree_add_item(tree, hf_elink_t1s_phy_node_id, tvb, offset + 1, 1, ENC_LITTLE_ENDIAN);
+
+   return 2;
+}
+
+static int
 dissect_dlr_ring_supervisor_config(packet_info *pinfo, proto_tree *tree, proto_item *item, tvbuff_t *tvb,
                                    int offset, int total_len)
 
@@ -2641,21 +2661,23 @@ const attribute_info_t enip_attribute_vals[] = {
    {0xF6, true, 7, 6, CLASS_ATTRIBUTE_7_NAME, cip_uint, &hf_attr_class_num_inst_attr, NULL },
 
    /* Ethernet Link object (instance attributes) */
-   {0xF6, false,  1, 0, "Interface Speed",           cip_dword,            &hf_elink_interface_speed,  NULL},
-   {0xF6, false,  2, 1, "Interface Flags",           cip_dissector_func,   NULL, dissect_elink_interface_flags},
-   {0xF6, false,  3, 2, "Physical Address",          cip_dissector_func,   NULL, dissect_elink_physical_address },
-   {0xF6, false,  4, 3, "Interface Counters",        cip_dissector_func,   NULL, dissect_elink_interface_counters},
-   {0xF6, false,  5, 4, "Media Counters",            cip_dissector_func,   NULL, dissect_elink_media_counters},
-   {0xF6, false,  6, 5, "Interface Control",         cip_dissector_func,   NULL, dissect_elink_interface_control},
-   {0xF6, false,  7, 6, "Interface Type",            cip_usint,            &hf_elink_interface_type,  NULL},
-   {0xF6, false,  8, 7, "Interface State",           cip_usint,            &hf_elink_interface_state, NULL},
-   {0xF6, false,  9, 8, "Admin State",               cip_usint,            &hf_elink_admin_state,     NULL},
-   {0xF6, false, 10, 9, "Interface Label",           cip_short_string,     &hf_elink_interface_label, NULL},
-   {0xF6, false, 11, 10, "Interface Capability",     cip_dissector_func,   NULL, dissect_elink_interface_capability},
-   {0xF6, false, 12, 11, "HC Interface Counters",    cip_dissector_func,   NULL, dissect_elink_hc_interface_counters},
-   {0xF6, false, 13, 12, "HC Media Counters",        cip_dissector_func,   NULL, dissect_elink_hc_media_counters},
-   {0xF6, false, 14, 13, "Ethernet Errors",          cip_udint,            &hf_elink_ethernet_errors,   NULL},
-   {0xF6, false, 15, 14, "Link_Down Counter",        cip_udint,            &hf_elink_link_down_counter, NULL},
+   {0xF6, false,  1, 0, "Interface Speed",              cip_dword,            &hf_elink_interface_speed,  NULL},
+   {0xF6, false,  2, 1, "Interface Flags",              cip_dissector_func,   NULL, dissect_elink_interface_flags},
+   {0xF6, false,  3, 2, "Physical Address",             cip_dissector_func,   NULL, dissect_elink_physical_address },
+   {0xF6, false,  4, 3, "Interface Counters",           cip_dissector_func,   NULL, dissect_elink_interface_counters},
+   {0xF6, false,  5, 4, "Media Counters",               cip_dissector_func,   NULL, dissect_elink_media_counters},
+   {0xF6, false,  6, 5, "Interface Control",            cip_dissector_func,   NULL, dissect_elink_interface_control},
+   {0xF6, false,  7, 6, "Interface Type",               cip_usint,            &hf_elink_interface_type,  NULL},
+   {0xF6, false,  8, 7, "Interface State",              cip_usint,            &hf_elink_interface_state, NULL},
+   {0xF6, false,  9, 8, "Admin State",                  cip_usint,            &hf_elink_admin_state,     NULL},
+   {0xF6, false, 10, 9, "Interface Label",              cip_short_string,     &hf_elink_interface_label, NULL},
+   {0xF6, false, 11, 10, "Interface Capability",        cip_dissector_func,   NULL, dissect_elink_interface_capability},
+   {0xF6, false, 12, 11, "HC Interface Counters",       cip_dissector_func,   NULL, dissect_elink_hc_interface_counters},
+   {0xF6, false, 13, 12, "HC Media Counters",           cip_dissector_func,   NULL, dissect_elink_hc_media_counters},
+   {0xF6, false, 14, 13, "Ethernet Errors",             cip_udint,            &hf_elink_ethernet_errors,   NULL},
+   {0xF6, false, 15, 14, "Link_Down Counter",           cip_udint,            &hf_elink_link_down_counter, NULL},
+   {0xF6, false, 16, -1, "T1S PHY Configuration",       cip_dissector_func,   NULL, dissect_elink_t1s_phy_configuration},
+   {0xF6, false, 17, -1, "T1S PHY Commissioning Staus", cip_usint,            &hf_elink_t1s_phy_commissioning_status, NULL},
 
     /* QoS Object (class attributes) */
    {0x48, true, 1, 0, CLASS_ATTRIBUTE_1_NAME, cip_uint, &hf_attr_class_revision, NULL },
@@ -4923,6 +4945,9 @@ proto_register_enip(void)
 
       { &hf_elink_ethernet_errors, { "Ethernet Errors", "cip.elink.ethernet_errors", FT_UINT32, BASE_DEC, NULL, 0, NULL, HFILL } },
       { &hf_elink_link_down_counter, { "Link_Down Counter", "cip.elink.link_down_counter", FT_UINT32, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_elink_t1s_phy_mode, { "PHY Mode", "cip.elink.t1s_config.phy_mode", FT_UINT8, BASE_DEC, VALS(enip_elink_phy_mode_vals), 0, NULL, HFILL } },
+      { &hf_elink_t1s_phy_node_id, { "PHY Node ID for PLCA", "cip.elink.t1s_config.phy_node_id", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
+      { &hf_elink_t1s_phy_commissioning_status, { "T1S PHT Commissioning Status", "cip.elink.t1s_commissioning_status", FT_UINT8, BASE_DEC, NULL, 0, NULL, HFILL } },
       { &hf_cip_mac_address, { "MAC Address", "cip.mac_address", FT_ETHER, BASE_NONE, NULL, 0x0, NULL, HFILL } },
 
       { &hf_qos_8021q_enable,
