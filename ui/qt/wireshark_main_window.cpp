@@ -94,6 +94,10 @@ DIAG_ON(frame-larger-than=)
 #include <QUrl>
 #include <ui/tap-aggregation.h>
 
+#ifdef HAVE_LUA
+#include "lua_debugger_dialog.h"
+#endif
+
 // If we ever add support for multiple windows this will need to be replaced.
 static WiresharkMainWindow *gbl_cur_main_window_;
 
@@ -369,6 +373,13 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
 
     main_ui_->mainStack->setFocusPolicy(Qt::NoFocus);
     main_ui_->centralWidget->setFocusPolicy(Qt::NoFocus);
+
+#ifdef HAVE_LUA
+    QAction *luaDebuggerAction = new QAction(tr("Lua Debugger"), this);
+    connect(luaDebuggerAction, &QAction::triggered, this,
+            &WiresharkMainWindow::openLuaDebuggerDialog);
+    main_ui_->menuTools->addAction(luaDebuggerAction);
+#endif
 
     // Initialize base class menu pointers for recent captures handling
     recent_captures_menu_ = main_ui_->menuOpenRecentCaptureFile;
@@ -996,6 +1007,19 @@ void WiresharkMainWindow::closeEvent(QCloseEvent *event) {
         event->ignore();
         return;
     }
+
+#ifdef HAVE_LUA
+    /*
+     * If the Lua debugger is paused we are inside a nested event loop
+     * with the Lua dissector still on the C call stack.
+     */
+    if (wslua_debugger_is_paused()) {
+        LuaDebuggerDialog *dbg = LuaDebuggerDialog::instance();
+        if (dbg) {
+            dbg->close();
+        }
+    }
+#endif
 
     QString before_what(tr(" before quitting"));
     if (!tryClosingCaptureFile(before_what, Quit)) {
@@ -3153,3 +3177,16 @@ void WiresharkMainWindow::openTLSKeylogDialog()
     tlskeylog_dialog_->raise();
     tlskeylog_dialog_->activateWindow();
 }
+
+#ifdef HAVE_LUA
+void WiresharkMainWindow::openLuaDebuggerDialog()
+{
+    LuaDebuggerDialog *dialog = LuaDebuggerDialog::instance(this);
+    if (dialog->isMinimized()) {
+        dialog->showNormal();
+    }
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+#endif

@@ -1188,6 +1188,7 @@ int main(int argc, char *qt_argv[])
     profile_register_persconffile("plots");
     profile_register_persconffile("import_hexdump.json");
     profile_register_persconffile("remote_hosts.json");
+    profile_register_persconffile("lua_debugger.json");
 
     profile_store_persconffiles(false);
     init_profile_list();

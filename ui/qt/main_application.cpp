@@ -455,7 +455,12 @@ void MainApplication::setConfigurationProfile(const char *profile_name, bool wri
 
 void MainApplication::reloadLuaPluginsDelayed()
 {
-    QTimer::singleShot(0, this, &MainApplication::reloadLuaPlugins);
+    QTimer::singleShot(0, this, [this]() {
+        /* Clear the reloading flag so the re-triggered reload
+         * is not blocked by the isReloadingLua() guard. */
+        setReloadingLua(false);
+        emit reloadLuaPlugins();
+    });
 }
 
 const QIcon &MainApplication::normalIcon()

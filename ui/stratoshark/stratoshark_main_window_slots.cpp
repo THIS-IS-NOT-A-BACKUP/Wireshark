@@ -1378,6 +1378,20 @@ void StratosharkMainWindow::reloadLuaPlugins()
     if (mainApp->isReloadingLua())
         return;
 
+    /*
+     * Don't reload while cf_read is in progress.  cf_read calls
+     * processEvents() via its progress dialog, and our deferred-reload
+     * QTimer can fire during those calls.  Performing cf_close/cf_reload
+     * while cf_read is still on the C call stack corrupts its state
+     * (e.g. frees cf->linktypes that cf_read still references).
+     * Re-schedule the reload so it runs once cf_read has finished.
+     */
+    if (capture_file_.capFile() &&
+        capture_file_.capFile()->state == FILE_READ_IN_PROGRESS) {
+        mainApp->reloadLuaPluginsDelayed();
+        return;
+    }
+
     bool uses_lua_filehandler = false;
 
     if (capture_file_.capFile()) {
@@ -1396,7 +1410,14 @@ void StratosharkMainWindow::reloadLuaPlugins()
 
     mainApp->setReloadingLua(true);
 
-    wslua_reload_plugins(NULL, NULL, application_configuration_environment_prefix());
+    if (!wslua_reload_plugins(NULL, NULL, application_configuration_environment_prefix())) {
+        /* Reload was deferred because Lua code is currently executing.
+         * A deferred reload will be scheduled once the Lua call stack
+         * has unwound.  Keep isReloadingLua true to block further
+         * user-initiated reloads until the deferred reload completes. */
+        return;
+    }
+
     funnel_statistics_reload_menus();
     reloadDynamicMenus();
     closePacketDialogs();
@@ -1419,6 +1440,11 @@ void StratosharkMainWindow::reloadLuaPlugins()
     } else {
         redissectPackets();
     }
+
+    /* Notify the Lua subsystem that the reload is fully complete,
+     * including cf_reload/redissect.  This must happen AFTER the
+     * file has been fully re-read. */
+    wslua_reload_done();
 
     mainApp->setReloadingLua(false);
     SimpleDialog::displayQueuedMessages();

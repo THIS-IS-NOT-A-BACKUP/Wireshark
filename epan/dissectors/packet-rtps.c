@@ -1910,6 +1910,7 @@ static expert_field ei_rtps_uncompression_error;
 static expert_field ei_rtps_value_too_large;
 static expert_field ei_rtps_invalid_psk;
 static expert_field ei_rtps_invalid_fragment_size;
+static expert_field ei_rtps_user_data_dissection_error;
 
 /***************************************************************************/
 /* Value-to-String Tables */
@@ -10381,8 +10382,13 @@ int rtps_util_dissect_encapsulation_options(
 
 static bool rtps_util_try_dissector(proto_tree *tree,
         packet_info *pinfo, tvbuff_t *tvb, int offset, endpoint_guid * guid,
-        rtps_dissector_data * data, unsigned encoding, unsigned encoding_version, bool try_dissection_from_type_object) {
+        rtps_dissector_data * data, unsigned encoding, unsigned encoding_version,
+        bool try_dissection_from_type_object, int payload_size) {
 
+  /* Nothing to dissect (e.g. DISPOSE samples in a batch) or malformed size */
+  if (payload_size <= 0) {
+    return false;
+  }
 
   if (enable_topic_info) {
     type_mapping * type_mapping_object = rtps_util_get_topic_info(guid);
@@ -10395,14 +10401,26 @@ static bool rtps_util_try_dissector(proto_tree *tree,
       if (try_dissection_from_type_object && (enable_user_data_dissection || is_builtin_type)) {
           info = lookup_dissection_info_in_custom_and_builtin_types(type_mapping_object->type_id);
         if (info != NULL) {
+          /* Bound reads to the serialized payload so encrypted or malformed
+           * data cannot cause reads past the data region. */
+          tvbuff_t *payload_tvb = tvb_new_subset_length(tvb, offset, payload_size);
           proto_item_append_text(tree, " (TypeId: 0x%016" PRIx64 ")", info->type_id);
-          return dissect_user_defined(tree, tvb, pinfo, offset, encoding, encoding_version, info,
-              info->type_id, info->member_name, EXTENSIBILITY_INVALID, offset,
-              0 /* flags */, 0 /* member_id */, true);
+          TRY {
+            dissect_user_defined(tree, payload_tvb, pinfo, 0, encoding, encoding_version, info,
+                info->type_id, info->member_name, EXTENSIBILITY_INVALID, 0,
+                0 /* flags */, 0 /* member_id */, true);
+          }
+          CATCH_NONFATAL_ERRORS {
+            /* Payload could not be decoded, e.g. encrypted topic data */
+            expert_add_info(pinfo, tree,
+                &ei_rtps_user_data_dissection_error);
+          }
+          ENDTRY;
+          return true;
         }
       }
       /* This part tries to dissect the content using a dissector */
-      next_tvb = tvb_new_subset_remaining(tvb, offset);
+      next_tvb = tvb_new_subset_length(tvb, offset, payload_size);
 
       rtps_util_format_typename(pinfo->pool, type_mapping_object->type_name, &dissector_name);
       return dissector_try_string_with_data(rtps_type_name_table, dissector_name,
@@ -13205,38 +13223,39 @@ static int dissect_parameter_sequence(proto_tree *tree, packet_info *pinfo, tvbu
 
     /* This way, we can include vendor specific dissections without modifying the main ones */
 
-      if (!dissect_parameter_sequence_v1(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
-        offset, encoding, size, param_length, parameter, version, type_mapping_object, coherent_set_entity_info_object)) {
-          if ((version < 0x0200) ||
-            !dissect_parameter_sequence_v2(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
+      bool handled;
+      handled = dissect_parameter_sequence_v1(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
+        offset, encoding, size, param_length, parameter, version, type_mapping_object, coherent_set_entity_info_object);
+      if (!handled && version >= 0x0200) {
+          handled = dissect_parameter_sequence_v2(rtps_parameter_tree, pinfo, tvb, param_item, param_len_item,
             offset, encoding, param_length, parameter,
-            pStatusInfo, vendor_id, type_mapping_object, coherent_set_entity_info_object)) {
-              if (param_length > 0) {
-                proto_tree_add_item(rtps_parameter_tree, hf_rtps_parameter_data, tvb,
-                        offset, param_length, ENC_NA);
-              }
-          }
+            pStatusInfo, vendor_id, type_mapping_object, coherent_set_entity_info_object);
       }
 
     switch (vendor_id) {
       case RTPS_VENDOR_RTI_DDS:
       case RTPS_VENDOR_RTI_DDS_MICRO: {
-        dissect_parameter_sequence_rti_dds(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_rti_dds(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter, type_mapping_object, is_inline_qos, vendor_id);
         break;
       }
       case RTPS_VENDOR_TOC: {
-        dissect_parameter_sequence_toc(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_toc(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter);
         break;
       }
       case RTPS_VENDOR_ADL_DDS: {
-        dissect_parameter_sequence_adl(rtps_parameter_tree, pinfo, tvb,
+        handled |= dissect_parameter_sequence_adl(rtps_parameter_tree, pinfo, tvb,
             param_item, param_len_item, offset, encoding, param_length, parameter);
         break;
       }
       default:
         break;
+    }
+    /* Show raw bytes only if no dissector recognized this parameter */
+    if (!handled && param_length > 0) {
+        proto_tree_add_item(rtps_parameter_tree, hf_rtps_parameter_data, tvb,
+                offset, param_length, ENC_NA);
     }
 
     rtps_util_insert_type_mapping_in_registry(pinfo, type_mapping_object);
@@ -13757,6 +13776,8 @@ static void dissect_serialized_data(proto_tree *tree, packet_info *pinfo, tvbuff
     proto_tree_add_item(rtps_parameter_sequence_tree, hf_rtps_issue_data, tvb,
             offset, size, ENC_NA);
   } else {
+    int encap_offset = offset;
+    int payload_size;
     /* Dissects the encapsulation header options and uncompress the tvb if it is
      * compressed and can be uncompressed */
     offset = rtps_prepare_encapsulated_data(
@@ -13776,10 +13797,13 @@ static void dissect_serialized_data(proto_tree *tree, packet_info *pinfo, tvbuff
         &compressed_tvb,
         &compressed_subtree);
     data->encapsulation_id = encapsulation_id;
+    /* Payload size is total size minus the encapsulation header bytes consumed */
+    payload_size = size - (offset - encap_offset);
     if (is_compressed && uncompressed_ok) {
         data_holder_tvb = compressed_tvb;
         offset = 0;
         dissected_data_holder_tree = compressed_subtree;
+        payload_size = tvb_reported_length_remaining(data_holder_tvb, 0);
     }
 
     /* Sets the correct values for encapsulation_encoding */
@@ -13808,7 +13832,8 @@ static void dissect_serialized_data(proto_tree *tree, packet_info *pinfo, tvbuff
     if (is_compressed == uncompressed_ok) {
         if (rtps_util_try_dissector(dissected_data_holder_tree,
                 pinfo, data_holder_tvb, offset, guid, data, encapsulation_encoding,
-                get_encapsulation_version(encapsulation_id), try_dissection_from_type_object)) {
+                get_encapsulation_version(encapsulation_id), try_dissection_from_type_object,
+                payload_size)) {
             return;
         }
         /* The payload */
@@ -16750,7 +16775,8 @@ static void dissect_RTPS_DATA_BATCH(tvbuff_t *tvb, packet_info *pinfo, int offse
                       data_holder_tvb, offset, sample_info_length[count], NULL, "serializedKey[%d]", count);
               } else {
                   if (!rtps_util_try_dissector(
-                      sil_tree, pinfo, data_holder_tvb, offset, guid, data, get_encapsulation_endianness(encapsulation_id), get_encapsulation_version(encapsulation_id), try_dissection_from_type_object)) {
+                      sil_tree, pinfo, data_holder_tvb, offset, guid, data, get_encapsulation_endianness(encapsulation_id), get_encapsulation_version(encapsulation_id), try_dissection_from_type_object,
+                      sample_info_length[count])) {
                       proto_tree_add_bytes_format(sil_tree, hf_rtps_serialized_data,
                           data_holder_tvb, offset, sample_info_length[count], NULL, "serializedData[%d]", count);
                   }
@@ -18234,6 +18260,14 @@ static bool dissect_rtps(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, in
         is_domain_id_calculated = true;
       }
       doffset = (pinfo->destport - PORT_BASE - domain_id * DOMAIN_GAIN);
+      /* RTPX messages are always sent to PORT_BASE regardless of the
+       * domain_id propagated via PID_DOMAIN_ID, so the destination port
+       * does not encode a participant index. Force doffset to 0 so the
+       * dissector shows MULTICAST_METATRAFFIC without a garbage
+       * participant_idx caused by the resulting negative doffset. */
+      if (magic_number == RTPX_MAGIC_NUMBER) {
+        doffset = 0;
+      }
       if (doffset == 0) {
         nature = PORT_METATRAFFIC_MULTICAST;
       }
@@ -22649,6 +22683,7 @@ void proto_register_rtps(void) {
      { &ei_rtps_checksum_check_error, { "rtps.checksum_error", PI_CHECKSUM, PI_ERROR, "Error: Unexpected checksum", EXPFILL }},
      { &ei_rtps_invalid_psk, { "rtps.psk_decryption_error", PI_UNDECODED, PI_ERROR, "Unable to decrypt content using PSK", EXPFILL }},
      { &ei_rtps_invalid_fragment_size, { "rtps.fragment_size", PI_MALFORMED, PI_WARN, "Invalid fragment size", EXPFILL }},
+     { &ei_rtps_user_data_dissection_error, { "rtps.user_data_dissection_error", PI_PROTOCOL, PI_WARN, "User data dissection failed: payload may be encrypted", EXPFILL }},
   };
 
   module_t *rtps_module;

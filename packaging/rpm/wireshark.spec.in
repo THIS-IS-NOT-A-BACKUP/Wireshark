@@ -205,8 +205,21 @@ BuildRequires:	libssh-devel
 BuildRequires:	libmaxminddb-devel
 %endif
 
+# RPM 4.16 introduced version comparison in macro expressions, and then
+# RPM 4.19 introduced a built in %%{rpmversion} macro. We could define
+# the macro if undefined on earlier versions with:
+# %%global rpmversion %%(rpm --version | awk '{print $3}')
+# but still couldn't easily do a version comparison with it before 4.16.
+# OpenSUSE 15.6 uses 4.14, so that's out for right now.
+#
+# Right now, the only thing we need to test the version for is that
+# that we ought to provide the group if we have any files owned by
+# the group with RPM 4.19 and later, since it becomes Required by
+# default in that case. Since those are the same version, that means
+# it's enough to just check if the macro exists.
+
 %if %{use_wireshark_group} || "%{use_stratoshark_group}" == "1"
-%if v"%{rpmversion}" >= v"4.19"
+%if %{defined rpmversion}
 Provides:	group(wireshark)
 %endif
 %if 0%{?suse_version}

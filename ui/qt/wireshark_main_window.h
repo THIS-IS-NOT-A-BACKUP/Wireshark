@@ -282,8 +282,13 @@ public slots:
     void launchRLCGraph(bool channelKnown, uint8_t RAT, uint16_t ueid, uint8_t rlcMode,
                         uint16_t channelType, uint16_t channelId, uint8_t direction);
 
+#ifdef HAVE_LUA
+    void openLuaDebuggerDialog();
+#endif
+
     void rtpPlayerDialogReplaceRtpStreams(QVector<rtpstream_id_t *> stream_ids);
     void rtpPlayerDialogAddRtpStreams(QVector<rtpstream_id_t *> stream_ids);
+
     void rtpPlayerDialogRemoveRtpStreams(QVector<rtpstream_id_t *> stream_ids);
     void rtpAnalysisDialogReplaceRtpStreams(QVector<rtpstream_id_t *> stream_ids);
     void rtpAnalysisDialogAddRtpStreams(QVector<rtpstream_id_t *> stream_ids);

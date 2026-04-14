@@ -337,6 +337,9 @@ static int hf_dlr_rsc_beacon_interval;
 static int hf_dlr_rsc_beacon_timeout;
 static int hf_dlr_rsc_dlr_vlan_id;
 static int hf_dlr_ring_faults_count;
+static int hf_dlr_port_1_elink;
+static int hf_dlr_port_2_elink;
+static int hf_dlr_enable;
 static int hf_dlr_lanp1_dev_ip_addr;
 static int hf_dlr_lanp1_dev_physical_address;
 static int hf_dlr_lanp2_dev_ip_addr;
@@ -2716,8 +2719,8 @@ const attribute_info_t enip_attribute_vals[] = {
 
    /* DLR object (instance attributes) */
    /* Get Attributes All is not fully parsed here because there are multiple formats. */
-   {0x47, false, 1, 0, "Network Topology",                 cip_usint, &hf_dlr_network_topology, NULL},
-   {0x47, false, 2, 1, "Network Status",                   cip_usint, &hf_dlr_network_status, NULL},
+   {0x47, false, 1, 0, "Network Topology",                  cip_usint, &hf_dlr_network_topology, NULL},
+   {0x47, false, 2, 1, "Network Status",                    cip_usint, &hf_dlr_network_status, NULL},
    {0x47, false, 3, -1, "Ring Supervisor Status",           cip_usint, &hf_dlr_ring_supervisor_status, NULL},
    {0x47, false, 4, -1, "Ring Supervisor Config",           cip_dissector_func, NULL, dissect_dlr_ring_supervisor_config},
    {0x47, false, 5, -1, "Ring Faults Count",                cip_uint,      &hf_dlr_ring_faults_count, NULL},
@@ -2732,6 +2735,9 @@ const attribute_info_t enip_attribute_vals[] = {
    {0x47, false, 14, -1, "Redundant Gateway Status",        cip_usint, &hf_dlr_redundant_gateway_status, NULL},
    {0x47, false, 15, -1, "Active Gateway Address",          cip_dissector_func, NULL, dissect_dlr_active_gateway_address},
    {0x47, false, 16, -1, "Active Gateway Precedence",       cip_usint, &hf_dlr_active_gateway_precedence, NULL},
+   {0x47, false, 17, -1, "Port 1 Ethernet Link Instance",   cip_uint, &hf_dlr_port_1_elink, NULL },
+   {0x47, false, 18, -1, "Port 2 Ethernet Link Instance",   cip_uint, &hf_dlr_port_2_elink, NULL },
+   {0x47, false, 19, -1, "DLR Enable",                      cip_bool, &hf_dlr_enable,       NULL },
 
    // PRP/HSR Protocol
    {0x56, CIP_ATTR_INSTANCE, 1, 0, "LRE Enable", cip_bool, &hf_prp_lre_enable, NULL},
@@ -2805,7 +2811,13 @@ const attribute_info_t enip_attribute_vals[] = {
 
 // Table of CIP services defined by this dissector.
 static cip_service_info_t enip_obj_spec_service_table[] = {
-    // CIP Security
+   // DLR Onject
+   { 0x47, 0x4B, "Verify_Fault_Location", NULL },
+   { 0x47, 0x4C, "Clear_Rapid_Faults", NULL },
+   { 0x47, 0x4D, "Restart_Sign_On", NULL },
+   { 0x47, 0x4E, "Clear_Gateway_Partial_Fault", NULL },
+
+   // CIP Security
     { 0x5D, 0x4B, "Begin_Config", NULL },
     { 0x5D, 0x4C, "Kick_Timer", NULL },
     { 0x5D, 0x4D, "End_Config", NULL },
@@ -5069,6 +5081,21 @@ proto_register_enip(void)
         { "Ring Faults Count", "cip.dlr.ring_faults_count",
           FT_UINT16, BASE_DEC, NULL, 0,
           NULL, HFILL }},
+
+      { &hf_dlr_port_1_elink,
+        { "Port 1 Ethernet Link Instance", "cip.dlr.port1_eth_link",
+          FT_UINT16, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_dlr_port_2_elink,
+        { "Port 2 Ethernet Link Instance", "cip.dlr.port2_eth_link",
+          FT_UINT16, BASE_DEC, NULL, 0,
+          NULL, HFILL } },
+
+      { &hf_dlr_enable,
+        { "DLR Enable", "cip.dlr.dlr_enable",
+          FT_BOOLEAN, 8, TFS(&tfs_enabled_disabled), 0x1,
+          NULL, HFILL } },
 
       { &hf_dlr_lanp1_dev_ip_addr,
         { "Device IP Address", "cip.dlr.lanp1.ip_addr",

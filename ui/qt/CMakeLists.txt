@@ -23,6 +23,7 @@ set(WIRESHARK_WIDGET_HEADERS
 	widgets/capture_filter_combo.h
 	widgets/capture_filter_edit.h
 	widgets/clickable_label.h
+	widgets/collapsible_section.h
 	widgets/compression_group_box.h
 	widgets/copy_from_profile_button.h
 	widgets/detachable_tabwidget.h
@@ -303,6 +304,13 @@ if(ENABLE_PCAP)
 	endif()
 endif()
 
+if(LUA_FOUND)
+	list(APPEND WIRESHARK_QT_HEADERS
+		lua_debugger_code_view.h
+		lua_debugger_dialog.h
+	)
+endif()
+
 set(WIRESHARK_WIDGET_SRCS
 	widgets/additional_toolbar.cpp
 	widgets/apply_line_edit.cpp
@@ -310,6 +318,7 @@ set(WIRESHARK_WIDGET_SRCS
 	widgets/capture_filter_combo.cpp
 	widgets/capture_filter_edit.cpp
 	widgets/clickable_label.cpp
+	widgets/collapsible_section.cpp
 	widgets/compression_group_box.cpp
 	widgets/copy_from_profile_button.cpp
 	widgets/detachable_tabwidget.cpp
@@ -577,6 +586,13 @@ if(ENABLE_PCAP)
 	endif()
 endif()
 
+if(LUA_FOUND)
+	list(APPEND WIRESHARK_QT_SRC
+		lua_debugger_code_view.cpp
+		lua_debugger_dialog.cpp
+	)
+endif()
+
 set(WIRESHARK_QT_TAP_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/expert_info_dialog.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/funnel_statistics.cpp
@@ -713,6 +729,12 @@ if(HAVE_PCAP_REMOTE)
 	list(APPEND WIRESHARK_QT_UI
 		remote_capture_dialog.ui
 		remote_settings_dialog.ui
+	)
+endif()
+
+if(LUA_FOUND)
+	list(APPEND WIRESHARK_QT_UI
+		lua_debugger_dialog.ui
 	)
 endif()
 
