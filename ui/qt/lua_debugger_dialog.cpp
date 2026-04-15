@@ -167,20 +167,24 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     ui->toolBar->setStyleSheet(
         QStringLiteral("QToolBar { spacing: 4px; padding: 2px 4px; }"));
     ui->actionOpenFile->setIcon(StockIcon("document-open"));
-    ui->actionContinue->setIcon(StockIcon("media-playback-start"));
-    ui->actionStep->setIcon(StockIcon("go-next"));
+    ui->actionContinue->setIcon(StockIcon("x-lua-debug-continue"));
+    ui->actionStepOver->setIcon(StockIcon("x-lua-debug-step-over"));
+    ui->actionStepIn->setIcon(StockIcon("x-lua-debug-step-in"));
+    ui->actionStepOut->setIcon(StockIcon("x-lua-debug-step-out"));
     ui->actionReloadLuaPlugins->setIcon(StockIcon("view-refresh"));
     ui->actionClearBreakpoints->setIcon(StockIcon("edit-clear"));
     ui->actionOpenFile->setToolTip(tr("Open Lua Script"));
     ui->actionContinue->setToolTip(tr("Continue execution (F5)"));
-    ui->actionStep->setToolTip(tr("Step to next line (F10)"));
+    ui->actionStepOver->setToolTip(tr("Step over (F10)"));
+    ui->actionStepIn->setToolTip(tr("Step into (F11)"));
+    ui->actionStepOut->setToolTip(tr("Step out (Shift+F11)"));
     ui->actionReloadLuaPlugins->setToolTip(
         tr("Reload Lua Plugins (Ctrl+Shift+L)"));
     ui->actionClearBreakpoints->setToolTip(tr("Remove all breakpoints"));
-    ui->actionContinue->setShortcut(QKeySequence(Qt::Key_F5));
     ui->actionContinue->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    ui->actionStep->setShortcut(QKeySequence(Qt::Key_F10));
-    ui->actionStep->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    ui->actionStepOver->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    ui->actionStepIn->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    ui->actionStepOut->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     ui->actionReloadLuaPlugins->setShortcut(
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
     ui->actionReloadLuaPlugins->setShortcutContext(
@@ -189,8 +193,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     fileIcon = StockIcon("text-x-generic");
 
     // Toolbar controls - Checkbox for enable/disable
-    // Order: Checkbox | Separator | Continue | Step | Separator | Open | Reload
-    // | Clear
+    // Order: Checkbox | Separator | Continue | Step Over/In/Out | Separator |
+    // Open | Reload | Clear
     QAction *firstAction = ui->toolBar->actions().isEmpty()
                                ? nullptr
                                : ui->toolBar->actions().first();
@@ -204,8 +208,12 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
             &LuaDebuggerDialog::onDebuggerToggled);
     connect(ui->actionContinue, &QAction::triggered, this,
             &LuaDebuggerDialog::onContinue);
-    connect(ui->actionStep, &QAction::triggered, this,
-            &LuaDebuggerDialog::onStep);
+    connect(ui->actionStepOver, &QAction::triggered, this,
+            &LuaDebuggerDialog::onStepOver);
+    connect(ui->actionStepIn, &QAction::triggered, this,
+            &LuaDebuggerDialog::onStepIn);
+    connect(ui->actionStepOut, &QAction::triggered, this,
+            &LuaDebuggerDialog::onStepOut);
     connect(ui->actionClearBreakpoints, &QAction::triggered, this,
             &LuaDebuggerDialog::onClearBreakpoints);
     connect(ui->actionOpenFile, &QAction::triggered, this,
@@ -213,7 +221,9 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     connect(ui->actionReloadLuaPlugins, &QAction::triggered, this,
             &LuaDebuggerDialog::onReloadLuaPlugins);
     addAction(ui->actionContinue);
-    addAction(ui->actionStep);
+    addAction(ui->actionStepOver);
+    addAction(ui->actionStepIn);
+    addAction(ui->actionStepOut);
     addAction(ui->actionReloadLuaPlugins);
 
     // Tab Widget
@@ -522,8 +532,8 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     updateVariables(nullptr, QString());
 
     /*
-     * If an event loop is already running (e.g. we were called from onStep()
-     * which triggered an immediate re-pause), reuse it instead of nesting.
+     * If an event loop is already running (e.g. we were called from a step
+     * action which triggered an immediate re-pause), reuse it instead of nesting.
      * The outer loop.exec() is still on the stack and will return when we
      * eventually quit it via Continue or close.
      */
@@ -580,7 +590,7 @@ void LuaDebuggerDialog::onContinue()
     updateWidgets();
 }
 
-void LuaDebuggerDialog::onStep()
+void LuaDebuggerDialog::runDebuggerStep(void (*step_fn)(void))
 {
     if (!debuggerPaused)
     {
@@ -591,13 +601,12 @@ void LuaDebuggerDialog::onStep()
     clearPausedStateUi();
 
     /*
-     * Call wslua_debugger_step() which will immediately fire the line
-     * hook. If it hits a pause, handlePause() is called synchronously.
-     * handlePause() detects that eventLoop is already set and reuses
-     * it instead of nesting a new one — so the stack does NOT grow
-     * with each step.
+     * The step function resumes the VM and may synchronously hit handlePause()
+     * again. handlePause() detects that eventLoop is already set and reuses
+     * it instead of nesting a new one — so the stack does NOT grow with each
+     * step.
      */
-    wslua_debugger_step();
+    step_fn();
 
     /*
      * If handlePause() was NOT called (e.g. step landed in C code
@@ -610,6 +619,21 @@ void LuaDebuggerDialog::onStep()
     }
 
     updateWidgets();
+}
+
+void LuaDebuggerDialog::onStepOver()
+{
+    runDebuggerStep(wslua_debugger_step_over);
+}
+
+void LuaDebuggerDialog::onStepIn()
+{
+    runDebuggerStep(wslua_debugger_step_in);
+}
+
+void LuaDebuggerDialog::onStepOut()
+{
+    runDebuggerStep(wslua_debugger_step_out);
 }
 
 void LuaDebuggerDialog::onDebuggerToggled(bool checked)
@@ -1316,7 +1340,7 @@ void LuaDebuggerDialog::onLuaReloadCallback()
          * called in onLuaPostReloadCallback() AFTER plugins are loaded,
          * so new scripts appear in the file tree.
          */
-        if (dialog->ui && dialog->ui->codeTabWidget)
+        if (dialog->ui->codeTabWidget)
         {
             const qint32 tabCount =
                 static_cast<qint32>(dialog->ui->codeTabWidget->count());
@@ -1374,7 +1398,7 @@ void LuaDebuggerDialog::onScriptLoadedCallback(const char *file_path)
 
 void LuaDebuggerDialog::reloadAllScriptFiles()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1404,7 +1428,7 @@ void LuaDebuggerDialog::reloadAllScriptFiles()
 
 void LuaDebuggerDialog::applyCodeViewThemes()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1699,7 +1723,7 @@ void LuaDebuggerDialog::openInitialBreakpointFiles(
 
 void LuaDebuggerDialog::configureVariablesTreeColumns()
 {
-    if (!ui || !variablesTree || !variablesTree->header())
+    if (!variablesTree || !variablesTree->header())
     {
         return;
     }
@@ -1715,7 +1739,7 @@ void LuaDebuggerDialog::configureVariablesTreeColumns()
 
 void LuaDebuggerDialog::configureStackTreeColumns()
 {
-    if (!ui || !stackTree || !stackTree->header())
+    if (!stackTree || !stackTree->header())
     {
         return;
     }
@@ -1731,11 +1755,11 @@ void LuaDebuggerDialog::configureStackTreeColumns()
 
 void LuaDebuggerDialog::clearPausedStateUi()
 {
-    if (ui && variablesTree)
+    if (variablesTree)
     {
         variablesTree->clear();
     }
-    if (ui && stackTree)
+    if (stackTree)
     {
         stackTree->clear();
     }
@@ -1759,7 +1783,7 @@ void LuaDebuggerDialog::resumeDebuggerAndExitLoop()
 
 void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
 {
-    if (!ui || !variablesTree)
+    if (!variablesTree)
     {
         return;
     }
@@ -1800,7 +1824,7 @@ void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
 
 void LuaDebuggerDialog::clearAllCodeHighlights()
 {
-    if (!ui || !ui->codeTabWidget)
+    if (!ui->codeTabWidget)
     {
         return;
     }
@@ -1850,7 +1874,7 @@ void LuaDebuggerDialog::applyMonospaceFonts(const QFont &font)
         }
     }
 
-    if (ui && ui->codeTabWidget)
+    if (ui->codeTabWidget)
     {
         const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
         for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
@@ -1962,7 +1986,9 @@ void LuaDebuggerDialog::updateContinueActionState()
 {
     const bool allowContinue = wslua_debugger_is_enabled() && debuggerPaused;
     ui->actionContinue->setEnabled(allowContinue);
-    ui->actionStep->setEnabled(allowContinue);
+    ui->actionStepOver->setEnabled(allowContinue);
+    ui->actionStepIn->setEnabled(allowContinue);
+    ui->actionStepOut->setEnabled(allowContinue);
 }
 
 void LuaDebuggerDialog::updateWidgets()

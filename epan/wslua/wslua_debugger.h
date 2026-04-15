@@ -93,12 +93,31 @@ extern "C"
     WS_DLL_PUBLIC void wslua_debugger_continue(void);
 
     /**
-     * @brief Step to the next line.
+     * @brief Step into the next executed line (enters called functions).
      *
      * Resumes execution and pauses at the very next line hook,
-     * regardless of breakpoints. This advances to the next Lua
-     * source line without descending into called functions
-     * (similar to "step over").
+     * regardless of breakpoints.
+     */
+    WS_DLL_PUBLIC void wslua_debugger_step_in(void);
+
+    /**
+     * @brief Step over the current line (skips line hooks inside callees).
+     *
+     * Resumes execution and pauses at the next line hook that runs in the
+     * current stack frame or an outer frame (after returns).
+     */
+    WS_DLL_PUBLIC void wslua_debugger_step_over(void);
+
+    /**
+     * @brief Step out of the current function (pause in the caller).
+     *
+     * If there is only one Lua stack frame, behaves like
+     * wslua_debugger_continue().
+     */
+    WS_DLL_PUBLIC void wslua_debugger_step_out(void);
+
+    /**
+     * @brief Same as wslua_debugger_step_in() (legacy name).
      */
     WS_DLL_PUBLIC void wslua_debugger_step(void);
 

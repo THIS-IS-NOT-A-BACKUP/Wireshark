@@ -53,7 +53,9 @@
         </property>
         <addaction name="actionSepBeforeContinue"/>
          <addaction name="actionContinue"/>
-         <addaction name="actionStep"/>
+         <addaction name="actionStepOver"/>
+         <addaction name="actionStepIn"/>
+         <addaction name="actionStepOut"/>
          <addaction name="actionSepAfterStep"/>
          <addaction name="actionOpenFile"/>
         <addaction name="actionReloadLuaPlugins"/>
@@ -90,6 +92,9 @@
    <property name="text">
     <string>Continue</string>
    </property>
+   <property name="shortcut">
+    <string>F5</string>
+   </property>
   </action>
   <action name="actionSepBeforeContinue">
    <property name="separator">
@@ -101,15 +106,37 @@
     <bool>true</bool>
    </property>
   </action>
-  <action name="actionStep">
+  <action name="actionStepOver">
    <property name="icon">
-    <iconset theme="go-next"/>
+    <iconset theme="debug-step-over"/>
    </property>
    <property name="text">
-    <string>Step</string>
+    <string>Step Over</string>
    </property>
    <property name="shortcut">
     <string>F10</string>
+   </property>
+  </action>
+  <action name="actionStepIn">
+   <property name="icon">
+    <iconset theme="debug-step-into"/>
+   </property>
+   <property name="text">
+    <string>Step Into</string>
+   </property>
+   <property name="shortcut">
+    <string>F11</string>
+   </property>
+  </action>
+  <action name="actionStepOut">
+   <property name="icon">
+    <iconset theme="debug-step-out"/>
+   </property>
+   <property name="text">
+    <string>Step Out</string>
+   </property>
+   <property name="shortcut">
+    <string>Shift+F11</string>
    </property>
   </action>
   <action name="actionClearBreakpoints">

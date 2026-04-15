@@ -98,8 +98,12 @@ class LuaDebuggerDialog : public GeometryStateDialog
   private slots:
     /** @brief Resume Lua execution when the Continue action is triggered. */
     void onContinue();
-    /** @brief Step to the next line when the Step action is triggered. */
-    void onStep();
+    /** @brief Step over the current line. */
+    void onStepOver();
+    /** @brief Step into the next line (including callees). */
+    void onStepIn();
+    /** @brief Step out to the caller frame. */
+    void onStepOut();
     /** @brief Enable or disable the debugger when the toggle button is clicked.
      */
     void onDebuggerToggled(bool checked);
@@ -289,6 +293,11 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Resume the debugger (if paused) and exit any nested event loop.
      */
     void resumeDebuggerAndExitLoop();
+    /**
+     * @brief Resume execution with a stepping mode; shared by step over/in/out.
+     * @param step_fn Core step function (e.g. wslua_debugger_step_over).
+     */
+    void runDebuggerStep(void (*step_fn)(void));
     /** @brief Update the enabled state of the eval panel based on debugger
      * state. */
     void updateEvalPanelState();
