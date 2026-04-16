@@ -308,6 +308,8 @@ if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_HEADERS
 		lua_debugger_code_view.h
 		lua_debugger_dialog.h
+		lua_debugger_find_frame.h
+		lua_debugger_goto_line_frame.h
 	)
 endif()
 
@@ -590,6 +592,8 @@ if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_SRC
 		lua_debugger_code_view.cpp
 		lua_debugger_dialog.cpp
+		lua_debugger_find_frame.cpp
+		lua_debugger_goto_line_frame.cpp
 	)
 endif()
 
@@ -735,6 +739,8 @@ endif()
 if(LUA_FOUND)
 	list(APPEND WIRESHARK_QT_UI
 		lua_debugger_dialog.ui
+		lua_debugger_find_frame.ui
+		lua_debugger_goto_line_frame.ui
 	)
 endif()
 
@@ -875,6 +881,9 @@ qt_add_resources(WIRESHARK_QT_QRC
 	OPTIONS ${CMAKE_AUTORCC_OPTIONS}
 )
 
+# qt[56]_add_translation is deprecated in Qt 6.2 and later for
+# qt[6]_add_translations, but until we drop Qt 5.15 support it
+# would be more complicated to have two different approaches.
 if (USE_qt6)
 	QT6_ADD_TRANSLATION(WIRESHARK_QT_QM ${WIRESHARK_QT_TS} OPTIONS -silent)
 else()
@@ -1001,7 +1010,7 @@ set_target_properties(qtui PROPERTIES
 	# AUTORCC not needed with qt_add_resources
 	#AUTORCC ON
 	# Ensure .qm files are generated before autogenerating i18n.qrc
-	AUTOGEN_TARGET_DEPENDS "${WIRESHARK_QT_QM}"
+	AUTOGEN_TARGET_DEPENDS "${WIRESHARK_QT_QM};translations"
 )
 
 if(MSVC)

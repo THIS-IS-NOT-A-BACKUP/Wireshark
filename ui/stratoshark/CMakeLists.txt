@@ -887,7 +887,7 @@ set_target_properties(ui_stratoshark PROPERTIES
 	# AUTORCC not needed with qt_add_resources
 	#AUTORCC ON
 	# Ensure .qm files are generated before autogenerating i18n.qrc
-	AUTOGEN_TARGET_DEPENDS "${STRATOSHARK_QT_QM}"
+	AUTOGEN_TARGET_DEPENDS "${STRATOSHARK_QT_QM};stratoshark_translations"
 )
 
 if(MSVC)

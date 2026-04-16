@@ -117,6 +117,22 @@ extern "C"
     WS_DLL_PUBLIC void wslua_debugger_step_out(void);
 
     /**
+     * @brief Set which call stack frame supplies Locals and Upvalues in the
+     *        variables view.
+     *
+     * @a level is the index passed to @c lua_getstack (0 = innermost Lua/C
+     * activation). Globals are unaffected. If the debugger is not paused, the
+     * value is still stored for the next pause.
+     */
+    WS_DLL_PUBLIC void wslua_debugger_set_variable_stack_level(int32_t level);
+
+    /**
+     * @brief Current variable-inspection stack level (see
+     *        wslua_debugger_set_variable_stack_level()).
+     */
+    WS_DLL_PUBLIC int32_t wslua_debugger_get_variable_stack_level(void);
+
+    /**
      * @brief Same as wslua_debugger_step_in() (legacy name).
      */
     WS_DLL_PUBLIC void wslua_debugger_step(void);

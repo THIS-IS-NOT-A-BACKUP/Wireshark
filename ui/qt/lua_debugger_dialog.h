@@ -11,7 +11,6 @@
 #define LUA_DEBUGGER_DIALOG_H
 
 #include "geometry_state_dialog.h"
-#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QEventLoop>
@@ -19,17 +18,17 @@
 #include <QPair>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSplitter>
 #include <QString>
-#include <QToolBar>
-#include <QToolButton>
 #include <QTreeWidget>
 #include <QVariantMap>
 #include <QVector>
 
 #include "epan/wslua/wslua_debugger.h"
 
+class AccordionFrame;
 class CollapsibleSection;
+class QEvent;
+class QChildEvent;
 
 namespace Ui
 {
@@ -88,12 +87,30 @@ class LuaDebuggerDialog : public GeometryStateDialog
      */
     bool ensureFileTreeEntry(const QString &file_path);
 
+    /**
+     * @brief Close from Esc or programmatic reject(); queues close() so
+     *        closeEvent() runs (unsaved-scripts prompt matches the window
+     *        close button). The base QDialog::reject() hides via done() and
+     *        skips closeEvent(); synchronous close() from Esc can fail to close.
+     */
+    void reject() override;
+
+  public slots:
+    /**
+     * @brief Escape: hide inline find/go accordions if shown, else close dialog.
+     *        Invoked from the script editor because keys often go to the viewport,
+     *        not the top-level dialog event filter.
+     */
+    void handleEscapeKey();
+
   protected:
     /**
      * @brief Flush state and resume execution when the dialog closes.
      * @param event Close request metadata from Qt.
      */
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
+    void childEvent(QChildEvent *event) override;
 
   private slots:
     /** @brief Resume Lua execution when the Continue action is triggered. */
@@ -124,12 +141,21 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onVariablesContextMenuRequested(const QPoint &pos);
     /** @brief Prompt the user to open a Lua file into a new tab. */
     void onOpenFile();
+    /** @brief Save the active script tab to disk. */
+    void onSaveFile();
+    /** @brief Prompt before closing a tab that has unsaved edits. */
+    void onCodeTabCloseRequested(int index);
     /** @brief Trigger a reload of all Lua plugins. */
     void onReloadLuaPlugins();
     /** @brief Jump to the selected stack frame location. */
     void onStackItemDoubleClicked(QTreeWidgetItem *item, int column);
+    /** @brief Show Locals/Upvalues for the selected stack frame. */
+    void onStackCurrentItemChanged(QTreeWidgetItem *current,
+                                   QTreeWidgetItem *previous);
     /** @brief Reapply fonts when the application monospace font changes. */
     void onMonospaceFontUpdated(const QFont &font);
+    /** @brief Keep find/go-to bars on the regular UI font size when zoom changes. */
+    void onZoomRegularFont(const QFont &font);
     /** @brief Refresh fonts once the main application finishes initializing. */
     void onMainAppInitialized();
     /** @brief Update code view themes when preferences change. */
@@ -144,6 +170,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void evaluateSelection(const QString &text);
     /** @brief Handle theme selection changes from the Settings section. */
     void onThemeChanged(int idx);
+    /** @brief Show inline find/replace bar. */
+    void onEditorFind();
+    /** @brief Show inline go-to-line bar. */
+    void onEditorGoToLine();
 
   private:
     Ui::LuaDebuggerDialog *ui;
@@ -182,6 +212,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QIcon fileIcon;
     bool debuggerPaused;
     bool reloadDeferred;
+    /** @brief lua_getstack level for variables; kept in sync with stack list. */
+    int stackSelectionLevel;
 
     // Collapsible sections (created programmatically)
     CollapsibleSection *variablesSection;
@@ -209,6 +241,12 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Refresh the call stack tree from the debugger back-end. */
     void updateStack();
     /**
+     * @brief Rebuild the variables tree after the stack frame for inspection
+     *        changed (same as clearing the tree and calling updateVariables at
+     *        the root).
+     */
+    void refreshVariablesForCurrentStackFrame();
+    /**
      * @brief Populate the variables tree with locals, globals, or nested
      * tables.
      * @param parent Optional parent tree item receiving the children.
@@ -224,6 +262,41 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * @return Pointer to the code view widget that now hosts the file.
      */
     LuaDebuggerCodeView *loadFile(const QString &file_path);
+    /** @brief The code editor in the active tab, or nullptr. */
+    LuaDebuggerCodeView *currentCodeView() const;
+    /** @brief True if any open tab has unsaved edits. */
+    bool hasUnsavedChanges() const;
+    /** @brief How many open code tabs currently have unsaved edits. */
+    qint32 unsavedOpenScriptTabCount() const;
+    /**
+     * @brief If any tab is modified, prompt to save or discard.
+     * @param title Window title for the prompt.
+     * @return False if the user cancelled; true if there is nothing to do,
+     *         changes were saved, or the user chose to discard.
+     */
+    bool ensureUnsavedChangesHandled(const QString &title);
+    /** @brief Mark every open document as unmodified without saving. */
+    void clearAllDocumentModified();
+    /** @brief Persist one editor buffer to its file path. */
+    bool saveCodeView(LuaDebuggerCodeView *view);
+    /** @brief Save every tab that has unsaved edits. */
+    bool saveAllModified();
+    /** @brief Update tab label (e.g. trailing *) for one editor. */
+    void updateTabTextForCodeView(LuaDebuggerCodeView *view);
+    /** @brief Enable Save when the current tab can be written. */
+    void updateSaveActionState();
+    /** @brief Reflect unsaved scripts in the window (e.g. close-button hint). */
+    void updateWindowModifiedState();
+    /** @brief Hide other accordion bars then show one (matches main window). */
+    void showAccordionFrame(AccordionFrame *frame, bool toggle = false);
+    /** @brief Point find/goto bars at the active code tab. */
+    void updateLuaEditorAuxFrames();
+    /** @brief Install this dialog as an event filter on all descendant widgets
+     *  so conflicting shortcuts are handled here before the main window.
+     */
+    void installDescendantShortcutFilters();
+    /** @brief Use normal application font (family + size) on find/go-to accordions. */
+    void applyLuaEditorAccordionFonts(const QFont &regularFont);
     /** @brief Index all Lua scripts from standard plugin directories. */
     void refreshAvailableScripts();
     /**

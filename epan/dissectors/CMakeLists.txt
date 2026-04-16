@@ -2020,10 +2020,12 @@ set(DISSECTOR_REG_SRC
 )
 
 source_group(dissector-registration FILES ${DISSECTOR_REG_SRC})
+add_custom_target(generate_dissector_registration DEPENDS ${DISSECTOR_REG_SRC})
 
 add_library(dissector-registration OBJECT
 	${DISSECTOR_REG_SRC}
 )
+add_dependencies(dissector-registration generate_dissector_registration)
 
 target_include_directories(dissector-registration
 	PRIVATE
@@ -2063,6 +2065,7 @@ add_library(dissectors OBJECT
 	${DISSECTOR_LEX}
 	${EVENT_FILES}
 )
+add_dependencies(dissectors generate_dissector_registration)
 
 target_include_directories(dissectors
 	SYSTEM PRIVATE
@@ -2110,6 +2113,7 @@ if(NOT WIN32) # We're well past Windows' command line length limits
 		${DISSECTOR_HEADERS}
 		${ALL_EVENT_DISSECTOR_SRC}
 	)
+	add_dependencies(checkAPI_dissectors generate_dissector_registration)
 endif()
 
 #

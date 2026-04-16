@@ -41,6 +41,7 @@ typedef struct
     int step_stack_depth; /**< Frame count captured when OVER/OUT begins */
     bool was_enabled_before_reload; /**< Saved state across plugin reload */
     bool reload_in_progress; /**< Suppress auto-enable during reload */
+    int32_t variable_stack_level; /**< lua_getstack index for Locals/Upvalues */
 } wslua_debugger_t;
 
 static wslua_debugger_t debugger = {
@@ -55,7 +56,8 @@ static wslua_debugger_t debugger = {
     WSLUA_STEP_KIND_NONE, /* step_kind */
     0,                    /* step_stack_depth */
     false,                /* was_enabled_before_reload */
-    false                 /* reload_in_progress */
+    false,                /* reload_in_progress */
+    0,                    /* variable_stack_level */
 };
 
 /* Breakpoints (in-memory, persisted by Qt side) */
@@ -505,6 +507,21 @@ void wslua_debugger_step(void)
     wslua_debugger_step_in();
 }
 
+void wslua_debugger_set_variable_stack_level(int32_t level)
+{
+    g_mutex_lock(&debugger.mutex);
+    debugger.variable_stack_level = level < 0 ? 0 : level;
+    g_mutex_unlock(&debugger.mutex);
+}
+
+int32_t wslua_debugger_get_variable_stack_level(void)
+{
+    g_mutex_lock(&debugger.mutex);
+    const int32_t level = debugger.variable_stack_level;
+    g_mutex_unlock(&debugger.mutex);
+    return level;
+}
+
 /**
  * @brief Add a breakpoint.
  * @param file_path The file path.
@@ -920,12 +937,42 @@ void wslua_debugger_free_stack(wslua_stack_frame_t *stack, int32_t frame_count)
 }
 
 /**
+ * @brief Fill @a ar for lua_getlocal / lua_getinfo for stack frame @a level.
+ */
+static bool
+wslua_debugger_fill_activation(lua_State *L, int32_t level, lua_Debug *ar)
+{
+    return lua_getstack(L, level, ar);
+}
+
+/**
+ * @brief After @a ar describes an activation, push the running closure so
+ *        lua_getupvalue can enumerate upvalues (Lua debug library pattern).
+ */
+static bool wslua_debugger_push_function_for_ar(lua_State *L, lua_Debug *ar)
+{
+    const int base = lua_gettop(L);
+    if (!lua_getinfo(L, "f", ar))
+    {
+        lua_settop(L, base);
+        return false;
+    }
+    if (!lua_isfunction(L, -1))
+    {
+        lua_settop(L, base);
+        return false;
+    }
+    return true;
+}
+
+/**
  * @brief Lookup a variable path in Lua state.
  * @param L The Lua state.
  * @param path The path to lookup (e.g. "a.b").
  * @return true if found (value on stack), false otherwise.
  */
-static bool wslua_debugger_lookup_path(lua_State *L, const char *path)
+static bool wslua_debugger_lookup_path(lua_State *L, const char *path,
+                                       int32_t stack_level)
 {
     if (!path || !*path)
         return false;
@@ -941,7 +988,7 @@ static bool wslua_debugger_lookup_path(lua_State *L, const char *path)
 
     /* Look in locals */
     lua_Debug debug_info;
-    if (!lua_getstack(L, 0, &debug_info))
+    if (!wslua_debugger_fill_activation(L, stack_level, &debug_info))
     {
         g_free(first_component);
         return false;
@@ -963,22 +1010,25 @@ static bool wslua_debugger_lookup_path(lua_State *L, const char *path)
     if (!found)
     {
         /* Look in upvalues */
-        lua_getinfo(L, "f", &debug_info); /* Push function */
-        local_index = 1;
-        while ((name = lua_getupvalue(L, -1, local_index++)))
+        if (wslua_debugger_push_function_for_ar(L, &debug_info))
         {
-            if (g_strcmp0(name, first_component) == 0)
+            local_index = 1;
+            while ((name = lua_getupvalue(L, -1, local_index++)))
             {
-                found = true;
-                lua_remove(L, -2); /* Remove function */
-                break;
+                if (g_strcmp0(name, first_component) == 0)
+                {
+                    found = true;
+                    lua_remove(L, -2); /* Remove function */
+                    break;
+                }
+                lua_pop(L, 1);
             }
-            lua_pop(L, 1);
+            if (!found)
+                lua_pop(L, 1); /* Remove function */
         }
+
         if (!found)
         {
-            lua_pop(L, 1); /* Remove function */
-
             /* Look in globals */
             lua_getglobal(L, first_component);
             if (lua_isnil(L, -1))
@@ -1130,6 +1180,7 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
 {
     g_mutex_lock(&debugger.mutex);
     lua_State *target_L = debugger.paused_L ? debugger.paused_L : debugger.L;
+    const int32_t variable_stack_level = debugger.variable_stack_level;
     g_mutex_unlock(&debugger.mutex);
     if (!target_L)
     {
@@ -1167,7 +1218,8 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
     {
         /* Locals */
         lua_Debug debug_info;
-        if (lua_getstack(target_L, 0, &debug_info))
+        if (wslua_debugger_fill_activation(target_L, variable_stack_level,
+                                           &debug_info))
         {
             int32_t local_index = 1;
             const char *name;
@@ -1196,15 +1248,26 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
     {
         /* Upvalues */
         lua_Debug debug_info;
-        if (lua_getstack(target_L, 0, &debug_info))
+        if (wslua_debugger_fill_activation(target_L, variable_stack_level,
+                                           &debug_info) &&
+            wslua_debugger_push_function_for_ar(target_L, &debug_info))
         {
-            lua_getinfo(target_L, "f", &debug_info);
             int32_t upvalue_index = 1;
             const char *name;
-            while ((name = lua_getupvalue(target_L, -1, upvalue_index++)))
+            while ((name = lua_getupvalue(target_L, -1, upvalue_index)))
             {
                 wslua_variable_t variable;
-                variable.name = g_strdup(name);
+                /* C closures use "" as the name for each slot; use a label so
+                 * the UI path is valid for expansion. */
+                if (name[0] == '\0')
+                {
+                    variable.name =
+                        g_strdup_printf("(closure #%d)", upvalue_index);
+                }
+                else
+                {
+                    variable.name = g_strdup(name);
+                }
                 variable.type =
                     g_strdup(lua_typename(target_L, lua_type(target_L, -1)));
                 variable.value = wslua_debugger_describe_value(target_L, -1);
@@ -1213,6 +1276,7 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
 
                 g_array_append_val(variables_array, variable);
                 lua_pop(target_L, 1);
+                upvalue_index++;
             }
             lua_pop(target_L, 1); /* Function */
         }
@@ -1278,7 +1342,8 @@ wslua_variable_t *wslua_debugger_get_variables(const char *path,
         else if (g_str_has_prefix(path, "Globals."))
             lookup_path = path + 8;
 
-        if (wslua_debugger_lookup_path(target_L, lookup_path))
+        if (wslua_debugger_lookup_path(target_L, lookup_path,
+                                       variable_stack_level))
         {
             if (lua_istable(target_L, -1))
             {
