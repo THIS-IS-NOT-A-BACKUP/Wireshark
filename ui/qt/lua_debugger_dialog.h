@@ -152,10 +152,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     /** @brief Show Locals/Upvalues for the selected stack frame. */
     void onStackCurrentItemChanged(QTreeWidgetItem *current,
                                    QTreeWidgetItem *previous);
-    /** @brief Reapply fonts when the application monospace font changes. */
+    /** @brief Apply Wireshark text zoom to the script editor only. */
     void onMonospaceFontUpdated(const QFont &font);
-    /** @brief Keep find/go-to bars on the regular UI font size when zoom changes. */
-    void onZoomRegularFont(const QFont &font);
     /** @brief Refresh fonts once the main application finishes initializing. */
     void onMainAppInitialized();
     /** @brief Update code view themes when preferences change. */
@@ -218,8 +216,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     // Collapsible sections (created programmatically)
     CollapsibleSection *variablesSection;
     CollapsibleSection *stackSection;
-    CollapsibleSection *filesSection;
     CollapsibleSection *breakpointsSection;
+    CollapsibleSection *filesSection;
     CollapsibleSection *evalSection;
     CollapsibleSection *settingsSection;
 
@@ -295,8 +293,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
      *  so conflicting shortcuts are handled here before the main window.
      */
     void installDescendantShortcutFilters();
-    /** @brief Use normal application font (family + size) on find/go-to accordions. */
-    void applyLuaEditorAccordionFonts(const QFont &regularFont);
+    /** @brief Apply monospace to each open code tab (and line number area). */
+    void applyCodeEditorFonts(const QFont &monoFont);
+    /** @brief Base monospace for panel bodies; normal font for tree headers. */
+    void applyMonospacePanelFonts();
     /** @brief Index all Lua scripts from standard plugin directories. */
     void refreshAvailableScripts();
     /**
@@ -352,17 +352,17 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void clearPausedStateUi();
     /** @brief Remove highlights from every open code view. */
     void clearAllCodeHighlights();
-    /** @brief Apply the global monospace font to tree and list widgets. */
+    /** @brief Zoomed monospace for the editor; base monospace + normal headers for panels. */
     void applyMonospaceFonts();
-    /** @brief Apply a supplied monospace font to debugger widgets. */
-    void applyMonospaceFonts(const QFont &font);
     /** @brief Apply the current theme preference to all code views. */
     void applyCodeViewThemes();
     /** @brief Reload all script files from disk (e.g., after Lua plugin
      * reload). */
     void reloadAllScriptFiles();
-    /** @brief Determine the current monospace font, honoring zoom settings. */
-    QFont effectiveMonospaceFont() const;
+    /** @brief Monospace for panels and the script editor. */
+    QFont effectiveMonospaceFont(bool zoomed) const;
+    /** @brief Standard Wireshark UI font for tree column headers. */
+    QFont effectiveRegularFont() const;
     /** @brief Resume the debugger (if paused) and exit any nested event loop.
      */
     void resumeDebuggerAndExitLoop();

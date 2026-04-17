@@ -95,12 +95,6 @@ namespace
 namespace SettingsKeys
 {
 constexpr const char *Theme = "theme";
-constexpr const char *FontFamily = "fontFamily";
-constexpr const char *FontSize = "fontSize";
-constexpr const char *DialogWidth = "dialogWidth";
-constexpr const char *DialogHeight = "dialogHeight";
-constexpr const char *DialogX = "dialogX";
-constexpr const char *DialogY = "dialogY";
 constexpr const char *MainSplitter = "mainSplitterState";
 constexpr const char *LeftSplitter = "leftSplitterState";
 constexpr const char *SectionVariables = "sectionVariables";
@@ -222,7 +216,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     : GeometryStateDialog(parent), ui(new Ui::LuaDebuggerDialog),
       eventLoop(nullptr), enabledCheckBox(nullptr), breakpointTabsPrimed(false),
       debuggerPaused(false), reloadDeferred(false), variablesSection(nullptr),
-      stackSection(nullptr), filesSection(nullptr), breakpointsSection(nullptr),
+      stackSection(nullptr), breakpointsSection(nullptr), filesSection(nullptr),
       evalSection(nullptr), settingsSection(nullptr), variablesTree(nullptr),
       stackTree(nullptr), fileTree(nullptr), breakpointsTree(nullptr),
       evalInputEdit(nullptr), evalOutputEdit(nullptr), evalButton(nullptr),
@@ -438,11 +432,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
 
     if (mainApp)
     {
-        connect(mainApp, &MainApplication::zoomRegularFont, this,
-                &LuaDebuggerDialog::onZoomRegularFont, Qt::UniqueConnection);
         connect(mainApp, &MainApplication::zoomMonospaceFont, this,
-                &LuaDebuggerDialog::onMonospaceFontUpdated,
-                Qt::UniqueConnection);
+                &LuaDebuggerDialog::onMonospaceFontUpdated, Qt::UniqueConnection);
         connect(mainApp, &MainApplication::appInitialized, this,
                 &LuaDebuggerDialog::onMainAppInitialized, Qt::UniqueConnection);
         connect(mainApp, &MainApplication::preferencesChanged, this,
@@ -529,16 +520,6 @@ void LuaDebuggerDialog::createCollapsibleSections()
     stackSection->setExpanded(true);
     splitter->addWidget(stackSection);
 
-    // --- Files Section ---
-    filesSection = new CollapsibleSection(tr("Files"), this);
-    fileTree = new QTreeWidget();
-    fileTree->setColumnCount(1);
-    fileTree->setHeaderLabels({tr("Files")});
-    fileTree->setRootIsDecorated(false);
-    filesSection->setContentWidget(fileTree);
-    filesSection->setExpanded(true);
-    splitter->addWidget(filesSection);
-
     // --- Breakpoints Section ---
     breakpointsSection = new CollapsibleSection(tr("Breakpoints"), this);
     breakpointsTree = new QTreeWidget();
@@ -549,6 +530,16 @@ void LuaDebuggerDialog::createCollapsibleSections()
     breakpointsSection->setContentWidget(breakpointsTree);
     breakpointsSection->setExpanded(true);
     splitter->addWidget(breakpointsSection);
+
+    // --- Files Section ---
+    filesSection = new CollapsibleSection(tr("Files"), this);
+    fileTree = new QTreeWidget();
+    fileTree->setColumnCount(1);
+    fileTree->setHeaderLabels({tr("Files")});
+    fileTree->setRootIsDecorated(false);
+    filesSection->setContentWidget(fileTree);
+    filesSection->setExpanded(true);
+    splitter->addWidget(filesSection);
 
     // --- Evaluate Section ---
     evalSection = new CollapsibleSection(tr("Evaluate"), this);
@@ -977,8 +968,12 @@ void LuaDebuggerDialog::updateBreakpoints()
             item->setData(0, BreakpointLineRole, static_cast<qlonglong>(line));
             item->setToolTip(0, tr("Enable or disable this breakpoint"));
             item->setText(1, QString::number(line));
+            const QString fileDisplayName = fileInfo.fileName();
             QString locationText =
-                QStringLiteral("%1:%2").arg(normalizedPath).arg(line);
+                QStringLiteral("%1:%2")
+                    .arg(fileDisplayName.isEmpty() ? normalizedPath
+                                                    : fileDisplayName)
+                    .arg(line);
             item->setText(2, locationText);
             item->setTextAlignment(2, Qt::AlignLeft | Qt::AlignVCenter);
 
@@ -1076,9 +1071,16 @@ void LuaDebuggerDialog::updateStack()
                 {
                     resolvedPath = filePath;
                 }
+                const QString fileDisplayName =
+                    QFileInfo(resolvedPath).fileName();
                 locationText = QStringLiteral("%1:%2")
-                                   .arg(resolvedPath)
+                                   .arg(fileDisplayName.isEmpty() ? resolvedPath
+                                                                 : fileDisplayName)
                                    .arg(stack[frameIndex].line);
+                item->setToolTip(
+                    1, QStringLiteral("%1:%2")
+                           .arg(resolvedPath)
+                           .arg(stack[frameIndex].line));
             }
             else
             {
@@ -1319,7 +1321,7 @@ LuaDebuggerCodeView *LuaDebuggerDialog::loadFile(const QString &file_path)
 
     // Create new tab
     LuaDebuggerCodeView *codeView = new LuaDebuggerCodeView(ui->codeTabWidget);
-    codeView->setEditorFont(effectiveMonospaceFont());
+    codeView->setEditorFont(effectiveMonospaceFont(true));
     codeView->setFilename(normalizedPath);
 
     QFile file(normalizedPath);
@@ -1854,16 +1856,7 @@ void LuaDebuggerDialog::onStackItemDoubleClicked(QTreeWidgetItem *item,
 
 void LuaDebuggerDialog::onMonospaceFontUpdated(const QFont &font)
 {
-    if (!mainApp || !mainApp->isInitialized())
-    {
-        return;
-    }
-    applyMonospaceFonts(font);
-
-    /* Persist the font to our JSON settings */
-    settings_[SettingsKeys::FontFamily] = font.family();
-    settings_[SettingsKeys::FontSize] = font.pointSize();
-    saveSettingsFile();
+    applyCodeEditorFonts(font);
 }
 
 void LuaDebuggerDialog::onMainAppInitialized()
@@ -1874,6 +1867,7 @@ void LuaDebuggerDialog::onMainAppInitialized()
 void LuaDebuggerDialog::onPreferencesChanged()
 {
     applyCodeViewThemes();
+    applyMonospaceFonts();
 }
 
 void LuaDebuggerDialog::onThemeChanged(int idx)
@@ -2466,97 +2460,79 @@ void LuaDebuggerDialog::clearAllCodeHighlights()
 
 void LuaDebuggerDialog::applyMonospaceFonts()
 {
-    applyMonospaceFonts(effectiveMonospaceFont());
+    applyCodeEditorFonts(effectiveMonospaceFont(true));
+    applyMonospacePanelFonts();
 }
 
-void LuaDebuggerDialog::applyMonospaceFonts(const QFont &font)
+void LuaDebuggerDialog::applyCodeEditorFonts(const QFont &monoFont)
 {
-    QFont monoFont = font;
-    if (monoFont.family().isEmpty())
+    QFont font = monoFont;
+    if (font.family().isEmpty())
     {
-        monoFont = effectiveMonospaceFont();
+        font = effectiveMonospaceFont(true);
     }
 
-    QList<QWidget *> widgets;
-    widgets << this << variablesTree << stackTree << fileTree << breakpointsTree
-            << ui->toolBar << evalInputEdit << evalOutputEdit;
+    if (!ui->codeTabWidget)
+    {
+        return;
+    }
+    const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
+    for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
+    {
+        LuaDebuggerCodeView *view = qobject_cast<LuaDebuggerCodeView *>(
+            ui->codeTabWidget->widget(static_cast<int>(tabIndex)));
+        if (view)
+        {
+            view->setEditorFont(font);
+        }
+    }
+}
+
+void LuaDebuggerDialog::applyMonospacePanelFonts()
+{
+    const QFont panelMono = effectiveMonospaceFont(false);
+    const QFont headerFont = effectiveRegularFont();
+
+    const QList<QWidget *> widgets = {variablesTree, stackTree, breakpointsTree,
+                                      evalInputEdit, evalOutputEdit};
     for (QWidget *widget : widgets)
     {
         if (widget)
         {
-            widget->setFont(monoFont);
+            widget->setFont(panelMono);
         }
     }
 
-    const QList<QTreeWidget *> trees = {variablesTree, stackTree, fileTree,
-                                        breakpointsTree};
-    for (QTreeWidget *tree : trees)
+    const QList<QTreeWidget *> treesWithStandardHeaders = {
+        variablesTree, stackTree, fileTree, breakpointsTree};
+    for (QTreeWidget *tree : treesWithStandardHeaders)
     {
         if (tree && tree->header())
         {
-            tree->header()->setFont(monoFont);
+            tree->header()->setFont(headerFont);
         }
     }
-
-    if (ui->codeTabWidget)
-    {
-        const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
-        for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
-        {
-            LuaDebuggerCodeView *view = qobject_cast<LuaDebuggerCodeView *>(
-                ui->codeTabWidget->widget(static_cast<int>(tabIndex)));
-            if (view)
-            {
-                view->setEditorFont(monoFont);
-            }
-        }
-    }
-
-    /* Find / go-to accordions use the normal UI font (family and point size). */
-    applyLuaEditorAccordionFonts(QGuiApplication::font());
 }
 
-void LuaDebuggerDialog::applyLuaEditorAccordionFonts(const QFont &regularFont)
+QFont LuaDebuggerDialog::effectiveMonospaceFont(bool zoomed) const
 {
-    if (!ui)
-    {
-        return;
-    }
-    if (ui->luaDebuggerFindFrame)
-    {
-        ui->luaDebuggerFindFrame->setFont(regularFont);
-    }
-    if (ui->luaDebuggerGoToLineFrame)
-    {
-        ui->luaDebuggerGoToLineFrame->setFont(regularFont);
-    }
-}
-
-void LuaDebuggerDialog::onZoomRegularFont(const QFont &font)
-{
-    applyLuaEditorAccordionFonts(font);
-}
-
-QFont LuaDebuggerDialog::effectiveMonospaceFont() const
-{
-    /* If mainApp is initialized, use its monospace font */
+    /* Monospace font for panels and the script editor. */
     if (mainApp && mainApp->isInitialized())
     {
-        return mainApp->monospaceFont();
-    }
-
-    /* Try to use the persisted font from last session (from settings_) */
-    QString savedFamily = settings_.value(SettingsKeys::FontFamily).toString();
-    int savedSize = settings_.value(SettingsKeys::FontSize, 0).toInt();
-    if (!savedFamily.isEmpty() && savedSize > 0)
-    {
-        QFont savedFont(savedFamily, savedSize);
-        savedFont.setStyleHint(QFont::Monospace);
-        return savedFont;
+        return mainApp->monospaceFont(zoomed);
     }
 
     /* Fall back to system fixed font */
     return QFontDatabase::systemFont(QFontDatabase::FixedFont);
+}
+
+QFont LuaDebuggerDialog::effectiveRegularFont() const
+{
+    if (mainApp && mainApp->isInitialized())
+    {
+        return mainApp->font();
+    }
+    return QGuiApplication::font();
 }
 
 void LuaDebuggerDialog::syncDebuggerToggleWithCore()
@@ -2889,23 +2865,6 @@ void LuaDebuggerDialog::applyDialogSettings()
             themeComboBox->setCurrentIndex(idx);
     }
 
-    // Font settings are handled by effectiveMonospaceFont() which reads from
-    // settings_
-
-    // Apply dialog geometry
-    int savedWidth = settings_.value(SettingsKeys::DialogWidth, 0).toInt();
-    int savedHeight = settings_.value(SettingsKeys::DialogHeight, 0).toInt();
-    int savedX = settings_.value(SettingsKeys::DialogX, -1).toInt();
-    int savedY = settings_.value(SettingsKeys::DialogY, -1).toInt();
-    if (savedWidth > 0 && savedHeight > 0)
-    {
-        resize(savedWidth, savedHeight);
-        if (savedX >= 0 && savedY >= 0)
-        {
-            move(savedX, savedY);
-        }
-    }
-
     // Apply splitter states
     QString mainSplitterHex =
         settings_.value(SettingsKeys::MainSplitter).toString();
@@ -2943,12 +2902,12 @@ void LuaDebuggerDialog::applyDialogSettings()
     if (stackSection)
         stackSection->setExpanded(
             settings_.value(SettingsKeys::SectionStack, true).toBool());
-    if (filesSection)
-        filesSection->setExpanded(
-            settings_.value(SettingsKeys::SectionFiles, false).toBool());
     if (breakpointsSection)
         breakpointsSection->setExpanded(
             settings_.value(SettingsKeys::SectionBreakpoints, true).toBool());
+    if (filesSection)
+        filesSection->setExpanded(
+            settings_.value(SettingsKeys::SectionFiles, false).toBool());
     if (evalSection)
         evalSection->setExpanded(
             settings_.value(SettingsKeys::SectionEval, false).toBool());
@@ -2998,16 +2957,6 @@ void LuaDebuggerDialog::storeDialogSettings()
     else
         settings_[SettingsKeys::Theme] = "auto";
 
-    // Font is stored when it changes
-    // (onMonospaceFontUpdated/onMainAppInitialized) No need to store here -
-    // settings_ already has current values
-
-    // Store dialog geometry
-    settings_[SettingsKeys::DialogWidth] = width();
-    settings_[SettingsKeys::DialogHeight] = height();
-    settings_[SettingsKeys::DialogX] = x();
-    settings_[SettingsKeys::DialogY] = y();
-
     // Store splitter states as hex strings
     if (ui->mainSplitter)
     {
@@ -3025,10 +2974,10 @@ void LuaDebuggerDialog::storeDialogSettings()
         variablesSection ? variablesSection->isExpanded() : true;
     settings_[SettingsKeys::SectionStack] =
         stackSection ? stackSection->isExpanded() : true;
-    settings_[SettingsKeys::SectionFiles] =
-        filesSection ? filesSection->isExpanded() : false;
     settings_[SettingsKeys::SectionBreakpoints] =
         breakpointsSection ? breakpointsSection->isExpanded() : true;
+    settings_[SettingsKeys::SectionFiles] =
+        filesSection ? filesSection->isExpanded() : false;
     settings_[SettingsKeys::SectionEval] =
         evalSection ? evalSection->isExpanded() : false;
     settings_[SettingsKeys::SectionSettings] =
