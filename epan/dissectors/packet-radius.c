@@ -1732,7 +1732,6 @@ dissect_attribute_value_pairs(proto_tree *tree, packet_info *pinfo, tvbuff_t *tv
 							proto_tree_add_item(avp_tree, hf_radius_vsa_fragment, tvb, offset, avp_vsa_len, ENC_NA);
 							proto_item_append_text(avp_item, ": Last VSA fragment[%u]", vsa_buffer->seg_num);
 							vsa_tvb = tvb_new_child_real_data(tvb, wmem_array_get_raw(vsa_buffer->data), vsa_len, vsa_len);
-							tvb_set_free_cb(vsa_tvb, g_free);
 							add_new_data_source(pinfo, vsa_tvb, "Reassembled VSA");
 							add_avp_to_tree(avp_tree, avp_item, pinfo, vsa_tvb, dictionary_entry, vsa_len, 0, radius_call);
 							wmem_map_remove(vsa_buffer_table, &(vsa_buffer->key));

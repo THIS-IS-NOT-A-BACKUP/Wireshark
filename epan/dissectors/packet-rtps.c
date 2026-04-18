@@ -1911,7 +1911,7 @@ static expert_field ei_rtps_locator_port;
 static expert_field ei_rtps_more_samples_available;
 static expert_field ei_rtps_parameter_not_decoded;
 static expert_field ei_rtps_sm_octets_to_next_header_not_zero;
-static expert_field ei_rtps_pid_type_csonsistency_invalid_size;
+static expert_field ei_rtps_pid_type_consistency_invalid_size;
 static expert_field ei_rtps_uncompression_error;
 static expert_field ei_rtps_value_too_large;
 static expert_field ei_rtps_invalid_psk;
@@ -6576,7 +6576,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
   unsigned int  i;
   char         *indent_string;
   int           retVal;
-  char          type_name[40];
+  wmem_strbuf_t *type_name_buf = NULL;
+  char         *type_name;
 
     /* Structure of the typecode data:
      *  Offset   | Size  | Field                        | Notes
@@ -6620,8 +6621,6 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
   if (ndds_40_hack) {
     ++tk_id;
   }
-
-  (void) g_strlcpy(type_name, rtps_util_typecode_id_to_string(tk_id), sizeof(type_name));
 
     /* Structure of the typecode data:
      *
@@ -6735,7 +6734,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          snprintf(type_name, 40, "%s", struct_name);
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
 
@@ -6797,7 +6797,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
           decrement_dissection_depth(pinfo);
         }
         /* Finally prints the name of the struct (if provided) */
-        (void) g_strlcpy(type_name, "}", sizeof(type_name));
+        type_name_buf = wmem_strbuf_new(pinfo->pool, "}");
         break;
 
     } /* end of case UNION */
@@ -6894,7 +6894,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          snprintf(type_name, 40, "%s", struct_name);
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
         /* Prints it */
@@ -6970,7 +6971,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
           }
         }
         /* Finally prints the name of the struct (if provided) */
-        (void) g_strlcpy(type_name, "}", sizeof(type_name));
+        type_name_buf = wmem_strbuf_new(pinfo->pool, "}");
         break;
       }
 
@@ -6987,9 +6988,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         LONG_ALIGN(offset);
         string_length = tvb_get_uint32(tvb, offset, encoding);
         offset += 4;
-        snprintf(type_name, 40, "%s<%d>",
-                (tk_id == RTI_CDR_TK_STRING) ? "string" : "wstring",
-                string_length);
+        type_name_buf = wmem_strbuf_new(pinfo->pool, (tk_id == RTI_CDR_TK_STRING) ? "string" : "wstring");
+        wmem_strbuf_append_printf(type_name_buf, "<%u>", string_length);
         break;
     }
 
@@ -7064,7 +7064,8 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         offset += 4;
         alias_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, offset, alias_name_length, ENC_ASCII);
         offset = check_offset_addition(offset, alias_name_length, tree, NULL, tvb);
-        (void) g_strlcpy(type_name, alias_name, sizeof(type_name));
+        type_name_buf = wmem_strbuf_new_len(pinfo->pool, alias_name, 40);
+        wmem_strbuf_utf8_make_valid(type_name_buf);
         break;
     }
 
@@ -7099,10 +7100,19 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         if (tk_id == RTI_CDR_TK_VALUE_PARAM) {
           type_id_name = "valueparam";
         }
-        snprintf(type_name, sizeof(type_name), "%s '%s'", type_id_name, value_name);
+        type_name_buf = wmem_strbuf_new(pinfo->pool, type_id_name);
+        wmem_strbuf_append(type_name_buf, " '");
+        wmem_strbuf_append_len(type_name_buf, value_name, 30);
+        wmem_strbuf_utf8_make_valid(type_name_buf);
+        wmem_strbuf_append_c(type_name_buf, '\'');
         break;
     }
   } /* switch(tk_id) */
+
+  if (type_name_buf == NULL) {
+    type_name_buf = wmem_strbuf_new(pinfo->pool, rtps_util_typecode_id_to_string(tk_id));
+  }
+  type_name = wmem_strbuf_finalize(type_name_buf);
 
   /* Sequence print */
   if (seq_max_len != -1) {
@@ -10691,11 +10701,6 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
 
   switch(parameter) {
 
-  case PID_DATA_TAGS:
-      ENSURE_LENGTH(4);
-      rtps_util_add_data_tags(rtps_parameter_tree, tvb, offset, encoding, param_length);
-      break;
-
   case PID_SAMPLE_SIGNATURE:
       ENSURE_LENGTH(16);
       proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_epoch, tvb,
@@ -10958,58 +10963,6 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
       break;
     }
 
-    /* Product Version Version 5.3.1 and earlier
-    * 0...2...........7...............15.............23...............31
-    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    * | PID_TYPE_CONSISTENCY_KIND     |            length             |
-    * +---------------+---------------+---------------+---------------+
-    * | unsigned short value Kind     | = =  u n u s e d  = = = = = = |
-    * +---------------+---------------+---------------+---------------+
-    *
-    * Product Version 5.3.3 and later
-    * 0...2...........7...............15.............23...............31
-    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    * | PID_TYPE_CONSISTENCY_KIND     |            length             |
-    * +---------------+---------------+---------------+---------------+
-    * | unsigned short value Kind     | Boolean ISeqB | Boolean IStrB |
-    * +---------------+---------------+---------------+---------------+
-    * | Boolean IMemN | Boolean PTypW | Boolean FtypV | Boolean IEnLN |
-    * +---------------+---------------+---------------+---------------+
-    * ISeqB = Ignore Sequence Names
-    * IStrB = Ignore String names
-    * IMemN = Ignore Member Names
-    * PTypW = Prevent Type Widening
-    * FtypV = Force Type Validation
-    * IEnLN = Ignore Enum Literal Names
-    */
-    case PID_TYPE_CONSISTENCY: {
-      if (param_length !=4 && param_length !=8) {
-        expert_add_info_format(pinfo, rtps_parameter_tree,
-          &ei_rtps_pid_type_csonsistency_invalid_size,
-          "PID_TYPE_CONSISTENCY invalid size. It has a size of %d bytes. Expected %d or %d bytes.",
-          param_length, 4, 8);
-        break;
-      }
-      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_type_consistency_kind, tvb, offset, 2, encoding);
-      /* Parameter size can be used as a discriminator between product versions. */
-      if (param_length == 8) {
-          offset += 2;
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_sequence_bounds,
-            tvb, offset, 1, encoding);
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_string_bounds,
-            tvb, offset + 1, 1, encoding);
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_member_names,
-            tvb, offset + 2, 1, encoding);
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_prevent_type_widening,
-            tvb, offset + 3, 1, encoding);
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_force_type_validation,
-            tvb, offset + 4, 1, encoding);
-          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_enum_literal_names,
-            tvb, offset + 5, 1, encoding);
-      }
-      break;
-    }
-
     /* ==================================================================
     * Here are all the deprecated items.
     */
@@ -11106,14 +11059,13 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
 
     /* 0...2...........7...............15.............23...............31
     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    * | PID_DOMAIN_ID|PID_RTI_DOMAIN_ID|           length             |
+    * | PID_RTI_DOMAIN_ID              |            length             |
     * +---------------+---------------+---------------+---------------+
     * | long   domain_id                                              |
     * +---------------+---------------+---------------+---------------+
     */
 
-    case PID_RTI_DOMAIN_ID:
-    case PID_DOMAIN_ID: {
+    case PID_RTI_DOMAIN_ID: {
       if (is_inline_qos) { /* PID_RELATED_ORIGINAL_WRITER_INFO_LEGACY */
         ENSURE_LENGTH(16);
         rtps_util_add_guid_prefix_v2(rtps_parameter_tree, tvb, offset, hf_rtps_sm_guid_prefix,
@@ -11178,22 +11130,6 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
             hf_rtps_sm_seq_number);
       }
       break;
-    }
-
-     /* 0...2...........7...............15.............23...............31
-     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-     * | PID_DOMAIN_TAG                |            length             |
-     * +---------------+---------------+---------------+---------------+
-     * | long domain_tag.Length                                        |
-     * +---------------+---------------+---------------+---------------+
-     * | string domain_tag                                             |
-     * | ...                                                           |
-     * +---------------+---------------+---------------+---------------+
-     */
-    case PID_DOMAIN_TAG: {
-       ENSURE_LENGTH(4);
-       rtps_util_add_string(rtps_parameter_tree, tvb, offset, hf_rtps_domain_tag, encoding);
-       break;
     }
 
     case PID_EXTENDED: {
@@ -12625,6 +12561,97 @@ static bool dissect_parameter_sequence_v2(proto_tree *rtps_parameter_tree, packe
           encoding,
           param_length);
       break;
+
+    case PID_DATA_TAGS:
+      ENSURE_LENGTH(4);
+      rtps_util_add_data_tags(rtps_parameter_tree, tvb, offset, encoding, param_length);
+      break;
+
+    /* 0...2...........7...............15.............23...............31
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * | PID_TYPE_CONSISTENCY          |            length             |
+    * +---------------+---------------+---------------+---------------+
+    * | unsigned short value Kind     | Boolean ISeqB | Boolean IStrB |
+    * +---------------+---------------+---------------+---------------+
+    * | Boolean IMemN | Boolean PTypW | Boolean FtypV | Boolean IEnLN |
+    * +---------------+---------------+---------------+---------------+
+    * ISeqB = Ignore Sequence Bounds
+    * IStrB = Ignore String Bounds
+    * IMemN = Ignore Member Names
+    * PTypW = Prevent Type Widening
+    * FtypV = Force Type Validation
+    * IEnLN = Ignore Enum Literal Names
+    *
+    * When param_length is 4, only the Kind field is present.
+    */
+    case PID_TYPE_CONSISTENCY: {
+      if (param_length !=4 && param_length !=8) {
+        expert_add_info_format(pinfo, rtps_parameter_tree,
+          &ei_rtps_pid_type_consistency_invalid_size,
+          "PID_TYPE_CONSISTENCY invalid size. It has a size of %d bytes. Expected %d or %d bytes.",
+          param_length, 4, 8);
+        break;
+      }
+      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_type_consistency_kind, tvb, offset, 2, encoding);
+      if (param_length == 8) {
+          offset += 2;
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_sequence_bounds,
+            tvb, offset, 1, encoding);
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_string_bounds,
+            tvb, offset + 1, 1, encoding);
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_member_names,
+            tvb, offset + 2, 1, encoding);
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_prevent_type_widening,
+            tvb, offset + 3, 1, encoding);
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_force_type_validation,
+            tvb, offset + 4, 1, encoding);
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_ignore_enum_literal_names,
+            tvb, offset + 5, 1, encoding);
+      }
+      break;
+    }
+
+    /* 0...2...........7...............15.............23...............31
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * | PID_DOMAIN_ID                 |            length             |
+    * +---------------+---------------+---------------+---------------+
+    * | long   domain_id                                              |
+    * +---------------+---------------+---------------+---------------+
+    */
+    case PID_DOMAIN_ID: {
+      ENSURE_LENGTH(4);
+      proto_tree_add_item(rtps_parameter_tree, hf_rtps_domain_id, tvb, offset, 4, encoding);
+
+      endpoint_guid *participant_guid = (endpoint_guid*)p_get_proto_data(pinfo->pool, pinfo, proto_rtps, RTPS_TCPMAP_DOMAIN_ID_PROTODATA_KEY);
+      if (participant_guid != NULL) {
+        if (!wmem_map_contains(discovered_participants_domain_ids, participant_guid)) {
+          int domainId = tvb_get_int32(tvb, offset, encoding);
+          participant_info *p_info = (participant_info*)wmem_new(wmem_file_scope(), participant_info);
+          p_info->domainId = domainId;
+          endpoint_guid *participant_guid_copy = (endpoint_guid*)wmem_memdup(wmem_file_scope(),
+            participant_guid, sizeof(endpoint_guid));
+          wmem_map_insert(discovered_participants_domain_ids,
+            (const void*)participant_guid_copy, (void*)p_info);
+        }
+      }
+      break;
+    }
+
+    /* 0...2...........7...............15.............23...............31
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * | PID_DOMAIN_TAG                |            length             |
+    * +---------------+---------------+---------------+---------------+
+    * | long domain_tag.Length                                        |
+    * +---------------+---------------+---------------+---------------+
+    * | string domain_tag                                             |
+    * | ...                                                           |
+    * +---------------+---------------+---------------+---------------+
+    */
+    case PID_DOMAIN_TAG: {
+      ENSURE_LENGTH(4);
+      rtps_util_add_string(rtps_parameter_tree, tvb, offset, hf_rtps_domain_tag, encoding);
+      break;
+    }
 
     /* 0...2...........7...............15.............23...............31
     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -22691,7 +22718,7 @@ void proto_register_rtps(void) {
      { &ei_rtps_extra_bytes, { "rtps.extra_bytes", PI_MALFORMED, PI_ERROR, "Unhandled extra byte", EXPFILL }},
      { &ei_rtps_missing_bytes, { "rtps.missing_bytes", PI_MALFORMED, PI_ERROR, "Not enough bytes to decode", EXPFILL }},
      { &ei_rtps_more_samples_available, { "rtps.more_samples_available", PI_PROTOCOL, PI_NOTE, "More samples available. Configure this limit from preferences dialog", EXPFILL }},
-     { &ei_rtps_pid_type_csonsistency_invalid_size, { "rtps.pid_type_consistency_invalid_size", PI_MALFORMED, PI_ERROR, "PID_TYPE_CONSISTENCY invalid size", EXPFILL }},
+     { &ei_rtps_pid_type_consistency_invalid_size, { "rtps.pid_type_consistency_invalid_size", PI_MALFORMED, PI_ERROR, "PID_TYPE_CONSISTENCY invalid size", EXPFILL }},
      { &ei_rtps_uncompression_error, { "rtps.uncompression_error", PI_PROTOCOL, PI_WARN, "Unable to uncompress the compressed payload.", EXPFILL }},
      { &ei_rtps_value_too_large, { "rtps.value_too_large", PI_MALFORMED, PI_ERROR, "Length value goes past the end of the packet", EXPFILL }},
      { &ei_rtps_checksum_check_error, { "rtps.checksum_error", PI_CHECKSUM, PI_ERROR, "Error: Unexpected checksum", EXPFILL }},
