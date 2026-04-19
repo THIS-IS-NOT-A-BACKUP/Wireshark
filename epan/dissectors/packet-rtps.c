@@ -7102,7 +7102,9 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         }
         type_name_buf = wmem_strbuf_new(pinfo->pool, type_id_name);
         wmem_strbuf_append(type_name_buf, " '");
-        wmem_strbuf_append_len(type_name_buf, value_name, 30);
+        /* value_name might be longer than value_name_len (due to substitution of
+         * replacment characters) but is not shorter. */
+        wmem_strbuf_append_len(type_name_buf, value_name, MIN(value_name_len, 30U));
         wmem_strbuf_utf8_make_valid(type_name_buf);
         wmem_strbuf_append_c(type_name_buf, '\'');
         break;
