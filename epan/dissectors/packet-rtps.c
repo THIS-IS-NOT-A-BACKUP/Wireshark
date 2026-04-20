@@ -6734,7 +6734,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, MIN(strlen(struct_name), 40U));
           wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
@@ -6894,7 +6894,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
 
         if (seq_max_len != -1) {
           /* We're dissecting a sequence of struct, bypass the seq definition */
-          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, 40);
+          type_name_buf = wmem_strbuf_new_len(pinfo->pool, struct_name, MIN(strlen(struct_name), 40U));
           wmem_strbuf_utf8_make_valid(type_name_buf);
           break;
         }
@@ -7064,7 +7064,7 @@ static int rtps_util_add_typecode(proto_tree *tree, tvbuff_t *tvb, packet_info *
         offset += 4;
         alias_name = (char*)tvb_get_string_enc(pinfo->pool, tvb, offset, alias_name_length, ENC_ASCII);
         offset = check_offset_addition(offset, alias_name_length, tree, NULL, tvb);
-        type_name_buf = wmem_strbuf_new_len(pinfo->pool, alias_name, 40);
+        type_name_buf = wmem_strbuf_new_len(pinfo->pool, alias_name, MIN(strlen(alias_name), 40U));
         wmem_strbuf_utf8_make_valid(type_name_buf);
         break;
     }
@@ -14021,6 +14021,7 @@ static void dissect_APP_ACK(tvbuff_t *tvb,
     &wid);
   offset += 4;
   guid->entity_id = wid;
+  guid->fields_present |= GUID_HAS_ENTITY_ID;
   rtps_util_add_topic_info(tree, pinfo, tvb, offset, guid);
 
   /* writerEntityId */
