@@ -4429,10 +4429,10 @@ sharkd_session_process_add_data_source(struct data_source *src, bool add_descrip
         {
             sharkd_json_value_base64("bytes", (const uint8_t*)"", 0);
         }
-    } CATCH(DissectorError) {
+    } CATCH_BOUNDS_AND_DISSECTOR_ERRORS {
         /* tvb_captured_length can throw DissectorError. With an
          * offset of 0 and a length of the captured length, tvb_get_ptr
-         * can throw DissectorError but not other exceptions. We have
+         * can throw DissectorError or various bounds errors. We have
          * to catch it so that the JSON is valid. */
         sharkd_json_value_base64("bytes", (const uint8_t*)"", 0);
     } CATCH_ALL {

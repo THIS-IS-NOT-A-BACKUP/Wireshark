@@ -304,6 +304,24 @@ WS_DLL_PUBLIC bool ws_buftou64(const uint8_t* buf, size_t len, const uint8_t** e
  */
 WS_DLL_PUBLIC bool ws_hexbuftou64(const uint8_t* buf, size_t len, const uint8_t** endptr, uint64_t* cint);
 
+WS_DLL_PUBLIC bool ws_basebuftou32(const uint8_t* buf, size_t len, const uint8_t** endptr, uint32_t* cint, int base);
+
+WS_DLL_PUBLIC bool ws_buftou32(const uint8_t* buf, size_t len, const uint8_t** endptr, uint32_t* cint);
+
+WS_DLL_PUBLIC bool ws_hexbuftou32(const uint8_t* buf, size_t len, const uint8_t** endptr, uint32_t* cint);
+
+WS_DLL_PUBLIC bool ws_basebuftou16(const uint8_t* buf, size_t len, const uint8_t** endptr, uint16_t* cint, int base);
+
+WS_DLL_PUBLIC bool ws_buftou16(const uint8_t* buf, size_t len, const uint8_t** endptr, uint16_t* cint);
+
+WS_DLL_PUBLIC bool ws_hexbuftou16(const uint8_t* buf, size_t len, const uint8_t** endptr, uint16_t* cint);
+
+WS_DLL_PUBLIC bool ws_basebuftou8(const uint8_t* buf, size_t len, const uint8_t** endptr, uint8_t* cint, int base);
+
+WS_DLL_PUBLIC bool ws_buftou8(const uint8_t* buf, size_t len, const uint8_t** endptr, uint8_t* cint);
+
+WS_DLL_PUBLIC bool ws_hexbuftou8(const uint8_t* buf, size_t len, const uint8_t** endptr, uint8_t* cint);
+
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */

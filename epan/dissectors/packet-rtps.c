@@ -667,6 +667,7 @@ static dissector_table_t rtps_type_name_table;
 #define PID_ENDPOINT_SECURITY_SYMMETRIC_CIPHER_ALGO         (0x1013)
 
 #define PID_TYPE_OBJECT_LB                      (0x8021)
+#define PID_CHECKSUM_PROPERTY                   (0x9000)
 
 /* Vendor-specific: ADLink */
 #define PID_ADLINK_WRITER_INFO                  (0x8001)
@@ -1321,6 +1322,9 @@ static int hf_rtps_param_sample_signature_epoch;
 static int hf_rtps_param_sample_signature_nonce;
 static int hf_rtps_param_sample_signature_length;
 static int hf_rtps_param_sample_signature_signature;
+static int hf_rtps_param_checksum_computed_crc_kind;
+static int hf_rtps_param_checksum_allowed_crc_mask;
+static int hf_rtps_param_checksum_require_crc;
 static int hf_rtps_secure_secure_data_length;
 static int hf_rtps_secure_secure_data;
 static int hf_rtps_param_enable_authentication;
@@ -2245,6 +2249,16 @@ static const value_string parameter_id_inline_qos_rti[] = {
   { PID_SOURCE_GUID,                    "PID_SOURCE_GUID" },
   { PID_TOPIC_QUERY_GUID,               "PID_TOPIC_QUERY_GUID" },
   { PID_SAMPLE_SIGNATURE,               "PID_SAMPLE_SIGNATURE" },
+  { PID_CHECKSUM_PROPERTY,              "PID_CHECKSUM_PROPERTY" },
+  { 0, NULL }
+};
+
+static const value_string checksum_kind_vals[] = {
+  { 0x0000, "NONE" },
+  { 0x0001, "BUILTIN32 (CRC-32)" },
+  { 0x0002, "BUILTIN64 (CRC-64)" },
+  { 0x0004, "BUILTIN128" },
+  { 0xffff, "AUTO" },
   { 0, NULL }
 };
 
@@ -2381,6 +2395,7 @@ static const value_string parameter_id_rti_vals[] = {
   { PID_UNICAST_LOCATOR_EX,             "PID_UNICAST_LOCATOR_EX"},
   { PID_TOPIC_NAME_ALIASES,             "PID_TOPIC_NAME_ALIASES" },
   { PID_TYPE_NAME_ALIASES,              "PID_TYPE_NAME_ALIASES" },
+  { PID_CHECKSUM_PROPERTY,              "PID_CHECKSUM_PROPERTY" },
   { 0, NULL }
 };
 static const value_string parameter_id_toc_vals[] = {
@@ -10703,16 +10718,34 @@ static bool dissect_parameter_sequence_rti_dds(proto_tree *rtps_parameter_tree, 
 
   switch(parameter) {
 
-  case PID_SAMPLE_SIGNATURE:
+  case PID_SAMPLE_SIGNATURE: {
+      uint32_t signature_length;
       ENSURE_LENGTH(16);
       proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_epoch, tvb,
                   offset, 8, encoding);
       proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_nonce, tvb,
                   offset+8, 4, encoding);
-      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_length, tvb,
-                  offset+12, 4, encoding);
-      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_signature, tvb,
-                  offset+16, param_length-16, ENC_NA);
+      proto_tree_add_item_ret_uint(rtps_parameter_tree, hf_rtps_param_sample_signature_length, tvb,
+                  offset+12, 4, encoding, &signature_length);
+      if (signature_length > 0) {
+          proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_sample_signature_signature, tvb,
+                      offset+16, signature_length, ENC_NA);
+      }
+      break;
+  }
+
+    /* PID_CHECKSUM_PROPERTY: currently sent by RTI Connext Micro (vendor
+     * 01.10) in SPDP DATA(p) to advertise checksum negotiation properties.
+     * Handled in the common RTI case block so it will also work if Connext
+     * Pro adopts the same PID in the future. */
+    case PID_CHECKSUM_PROPERTY:
+      ENSURE_LENGTH(8);
+      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_checksum_computed_crc_kind, tvb,
+            offset, 2, encoding);
+      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_checksum_allowed_crc_mask, tvb,
+            offset+2, 2, encoding);
+      proto_tree_add_item(rtps_parameter_tree, hf_rtps_param_checksum_require_crc, tvb,
+            offset+4, 4, encoding);
       break;
 
     case PID_ENABLE_AUTHENTICATION:
@@ -15260,7 +15293,8 @@ static void dissect_ACKNACK(tvbuff_t *tvb, packet_info *pinfo, int offset, uint8
 /* *                          N A C K _ F R A G                          * */
 /* *********************************************************************** */
 static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uint8_t flags,
-                              const unsigned encoding, int octets_to_next_header, proto_tree *tree) {
+                              const unsigned encoding, int octets_to_next_header, proto_tree *tree,
+                              endpoint_guid *guid) {
   /*
    * 0...2...........7...............15.............23...............31
    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -15282,6 +15316,7 @@ static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uin
    * +---------------+---------------+---------------+---------------+
    */
   proto_item *octet_item;
+  uint32_t wid;
 
   proto_tree_add_bitmask_value(tree, tvb, offset + 1, hf_rtps_sm_flags, ett_rtps_flags, NACK_FRAG_FLAGS, flags);
 
@@ -15302,8 +15337,11 @@ static void dissect_NACK_FRAG(tvbuff_t *tvb, packet_info *pinfo, int offset, uin
 
   /* writerEntityId */
   rtps_util_add_entity_id(tree, pinfo, tvb, offset, hf_rtps_sm_wrentity_id, hf_rtps_sm_wrentity_id_key,
-                        hf_rtps_sm_wrentity_id_kind, ett_rtps_wrentity, "writerEntityId", NULL);
+                        hf_rtps_sm_wrentity_id_kind, ett_rtps_wrentity, "writerEntityId", &wid);
   offset += 4;
+  guid->entity_id = wid;
+  guid->fields_present |= GUID_HAS_ENTITY_ID;
+  rtps_util_add_topic_info(tree, pinfo, tvb, offset, guid);
 
   /* Writer sequence number */
   rtps_util_add_seq_number(tree, tvb, offset, encoding, "writerSN",
@@ -17948,7 +17986,7 @@ static bool dissect_rtps_submessage_v2(
       break;
 
     case SUBMESSAGE_NACK_FRAG:
-      dissect_NACK_FRAG(tvb, pinfo, offset, flags, encoding, octets_to_next_header, rtps_submessage_tree);
+      dissect_NACK_FRAG(tvb, pinfo, offset, flags, encoding, octets_to_next_header, rtps_submessage_tree, guid);
       break;
 
     case SUBMESSAGE_ACKNACK_SESSION:
@@ -21100,7 +21138,7 @@ void proto_register_rtps(void) {
         FT_BOOLEAN, 8, TFS(&tfs_set_notset), 0x02, NULL, HFILL }
     },
     { &hf_rtps_flag_disposed, {
-        "Disposed", "rtps.flag.undisposed",
+        "Disposed", "rtps.flag.disposed",
         FT_BOOLEAN, 8, TFS(&tfs_set_notset), 0x01, NULL, HFILL }
     },
     { &hf_rtps_flag_participant_announcer, {
@@ -22105,6 +22143,18 @@ void proto_register_rtps(void) {
     { &hf_rtps_param_sample_signature_signature,
       { "Signature", "rtps.sample_signature.signature",
         FT_BYTES, BASE_NONE, NULL, 0, NULL, HFILL }
+    },
+    { &hf_rtps_param_checksum_computed_crc_kind, {
+        "Computed CRC Kind", "rtps.checksum_property.computed_crc_kind",
+        FT_UINT16, BASE_HEX, VALS(checksum_kind_vals), 0, NULL, HFILL }
+    },
+    { &hf_rtps_param_checksum_allowed_crc_mask, {
+        "Allowed CRC Mask", "rtps.checksum_property.allowed_crc_mask",
+        FT_UINT16, BASE_HEX, NULL, 0, NULL, HFILL }
+    },
+    { &hf_rtps_param_checksum_require_crc, {
+        "Require CRC", "rtps.checksum_property.require_crc",
+        FT_BOOLEAN, 32, TFS(&tfs_set_notset), 0x01, NULL, HFILL }
     },
     { &hf_rtps_secure_dataheader_transformation_kind, {
         "Transformation Kind", "rtps.secure.data_header.transformation_kind",

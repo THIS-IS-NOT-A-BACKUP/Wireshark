@@ -448,6 +448,51 @@ bool ws_hexbuftou64(const uint8_t* buf, size_t len, const uint8_t** endptr, uint
 	return ws_basebuftou64(buf, len, endptr, cint, 16);
 }
 
+#define DEFINE_WS_BUFTOU_BITS(bits) \
+bool ws_basebuftou##bits(const uint8_t* buf, size_t len, const uint8_t** endptr, uint##bits##_t* cint, int base) \
+{ \
+	uint64_t val; \
+	if (!ws_basebuftou64(buf, len, endptr, &val, base)) { \
+		/* \
+		 * For ERANGE, return UINT##bits##_MAX for parallelism \
+		 * with ws_strtoi##bits(). \
+		 * \
+		 * For other errors, return 0, for parallelism \
+		 * with ws_basestrtou64(). \
+		 */ \
+		if (errno == ERANGE) \
+			*cint = UINT##bits##_MAX; \
+		else \
+			*cint = 0; \
+		return false; \
+	} \
+	if (val > UINT##bits##_MAX) { \
+		/* \
+		 * Return UINT##bits##_MAX for parallelism with \
+		 * ws_strtoi##bits(). \
+		 */ \
+		*cint = UINT##bits##_MAX; \
+		errno = ERANGE; \
+		return false; \
+	} \
+	*cint = (uint##bits##_t)val; \
+	return true; \
+} \
+\
+bool ws_buftou##bits(const uint8_t* buf, size_t len, const uint8_t** endptr, uint##bits##_t* cint) \
+{ \
+	return ws_basebuftou##bits(buf, len, endptr, cint, 10); \
+} \
+\
+bool ws_hexbuftou##bits(const uint8_t* buf, size_t len, const uint8_t** endptr, uint##bits##_t* cint) \
+{ \
+	return ws_basebuftou##bits(buf, len, endptr, cint, 16); \
+}
+
+DEFINE_WS_BUFTOU_BITS(32)
+DEFINE_WS_BUFTOU_BITS(16)
+DEFINE_WS_BUFTOU_BITS(8)
+
 /*
  * Editor modelines  -  https://www.wireshark.org/tools/modelines.html
  *

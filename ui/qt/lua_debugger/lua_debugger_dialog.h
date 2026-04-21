@@ -144,6 +144,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onCodeViewContextMenu(const QPoint &pos);
     /** @brief Populate child variable nodes when a tree item expands. */
     void onVariableItemExpanded(QTreeWidgetItem *item);
+    /** @brief Update the Variables expansion map when a row collapses. */
+    void onVariableItemCollapsed(QTreeWidgetItem *item);
     /** @brief Populate watch child rows when a watch item expands. */
     void onWatchItemExpanded(QTreeWidgetItem *item);
     /** @brief Update the in-memory expansion map when a watch row collapses. */
@@ -458,6 +460,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void refreshWatchBranch(QTreeWidgetItem *item);
     /** @brief Re-expand persisted subpaths after loading settings or refresh. */
     void restoreWatchExpansionState();
+    /** @brief Re-expand Variables sections from the runtime expansion map. */
+    void restoreVariablesExpansionState();
 
     /** @brief Delete the given top-level watch rows from the tree. */
     void deleteWatchRows(const QList<QTreeWidgetItem *> &items);
@@ -472,25 +476,37 @@ class LuaDebuggerDialog : public GeometryStateDialog
     bool syncWatchVariablesSelection_ = false;
 
     /**
-     * @brief Runtime-only expansion state for watch rows.
+     * @brief Runtime-only expansion state for one tree root (watch row or
+     * Variables Locals/Globals/Upvalues section).
      *
-     * Tracks which watch roots are expanded and which of their descendants
-     * (keyed by the same subpath / variable-path used by
-     * `findWatchItemBySubpathOrPathKey`) are expanded. Updated on every
-     * QTreeWidget::itemExpanded / itemCollapsed signal so the state
-     * survives child-item destruction during pause → resume → pause cycles,
-     * lazy refills, and Variables tree refreshes.
+     * Tracks which roots are expanded and which descendant path keys are
+     * expanded. Updated on every QTreeWidget::itemExpanded / itemCollapsed
+     * signal so the state survives child-item destruction during pause →
+     * resume → pause cycles, lazy refills, and tree refreshes.
      *
-     * This object is **not** persisted to `lua_debugger.json`: the on-disk
-     * file only stores the flat list of watch spec strings (see
-     * `storeWatchList`).
+     * **Not** persisted to `lua_debugger.json`.
      */
-    struct WatchExpansion
+    struct TreeSectionExpansionState
     {
         bool rootExpanded = false;
         QStringList subpaths;
     };
-    QHash<QString, WatchExpansion> watchExpansion_;
+    QHash<QString, TreeSectionExpansionState> watchExpansion_;
+    /**
+     * @brief Runtime-only expansion for Variables top-level sections
+     * (`Locals`, `Globals`, `Upvalues`). Same lifecycle as `watchExpansion_`.
+     */
+    QHash<QString, TreeSectionExpansionState> variablesExpansion_;
+
+    void recordTreeSectionRootExpansion(
+        QHash<QString, TreeSectionExpansionState> &map, const QString &rootKey,
+        bool expanded);
+    void recordTreeSectionSubpathExpansion(
+        QHash<QString, TreeSectionExpansionState> &map, const QString &rootKey,
+        const QString &key, bool expanded);
+    QStringList treeSectionExpandedSubpaths(
+        const QHash<QString, TreeSectionExpansionState> &map,
+        const QString &rootKey) const;
 
     /** @brief Merge one root's expansion state into `watchExpansion_`. */
     void recordWatchRootExpansion(const QString &rootSpec, bool expanded);

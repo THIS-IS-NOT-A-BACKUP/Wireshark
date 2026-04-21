@@ -49,7 +49,6 @@
 #include <QLineEdit>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSet>
 #include <QKeySequence>
 #include <QList>
 #include <QMenu>
@@ -170,11 +169,10 @@ constexpr qint32 WatchSubpathRole = static_cast<qint32>(Qt::UserRole + 13);
 constexpr qint32 WatchLastValueRole = static_cast<qint32>(Qt::UserRole + 14);
 constexpr qint32 WatchPendingNewRole = static_cast<qint32>(Qt::UserRole + 15);
 /*
- * Expansion state for watch roots and their descendants is tracked in
- * LuaDebuggerDialog::watchExpansion_ (a runtime-only QHash keyed by root
- * spec). The old per-item WatchSavedExpandPathsRole / WatchSavedRootExpandedRole
- * have been removed — the dialog member is the single source of truth and
- * survives child-item destruction during pause / resume / step.
+ * Expansion state for watch roots and Variables sections is tracked in
+ * LuaDebuggerDialog::watchExpansion_ and variablesExpansion_ (runtime-only
+ * QHashes). The dialog members are the single source of truth and survive
+ * child-item destruction during pause / resume / step.
  */
 /** Per-root map path/subpath key → last raw value string (child bold-on-change). */
 constexpr qint32 WatchChildSnapRole =
@@ -280,6 +278,21 @@ static QTreeWidgetItem *watchRootItem(QTreeWidgetItem *item)
         item = item->parent();
     }
     return item;
+}
+
+/** Top-level Variables section key (`Locals` / `Globals` / `Upvalues`). */
+static QString variableSectionRootKeyFromItem(const QTreeWidgetItem *item)
+{
+    if (!item)
+    {
+        return QString();
+    }
+    const QTreeWidgetItem *walk = item;
+    while (walk->parent())
+    {
+        walk = walk->parent();
+    }
+    return walk->data(0, VariablePathRole).toString();
 }
 
 static bool watchSpecUsesPathResolution(const QString &spec)
@@ -587,31 +600,51 @@ static QTreeWidgetItem *findWatchItemBySubpathOrPathKey(QTreeWidgetItem *subtree
     return nullptr;
 }
 
-/**
- * Re-expand @a subtree's descendants whose subpath or variable-path key
- * matches one of @a pathKeys. Ancestors are expanded first so that Qt's
- * lazy `onWatchItemExpanded` has populated each level before we descend.
- *
- * This is the shared core used both when reloading saved expansion state
- * (restoreWatchExpansionState) and when refreshing a live paused subtree
- * (refreshWatchBranch) — in the latter, descendants are lost because
- * refillWatchChildren replaces them, so we need to rebuild the expansion
- * chain by path key.
- *
- * Keys are processed shallow-first (by path-boundary count) so that each
- * ancestor is expanded — and lazily filled via @ref onWatchItemExpanded —
- * before any deeper descendant is looked up. The per-key ancestor chain
- * is still walked so that callers can hand us deep-only keys whose
- * intermediate ancestors are not in @a pathKeys: chain entries that sit
- * *above* @a subtree (e.g. `Locals` when the watch root's variable path
- * is `Locals.foo`) simply do not resolve to a tree item and are skipped,
- * rather than aborting the walk; the same skip handles structural gaps
- * such as a field that disappeared between pauses.
- */
-static void reexpandWatchDescendantsByPathKeys(QTreeWidgetItem *subtree,
-                                               QStringList pathKeys)
+/** Variables tree: match @a key against VariablePathRole only. */
+static QTreeWidgetItem *findVariableTreeItemByPathKey(QTreeWidgetItem *subtree,
+                                                      const QString &key)
 {
-    if (!subtree || pathKeys.isEmpty())
+    if (!subtree || key.isEmpty())
+    {
+        return nullptr;
+    }
+    QList<QTreeWidgetItem *> queue;
+    queue.append(subtree);
+    while (!queue.isEmpty())
+    {
+        QTreeWidgetItem *it = queue.takeFirst();
+        if (it->data(0, VariablePathRole).toString() == key)
+        {
+            return it;
+        }
+        for (int i = 0; i < it->childCount(); ++i)
+        {
+            queue.append(it->child(i));
+        }
+    }
+    return nullptr;
+}
+
+using TreePathKeyFinder = QTreeWidgetItem *(*)(QTreeWidgetItem *,
+                                                const QString &);
+
+/**
+ * Re-expand @a subtree's descendants whose path key matches one of @a pathKeys.
+ * Ancestors are expanded first so that Qt's lazy expand handlers populate each
+ * level before we descend.
+ *
+ * Shared by Watch (`findWatchItemBySubpathOrPathKey`, `onWatchItemExpanded`)
+ * and Variables (`findVariableTreeItemByPathKey`, `onVariableItemExpanded`).
+ *
+ * Keys are processed shallow-first (by path-boundary count). The per-key
+ * ancestor chain handles deep-only keys whose intermediate ancestors are not
+ * in @a pathKeys; missing items are skipped (structural gaps between pauses).
+ */
+static void reexpandTreeDescendantsByPathKeys(QTreeWidgetItem *subtree,
+                                             QStringList pathKeys,
+                                             TreePathKeyFinder findByKey)
+{
+    if (!subtree || pathKeys.isEmpty() || !findByKey)
     {
         return;
     }
@@ -636,7 +669,7 @@ static void reexpandWatchDescendantsByPathKeys(QTreeWidgetItem *subtree,
         }
         for (const QString &k : chain)
         {
-            QTreeWidgetItem *n = findWatchItemBySubpathOrPathKey(subtree, k);
+            QTreeWidgetItem *n = findByKey(subtree, k);
             if (!n)
             {
                 continue;
@@ -647,6 +680,13 @@ static void reexpandWatchDescendantsByPathKeys(QTreeWidgetItem *subtree,
             }
         }
     }
+}
+
+static void reexpandWatchDescendantsByPathKeys(QTreeWidgetItem *subtree,
+                                               QStringList pathKeys)
+{
+    reexpandTreeDescendantsByPathKeys(subtree, std::move(pathKeys),
+                                       findWatchItemBySubpathOrPathKey);
 }
 
 static void clearWatchFilterErrorChrome(QTreeWidgetItem *item, QTreeWidget *tree)
@@ -1078,6 +1118,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     // Variables
     connect(variablesTree, &QTreeWidget::itemExpanded, this,
             &LuaDebuggerDialog::onVariableItemExpanded);
+    connect(variablesTree, &QTreeWidget::itemCollapsed, this,
+            &LuaDebuggerDialog::onVariableItemCollapsed);
     variablesTree->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(variablesTree, &QTreeWidget::customContextMenuRequested, this,
             &LuaDebuggerDialog::onVariablesContextMenuRequested);
@@ -1454,6 +1496,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     updateStack();
     variablesTree->clear();
     updateVariables(nullptr, QString());
+    restoreVariablesExpansionState();
     refreshWatchDisplay();
 
     /*
@@ -1976,6 +2019,7 @@ void LuaDebuggerDialog::refreshVariablesForCurrentStackFrame()
     }
     variablesTree->clear();
     updateVariables(nullptr, QString());
+    restoreVariablesExpansionState();
     refreshWatchDisplay();
 }
 
@@ -2046,22 +2090,6 @@ void LuaDebuggerDialog::updateVariables(QTreeWidgetItem *parent,
 
             applyVariableExpansionIndicator(item, f.canExpand,
                                             /*enabledOnlyPlaceholder=*/false);
-
-            if (!parent && f.name == QLatin1String("Locals"))
-            {
-                item->setExpanded(true);
-                /* Expand Locals inline to avoid recursion warning.
-                 * This duplicates onVariableItemExpanded logic but breaks
-                 * the static call chain that clang-tidy flags. */
-                if (item->childCount() == 1 &&
-                    item->child(0)->text(0).isEmpty())
-                {
-                    delete item->takeChild(0);
-                    QString localPath =
-                        item->data(0, VariablePathRole).toString();
-                    updateVariables(item, localPath);
-                }
-            }
         }
         // Sort Globals alphabetically; preserve declaration order for
         // Locals and Upvalues since that is more natural for debugging.
@@ -2083,6 +2111,22 @@ void LuaDebuggerDialog::updateVariables(QTreeWidgetItem *parent,
 
 void LuaDebuggerDialog::onVariableItemExpanded(QTreeWidgetItem *item)
 {
+    if (!item)
+    {
+        return;
+    }
+    const QString section = variableSectionRootKeyFromItem(item);
+    if (!item->parent())
+    {
+        recordTreeSectionRootExpansion(variablesExpansion_, section, true);
+    }
+    else
+    {
+        const QString key = item->data(0, VariablePathRole).toString();
+        recordTreeSectionSubpathExpansion(variablesExpansion_, section, key,
+                                          true);
+    }
+
     if (item->childCount() == 1 && item->child(0)->text(0).isEmpty())
     {
         // Remove dummy
@@ -2090,6 +2134,25 @@ void LuaDebuggerDialog::onVariableItemExpanded(QTreeWidgetItem *item)
 
         QString path = item->data(0, VariablePathRole).toString();
         updateVariables(item, path);
+    }
+}
+
+void LuaDebuggerDialog::onVariableItemCollapsed(QTreeWidgetItem *item)
+{
+    if (!item)
+    {
+        return;
+    }
+    const QString section = variableSectionRootKeyFromItem(item);
+    if (!item->parent())
+    {
+        recordTreeSectionRootExpansion(variablesExpansion_, section, false);
+    }
+    else
+    {
+        const QString key = item->data(0, VariablePathRole).toString();
+        recordTreeSectionSubpathExpansion(variablesExpansion_, section, key,
+                                          false);
     }
 }
 
@@ -3620,6 +3683,7 @@ void LuaDebuggerDialog::onEvaluate()
     updateStack();
     variablesTree->clear();
     updateVariables(nullptr, QString());
+    restoreVariablesExpansionState();
     refreshAvailableScripts();
     refreshWatchDisplay();
 }
@@ -4266,36 +4330,37 @@ static QString watchItemExpansionKey(const QTreeWidgetItem *item)
 }
 } // namespace
 
-void LuaDebuggerDialog::recordWatchRootExpansion(const QString &rootSpec,
-                                                 bool expanded)
+void LuaDebuggerDialog::recordTreeSectionRootExpansion(
+    QHash<QString, TreeSectionExpansionState> &map, const QString &rootKey,
+    bool expanded)
 {
-    if (rootSpec.isEmpty())
+    if (rootKey.isEmpty())
     {
         return;
     }
-    if (!expanded && !watchExpansion_.contains(rootSpec))
+    if (!expanded && !map.contains(rootKey))
     {
         return;
     }
-    WatchExpansion &e = watchExpansion_[rootSpec];
+    TreeSectionExpansionState &e = map[rootKey];
     e.rootExpanded = expanded;
     if (!expanded && e.subpaths.isEmpty())
     {
-        watchExpansion_.remove(rootSpec);
+        map.remove(rootKey);
     }
 }
 
-void LuaDebuggerDialog::recordWatchSubpathExpansion(const QString &rootSpec,
-                                                    const QString &key,
-                                                    bool expanded)
+void LuaDebuggerDialog::recordTreeSectionSubpathExpansion(
+    QHash<QString, TreeSectionExpansionState> &map, const QString &rootKey,
+    const QString &key, bool expanded)
 {
-    if (rootSpec.isEmpty() || key.isEmpty())
+    if (rootKey.isEmpty() || key.isEmpty())
     {
         return;
     }
     if (expanded)
     {
-        WatchExpansion &e = watchExpansion_[rootSpec];
+        TreeSectionExpansionState &e = map[rootKey];
         if (!e.subpaths.contains(key))
         {
             e.subpaths.append(key);
@@ -4303,32 +4368,52 @@ void LuaDebuggerDialog::recordWatchSubpathExpansion(const QString &rootSpec,
     }
     else
     {
-        auto it = watchExpansion_.find(rootSpec);
-        if (it == watchExpansion_.end())
+        auto it = map.find(rootKey);
+        if (it == map.end())
         {
             return;
         }
         it->subpaths.removeAll(key);
         if (!it->rootExpanded && it->subpaths.isEmpty())
         {
-            watchExpansion_.erase(it);
+            map.erase(it);
         }
     }
+}
+
+QStringList LuaDebuggerDialog::treeSectionExpandedSubpaths(
+    const QHash<QString, TreeSectionExpansionState> &map,
+    const QString &rootKey) const
+{
+    if (rootKey.isEmpty())
+    {
+        return QStringList();
+    }
+    const auto it = map.constFind(rootKey);
+    if (it == map.constEnd())
+    {
+        return QStringList();
+    }
+    return it->subpaths;
+}
+
+void LuaDebuggerDialog::recordWatchRootExpansion(const QString &rootSpec,
+                                                 bool expanded)
+{
+    recordTreeSectionRootExpansion(watchExpansion_, rootSpec, expanded);
+}
+
+void LuaDebuggerDialog::recordWatchSubpathExpansion(const QString &rootSpec,
+                                                    const QString &key,
+                                                    bool expanded)
+{
+    recordTreeSectionSubpathExpansion(watchExpansion_, rootSpec, key, expanded);
 }
 
 QStringList
 LuaDebuggerDialog::watchExpandedSubpathsForSpec(const QString &rootSpec) const
 {
-    if (rootSpec.isEmpty())
-    {
-        return QStringList();
-    }
-    const auto it = watchExpansion_.constFind(rootSpec);
-    if (it == watchExpansion_.constEnd())
-    {
-        return QStringList();
-    }
-    return it->subpaths;
+    return treeSectionExpandedSubpaths(watchExpansion_, rootSpec);
 }
 
 void LuaDebuggerDialog::pruneWatchExpansionMap()
@@ -4768,14 +4853,70 @@ void LuaDebuggerDialog::restoreWatchExpansionState()
     {
         return;
     }
-    /* Re-apply each root's descendant expansion from the runtime map. After a
-     * fresh load from lua_debugger.json the map is empty (rows open collapsed). */
+    /* Re-apply each root's expansion from the runtime map. After a fresh load
+     * from lua_debugger.json the map is empty (rows open collapsed). */
     for (int i = 0; i < watchTree->topLevelItemCount(); ++i)
     {
         QTreeWidgetItem *root = watchTree->topLevelItem(i);
         const QString spec = root->data(0, WatchSpecRole).toString();
-        reexpandWatchDescendantsByPathKeys(
-            root, watchExpandedSubpathsForSpec(spec));
+        bool rootExpanded = false;
+        QStringList subpaths;
+        const auto it = watchExpansion_.constFind(spec);
+        if (it != watchExpansion_.cend())
+        {
+            rootExpanded = it->rootExpanded;
+            subpaths = it->subpaths;
+        }
+        if (rootExpanded != root->isExpanded())
+        {
+            root->setExpanded(rootExpanded);
+        }
+        if (rootExpanded)
+        {
+            reexpandTreeDescendantsByPathKeys(root, subpaths,
+                                               findWatchItemBySubpathOrPathKey);
+        }
+    }
+}
+
+void LuaDebuggerDialog::restoreVariablesExpansionState()
+{
+    if (!variablesTree)
+    {
+        return;
+    }
+    for (int i = 0; i < variablesTree->topLevelItemCount(); ++i)
+    {
+        QTreeWidgetItem *root = variablesTree->topLevelItem(i);
+        const QString section = root->data(0, VariablePathRole).toString();
+        if (section.isEmpty())
+        {
+            continue;
+        }
+        bool rootExpanded = false;
+        QStringList subpaths;
+        const auto it = variablesExpansion_.constFind(section);
+        if (it == variablesExpansion_.cend())
+        {
+            if (section == QLatin1String("Locals"))
+            {
+                rootExpanded = true;
+            }
+        }
+        else
+        {
+            rootExpanded = it->rootExpanded;
+            subpaths = it->subpaths;
+        }
+        if (rootExpanded != root->isExpanded())
+        {
+            root->setExpanded(rootExpanded);
+        }
+        if (rootExpanded)
+        {
+            reexpandTreeDescendantsByPathKeys(root, subpaths,
+                                               findVariableTreeItemByPathKey);
+        }
     }
 }
 
