@@ -3376,6 +3376,7 @@ static wmem_map_t *discovered_participants_domain_ids;
 
 typedef struct {
   type_mapping instance_state_data_response_type_mapping;
+  type_mapping service_request_type_mapping;
 } builtin_types_type_mappings;
 
 typedef struct  {
@@ -3401,6 +3402,12 @@ typedef struct {
 } builtin_types_dissection_data_t;
 
 static builtin_types_dissection_data_t builtin_types_dissection_data;
+
+/* Returns true if the type_mapping was registered as a builtin type
+ * (i.e., its topic information comes from code, not from discovery). */
+#define RTPS_IS_BUILTIN_TYPE_MAPPING(mapping_ptr) \
+    ((mapping_ptr) == &builtin_types_dissection_data.type_mappings.instance_state_data_response_type_mapping \
+  || (mapping_ptr) == &builtin_types_dissection_data.type_mappings.service_request_type_mapping)
 
 /*
 static type_mapping instance_state_data_response_type_mapping;
@@ -10217,6 +10224,9 @@ static type_mapping * rtps_util_get_topic_info(endpoint_guid * guid) {
     if (entity_id_low == ENTITYID_NORMAL_META_GROUP_READER || entity_id_low == ENTITYID_NORMAL_META_GROUP_WRITER) {
       result = &builtin_types_dissection_data.type_mappings.instance_state_data_response_type_mapping;
     }
+    else if (guid->entity_id == ENTITYID_RTI_BUILTIN_SERVICE_REQUEST_WRITER || guid->entity_id == ENTITYID_RTI_BUILTIN_SERVICE_REQUEST_READER) {
+      result = &builtin_types_dissection_data.type_mappings.service_request_type_mapping;
+    }
     else if (guid->fields_present == GUID_HAS_ALL)
       result = (type_mapping *)wmem_map_lookup(registry, guid);
   }
@@ -10248,7 +10258,7 @@ static const char* rtps_util_add_topic_info(proto_tree *tree, packet_info* pinfo
     bool is_builtin_type = false;
     type_mapping * type_mapping_object = rtps_util_get_topic_info(guid);
     /* If it is a builtin type mapping then the information is not taken from discovery data */
-    is_builtin_type = (type_mapping_object == &builtin_types_dissection_data.type_mappings.instance_state_data_response_type_mapping);
+    is_builtin_type = RTPS_IS_BUILTIN_TYPE_MAPPING(type_mapping_object);
     if (type_mapping_object != NULL) {
       const char* topic_information_text = (!is_builtin_type) ?
         "[Topic Information (from Discovery)]" :
@@ -10429,7 +10439,7 @@ static bool rtps_util_try_dissector(proto_tree *tree,
       tvbuff_t *next_tvb;
       dissection_info* info = NULL;
 
-      bool is_builtin_type = (type_mapping_object == &builtin_types_dissection_data.type_mappings.instance_state_data_response_type_mapping);
+      bool is_builtin_type = RTPS_IS_BUILTIN_TYPE_MAPPING(type_mapping_object);
       if (try_dissection_from_type_object && (enable_user_data_dissection || is_builtin_type)) {
           info = lookup_dissection_info_in_custom_and_builtin_types(type_mapping_object->type_id);
         if (info != NULL) {
@@ -18781,6 +18791,12 @@ static void initialize_instance_state_data_response_dissection_info(builtin_type
   _builtin_types_dissection_data->type_mappings.instance_state_data_response_type_mapping.fields_visited = TOPIC_INFO_ALL_SET;
   (void) g_strlcpy(_builtin_types_dissection_data->type_mappings.instance_state_data_response_type_mapping.topic_name, "InstanceStateDataResponse", MAX_TOPIC_AND_TYPE_LENGTH);
   (void) g_strlcpy(_builtin_types_dissection_data->type_mappings.instance_state_data_response_type_mapping.type_name, "InstanceStateDataResponse", MAX_TOPIC_AND_TYPE_LENGTH);
+
+  _builtin_types_dissection_data->type_mappings.service_request_type_mapping.guid.entity_id = ENTITYID_RTI_BUILTIN_SERVICE_REQUEST_WRITER;
+  _builtin_types_dissection_data->type_mappings.service_request_type_mapping.guid.fields_present = GUID_HAS_ALL;
+  _builtin_types_dissection_data->type_mappings.service_request_type_mapping.fields_visited = TOPIC_INFO_ALL_SET;
+  (void) g_strlcpy(_builtin_types_dissection_data->type_mappings.service_request_type_mapping.topic_name, "DDSServiceRequest", MAX_TOPIC_AND_TYPE_LENGTH);
+  (void) g_strlcpy(_builtin_types_dissection_data->type_mappings.service_request_type_mapping.type_name, "DDS_ServiceRequest", MAX_TOPIC_AND_TYPE_LENGTH);
 
   (void) g_strlcpy(_builtin_types_dissection_data->dissection_infos.instance_state_data_response_dissection_info.member_name, "InstanceStateDataResponse", MAX_TOPIC_AND_TYPE_LENGTH);
   _builtin_types_dissection_data->dissection_infos.instance_state_data_response_dissection_info.num_elements = INSTANCE_STATE_DATA_RESPONSE_NUM_ELEMENTS;

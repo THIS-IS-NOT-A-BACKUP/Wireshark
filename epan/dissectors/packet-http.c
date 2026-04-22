@@ -156,6 +156,7 @@ static expert_field ei_http_excess_data;
 static expert_field ei_http_bad_header_name;
 static expert_field ei_http_decompression_failed;
 static expert_field ei_http_decompression_disabled;
+static expert_field ei_http_response_code_invalid;
 
 static dissector_handle_t http_handle;
 static dissector_handle_t http_tcp_handle;
@@ -2716,8 +2717,14 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 			 http_conv_t *conv_data _U_, http_req_res_t *curr)
 {
 	const unsigned char *next_token;
+	const unsigned char *status_code_token;
 	unsigned tokenlen;
+	unsigned i;
+	unsigned expert_len;
 	char response_code_chars[4];
+	gboolean invalid_status_code_token = FALSE;
+	int status_code_offset;
+	proto_item *ti;
 	proto_item *r_ti;
 	http_info_value_t *stat_info = p_get_proto_data(pinfo->pool, pinfo, proto_http, HTTP_PROTO_DATA_INFO);
 
@@ -2736,33 +2743,62 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 	/*
 	 * The second token is the Status Code.
 	 */
-	tokenlen = get_token_len(line, lineend, &next_token);
+	status_code_token = next_token;
+	status_code_offset = offset;
+	tokenlen = get_token_len(status_code_token, lineend, &next_token);
+
+	/* Validate status code token */
+	if (tokenlen != 3) {
+		invalid_status_code_token = TRUE;
+	} else {
+		for (i = 0; i < tokenlen; i++) {
+			if (!g_ascii_isdigit(status_code_token[i])) {
+				invalid_status_code_token = TRUE;
+				break;
+			}
+		}
+	}
+
+	expert_len = tokenlen;
+	if (expert_len == 0 && tvb_reported_length_remaining(tvb, status_code_offset) > 0)
+		expert_len = 1;
+
+	if (tokenlen >= 3) {
+		/* The Status Code characters must be copied into a null-terminated
+		 * buffer for strtoul() to parse them into an unsigned integer value.
+		 */
+		memcpy(response_code_chars, status_code_token, 3);
+		response_code_chars[3] = '\0';
+
+		stat_info->response_code =
+			(unsigned)strtoul(response_code_chars, NULL, 10);
+		if (curr) {
+			curr->response_code = stat_info->response_code;
+		}
+	}
+
+	ti = proto_tree_add_uint(tree, hf_http_response_code, tvb, status_code_offset,
+				 tokenlen < 3 ? expert_len : 3,
+			    stat_info->response_code);
+	if (expert_len > 3)
+		proto_item_set_len(ti, expert_len);
+
+	if (invalid_status_code_token) {
+		expert_add_info_format(pinfo, ti, &ei_http_response_code_invalid,
+			"Invalid HTTP response status code token: \"%.*s\" (expected exactly 3 digits)",
+			tokenlen, status_code_token);
+	}
 	if (tokenlen < 3)
 		return;
 
-	/* The Status Code characters must be copied into a null-terminated
-	 * buffer for strtoul() to parse them into an unsigned integer value.
-	 */
-	memcpy(response_code_chars, line, 3);
-	response_code_chars[3] = '\0';
-
-	stat_info->response_code =
-		(unsigned)strtoul(response_code_chars, NULL, 10);
-	if (curr) {
-		curr->response_code = stat_info->response_code;
-	}
-
-	proto_tree_add_uint(tree, hf_http_response_code, tvb, offset, 3,
-			    stat_info->response_code);
-
 	r_ti = proto_tree_add_string(tree, hf_http_response_code_desc,
-		tvb, offset, 3, val_to_str(pinfo->pool, stat_info->response_code,
+		tvb, status_code_offset, 3, val_to_str(pinfo->pool, stat_info->response_code,
 		vals_http_status_code, "Unknown (%d)"));
 
 	proto_item_set_generated(r_ti);
 
 	/* Advance to the start of the next token. */
-	offset += (int) (next_token - line);
+	offset += (int) (next_token - status_code_token);
 	line = next_token;
 
 	/*
@@ -4953,7 +4989,8 @@ proto_register_http(void)
 		{ &ei_http_leading_crlf, { "http.leading_crlf", PI_MALFORMED, PI_ERROR, "Leading CRLF previous message in the stream may have extra CRLF", EXPFILL }},
 		{ &ei_http_bad_header_name, { "http.bad_header_name", PI_PROTOCOL, PI_WARN, "Illegal characters found in header name", EXPFILL }},
 		{ &ei_http_decompression_failed, { "http.decompression_failed", PI_UNDECODED, PI_WARN, "Decompression failed", EXPFILL }},
-		{ &ei_http_decompression_disabled, { "http.decompression_disabled", PI_UNDECODED, PI_CHAT, "Decompression disabled", EXPFILL }}
+		{ &ei_http_decompression_disabled, { "http.decompression_disabled", PI_UNDECODED, PI_CHAT, "Decompression disabled", EXPFILL }},
+		{ &ei_http_response_code_invalid, { "http.response.code.invalid", PI_MALFORMED, PI_WARN, "Invalid HTTP response status code token", EXPFILL }},
 
 	};
 
