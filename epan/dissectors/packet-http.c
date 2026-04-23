@@ -157,6 +157,7 @@ static expert_field ei_http_bad_header_name;
 static expert_field ei_http_decompression_failed;
 static expert_field ei_http_decompression_disabled;
 static expert_field ei_http_response_code_invalid;
+static expert_field ei_http_request_uri_invalid;
 
 static dissector_handle_t http_handle;
 static dissector_handle_t http_tcp_handle;
@@ -2721,8 +2722,7 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 	unsigned tokenlen;
 	unsigned i;
 	unsigned expert_len;
-	char response_code_chars[4];
-	gboolean invalid_status_code_token = FALSE;
+	bool invalid_status_code_token = false;
 	int status_code_offset;
 	proto_item *ti;
 	proto_item *r_ti;
@@ -2749,11 +2749,11 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 
 	/* Validate status code token */
 	if (tokenlen != 3) {
-		invalid_status_code_token = TRUE;
+		invalid_status_code_token = true;
 	} else {
 		for (i = 0; i < tokenlen; i++) {
 			if (!g_ascii_isdigit(status_code_token[i])) {
-				invalid_status_code_token = TRUE;
+				invalid_status_code_token = true;
 				break;
 			}
 		}
@@ -2764,14 +2764,7 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 		expert_len = 1;
 
 	if (tokenlen >= 3) {
-		/* The Status Code characters must be copied into a null-terminated
-		 * buffer for strtoul() to parse them into an unsigned integer value.
-		 */
-		memcpy(response_code_chars, status_code_token, 3);
-		response_code_chars[3] = '\0';
-
-		stat_info->response_code =
-			(unsigned)strtoul(response_code_chars, NULL, 10);
+		ws_buftou32(status_code_token, 3, NULL, &stat_info->response_code);
 		if (curr) {
 			curr->response_code = stat_info->response_code;
 		}
@@ -2785,8 +2778,8 @@ basic_response_dissector(packet_info *pinfo, tvbuff_t *tvb, proto_tree *tree,
 
 	if (invalid_status_code_token) {
 		expert_add_info_format(pinfo, ti, &ei_http_response_code_invalid,
-			"Invalid HTTP response status code token: \"%.*s\" (expected exactly 3 digits)",
-			tokenlen, status_code_token);
+			"Invalid HTTP response status code token: \"%s\" (expected exactly 3 digits)",
+			format_text(pinfo->pool, (const char *)status_code_token, tokenlen));
 	}
 	if (tokenlen < 3)
 		return;
@@ -2853,10 +2846,9 @@ chunked_encoding_dissector(tvbuff_t **tvb_ptr, packet_info *pinfo,
 	while (datalen > 0) {
 		uint32_t  chunk_size;
 		unsigned  chunk_offset;
-		uint8_t	 *chunk_string;
 		unsigned  linelen;
+		unsigned  endoff;
 		bool	  found;
-		char	 *c;
 
 		found = tvb_find_line_end_remaining(tvb, offset, &linelen , &chunk_offset);
 
@@ -2865,23 +2857,7 @@ chunked_encoding_dissector(tvbuff_t **tvb_ptr, packet_info *pinfo,
 			break;
 		}
 
-		chunk_string = tvb_get_string_enc(pinfo->pool, tvb, offset, linelen, ENC_ASCII);
-
-		if (chunk_string == NULL) {
-			/* Can't get the chunk size line */
-			break;
-		}
-
-		c = (char*)chunk_string;
-
-		/*
-		 * We don't care about the extensions.
-		 */
-		if ((c = strchr(c, ';'))) {
-			*c = '\0';
-		}
-
-		chunk_size = (uint32_t)strtol((char*)chunk_string, NULL, 16);
+		tvb_get_string_uint(tvb, offset, linelen, ENC_STR_HEX, &chunk_size, &endoff);
 
 		if (chunk_size > datalen) {
 			/*
@@ -3052,18 +3028,22 @@ http_payload_subdissector(tvbuff_t *tvb, proto_tree *tree,
 		 * The string was successfully split in two
 		 * Create a proxy-connect subtree
 		 */
-		if(tree) {
-			item = proto_tree_add_item(tree, proto_http, tvb, 0, -1, ENC_NA);
-			proxy_tree = proto_item_add_subtree(item, ett_http);
+		item = proto_tree_add_item(tree, proto_http, tvb, 0, -1, ENC_NA);
+		proxy_tree = proto_item_add_subtree(item, ett_http);
 
-			item = proto_tree_add_string(proxy_tree, hf_http_proxy_connect_host,
-						     tvb, 0, 0, strings[0]);
-			proto_item_set_generated(item);
+		item = proto_tree_add_string(proxy_tree, hf_http_proxy_connect_host,
+					     tvb, 0, 0, strings[0]);
+		proto_item_set_generated(item);
 
-			item = proto_tree_add_uint(proxy_tree, hf_http_proxy_connect_port,
-						   tvb, 0, 0, (uint32_t)strtol(strings[1], NULL, 10) );
-			proto_item_set_generated(item);
+		if (!ws_strtou32(strings[1], NULL, &uri_port)) {
+			proto_tree_add_expert_format(proxy_tree, pinfo, &ei_http_request_uri_invalid,
+						     tvb, 0, 0, "Invalid target port number (%s)", strings[1]);
+			return;
 		}
+
+		item = proto_tree_add_uint(proxy_tree, hf_http_proxy_connect_port,
+					   tvb, 0, 0, uri_port);
+		proto_item_set_generated(item);
 
 		/* Set the port and address to the proxied ones so that
 		 * decode_tcp_ports doesn't call the current conversation
@@ -3072,7 +3052,6 @@ http_payload_subdissector(tvbuff_t *tvb, proto_tree *tree,
 		 * or set the conversation dissector don't affect the original
 		 * conversation but the proxied one.
 		 */
-		uri_port = (int)strtol(strings[1], NULL, 10); /* Convert string to a base-10 integer */
 
 		/* Just use the string as a string address. */
 		set_address(&uri_addr, AT_STRINGZ, (int)strlen(strings[0]) + 1, strings[0]);
@@ -4991,6 +4970,7 @@ proto_register_http(void)
 		{ &ei_http_decompression_failed, { "http.decompression_failed", PI_UNDECODED, PI_WARN, "Decompression failed", EXPFILL }},
 		{ &ei_http_decompression_disabled, { "http.decompression_disabled", PI_UNDECODED, PI_CHAT, "Decompression disabled", EXPFILL }},
 		{ &ei_http_response_code_invalid, { "http.response.code.invalid", PI_MALFORMED, PI_WARN, "Invalid HTTP response status code token", EXPFILL }},
+		{ &ei_http_request_uri_invalid, { "http.request.uri.invalid", PI_MALFORMED, PI_ERROR, "Invalid request target", EXPFILL }},
 
 	};
 
