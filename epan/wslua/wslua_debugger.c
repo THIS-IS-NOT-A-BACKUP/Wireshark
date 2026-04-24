@@ -640,10 +640,10 @@ void wslua_debugger_set_breakpoint_active(const char *file_path, int64_t line,
             bp->active = active;
             g_mutex_unlock(&debugger.mutex);
             g_free(norm_file_path);
-            if (active)
-            {
-                wslua_debugger_set_enabled(true);
-            }
+            /* Toggling a breakpoint's active state must never change the
+             * debugger's enabled flag (especially during a live capture,
+             * where debugging is suppressed entirely). Just re-arm the
+             * Lua line hook so the change takes effect on the next tick. */
             wslua_debugger_update_hook();
             return;
         }

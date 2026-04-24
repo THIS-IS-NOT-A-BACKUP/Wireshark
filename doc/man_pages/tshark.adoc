@@ -563,6 +563,14 @@ Field 2:: plugin version (e.g. 0.0.4)
 Field 3:: plugin type ("dissector", "tap", "file type", etc.)
 Field 4:: full path to plugin file
 
+*profiles*[,__filter__]  Dumps a list of profiles. Specific profile types
+can be listed with the "global", "personal", or "all" filters.  By default,
+"all" are shown.
+
+[horizontal]
+Field 1:: Profile name
+Field 2:: Type of profile (personal, global, default)
+
 *protocols* Dumps the protocols in the registration database to stdout.
 An independent program can take this output and format it into nice tables
 or HTML or whatever.  There is one record per line.  The fields are tab-delimited.
@@ -1361,6 +1369,12 @@ Collect requests/response SRT (Service Response Time) data for Diameter.
 Data collected is number of request and response pairs of each Diameter
 command code, Minimum SRT, Maximum SRT, Average SRT, and Sum SRT.
 Currently no statistics are gathered on unpaired messages.
+
+*-z* dis,streams::
+Collect statistics for all DIS radio streams discovered by the `dis` tap.
+The output includes start and end times, endpoints, radio and entity IDs,
+signal and transmitter packet counts, estimated lost packets, and jitter
+metrics derived from DIS transmitter timestamps.
 
 *-z* dns,tree[,__filter__]::
 Create a summary of the captured DNS packets. General information are collected

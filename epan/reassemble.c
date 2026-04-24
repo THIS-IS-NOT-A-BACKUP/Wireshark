@@ -316,38 +316,45 @@ reassembled_key_free(void *ptr)
 	g_slice_free(reassembled_key, (reassembled_key *)ptr);
 }
 
-/*
- * For a fragment hash table entry, free the associated fragments.
- * The entry value (fd_chain) is freed herein and the entry is freed
- * when the key freeing routine is called (as a consequence of returning
- * true from this function).
- */
-static gboolean
-free_all_fragments(void *key_arg _U_, void *value, void *user_data _U_)
+/* --------------fragment_item functions ----------- */
+static fragment_item*
+new_fragment_item(uint32_t frame, uint32_t offset, uint32_t len)
 {
-	fragment_head *fd_head;
-	fragment_item *fd_i = NULL, *tmp_fd;
+	fragment_item *fd;
 
-	/* g_hash_table_new_full() was used to supply a function
-	 * to free the key and anything to which it points
-	 */
-	fd_head = (fragment_head *)value;
-	if (fd_head != NULL) {
-		fd_i = fd_head->next;
-		if(fd_head->tvb_data && !(fd_head->flags&FD_SUBSET_TVB))
-			tvb_free(fd_head->tvb_data);
-		g_slice_free(fragment_head, fd_head);
-	}
+	fd = g_slice_new(fragment_item);
+	fd->next = NULL;
+	fd->flags = 0;
+	fd->frame = frame;
+	fd->offset = offset;
+	fd->len = len;
+	fd->tvb_data = NULL;
 
-	for (; fd_i != NULL; fd_i = tmp_fd) {
-		tmp_fd=fd_i->next;
+	return fd;
+}
 
-		if(fd_i->tvb_data && !(fd_i->flags&FD_SUBSET_TVB))
-			tvb_free(fd_i->tvb_data);
-		g_slice_free(fragment_item, fd_i);
-	}
+static void
+fragment_item_free_tvb(fragment_item *fd_i)
+{
+	/* If this is a subset of the tvb created for the head after
+	 * dissembly, don't free it (that would cause memory errors;
+	 * the parent will be freed later.) */
+	if (fd_i->flags & FD_SUBSET_TVB)
+		fd_i->flags &= ~FD_SUBSET_TVB;
+	else if (fd_i->tvb_data)
+		tvb_free(fd_i->tvb_data);
 
-	return TRUE;
+	fd_i->tvb_data=NULL;
+}
+
+/* Returns the pointer to the next item so that the list can be freed. */
+static fragment_item*
+fragment_item_free(fragment_item *fd_i)
+{
+	fragment_item *fd_next = fd_i->next;
+	fragment_item_free_tvb(fd_i);
+	g_slice_free(fragment_item, fd_i);
+	return fd_next;
 }
 
 /* ------------------------- */
@@ -371,20 +378,15 @@ static fragment_head *new_head(const uint32_t flags)
 static void
 free_fd_head(fragment_head *fd_head)
 {
-	fragment_item *fd_i, *tmp;
+	fragment_item *fd_i;
 
 	if (fd_head->flags & FD_SUBSET_TVB)
 		fd_head->tvb_data = NULL;
 	if (fd_head->tvb_data)
 		tvb_free(fd_head->tvb_data);
-	for (fd_i = fd_head->next; fd_i; fd_i = tmp) {
-		tmp = fd_i->next;
-		if (fd_i->flags & FD_SUBSET_TVB)
-			fd_i->tvb_data = NULL;
-		if (fd_i->tvb_data) {
-			tvb_free(fd_i->tvb_data);
-		}
-		g_slice_free(fragment_item, fd_i);
+	fd_i = fd_head->next;
+	while (fd_i != NULL) {
+		fd_i = fragment_item_free(fd_i);
 	}
 	g_slice_free(fragment_head, fd_head);
 }
@@ -398,6 +400,26 @@ unref_fd_head(void *data)
 	if (fd_head->ref_count == 0) {
 		free_fd_head(fd_head);
 	}
+}
+
+/*
+ * For a fragment hash table entry, free the associated fragments.
+ * The entry value (fd_chain) is freed herein and the entry is freed
+ * when the key freeing routine is called (as a consequence of returning
+ * true from this function).
+ */
+static gboolean
+free_all_fragments(void *key_arg _U_, void *value, void *user_data _U_)
+{
+	fragment_head *fd_head;
+
+	/* g_hash_table_new_full() was used to supply a function
+	 * to free the key and anything to which it points
+	 */
+	fd_head = (fragment_head *)value;
+	free_fd_head(fd_head);
+
+	return TRUE;
 }
 
 static void
@@ -625,14 +647,9 @@ fragment_delete(reassembly_table *table, const packet_info *pinfo,
 
 	fd_tvb_data=fd_head->tvb_data;
 	/* loop over all partial fragments and free any tvbuffs */
-	for(fd=fd_head->next;fd;){
-		fragment_item *tmp_fd;
-		tmp_fd=fd->next;
-
-		if (fd->tvb_data && !(fd->flags & FD_SUBSET_TVB))
-			tvb_free(fd->tvb_data);
-		g_slice_free(fragment_item, fd);
-		fd=tmp_fd;
+	fd = fd_head->next;
+	while (fd != NULL) {
+		fd = fragment_item_free(fd);
 	}
 	g_slice_free(fragment_head, fd_head);
 	g_hash_table_remove(table->fragment_table, key);
@@ -927,12 +944,7 @@ fragment_truncate(reassembly_table *table, const packet_info *pinfo,
 		prev_fd = fd_i;
 
 		/* Below should do nothing since this is already defragmented */
-		if (fd_i->flags & FD_SUBSET_TVB)
-			fd_i->flags &= ~FD_SUBSET_TVB;
-		else if (fd_i->tvb_data)
-			tvb_free(fd_i->tvb_data);
-
-		fd_i->tvb_data=NULL;
+		fragment_item_free_tvb(fd_i);
 	}
 
 	/* Remove all the other fragments, as they are past the split point. */
@@ -943,13 +955,8 @@ fragment_truncate(reassembly_table *table, const packet_info *pinfo,
 	}
 	fd_head->contiguous_len = MIN(fd_head->contiguous_len, tot_len);
 	fragment_items_removed(fd_head, prev_fd);
-	fragment_item *tmp_fd;
-	for (; fd_i; fd_i = tmp_fd) {
-		tmp_fd=fd_i->next;
-
-		if (fd_i->tvb_data && !(fd_i->flags & FD_SUBSET_TVB))
-			tvb_free(fd_i->tvb_data);
-		g_slice_free(fragment_item, fd_i);
+	while (fd_i != NULL) {
+		fd_i = fragment_item_free(fd_i);
 	}
 }
 
@@ -1207,13 +1214,7 @@ fragment_add_work(fragment_head *fd_head, tvbuff_t *tvb, const int offset,
 	uint8_t *data;
 
 	/* create new fd describing this fragment */
-	fd = g_slice_new(fragment_item);
-	fd->next = NULL;
-	fd->flags = 0;
-	fd->frame = frag_frame;
-	fd->offset = frag_offset;
-	fd->len  = frag_data_len;
-	fd->tvb_data = NULL;
+	fd = new_fragment_item(frag_frame, frag_offset, frag_data_len);
 
 	/*
 	 * Are we adding to an already-completed reassembly?
@@ -1494,12 +1495,7 @@ fragment_add_work(fragment_head *fd_head, tvbuff_t *tvb, const int offset,
 				}
 			}
 
-			if (fd_i->flags & FD_SUBSET_TVB)
-				fd_i->flags &= ~FD_SUBSET_TVB;
-			else if (fd_i->tvb_data)
-				tvb_free(fd_i->tvb_data);
-
-			fd_i->tvb_data=NULL;
+			fragment_item_free_tvb(fd_i);
 		}
 	}
 
@@ -1907,11 +1903,7 @@ fragment_defragment_and_free (fragment_head *fd_head, const packet_info *pinfo)
 
 	/* we have defragmented the pdu, now free all fragments*/
 	for (fd_i=fd_head->next;fd_i;fd_i=fd_i->next) {
-		if (fd_i->flags & FD_SUBSET_TVB)
-			fd_i->flags &= ~FD_SUBSET_TVB;
-		else if (fd_i->tvb_data)
-			tvb_free(fd_i->tvb_data);
-		fd_i->tvb_data=NULL;
+		fragment_item_free_tvb(fd_i);
 	}
 	if (old_tvb_data)
 		tvb_free(old_tvb_data);
@@ -1984,13 +1976,7 @@ fragment_add_seq_work(fragment_head *fd_head, tvbuff_t *tvb, const int offset,
 
 
 	/* create new fd describing this fragment */
-	fd = g_slice_new(fragment_item);
-	fd->next = NULL;
-	fd->flags = 0;
-	fd->frame = pinfo->num;
-	fd->offset = frag_number_work;
-	fd->len  = frag_data_len;
-	fd->tvb_data = NULL;
+	fd = new_fragment_item(pinfo->num, frag_number_work, frag_data_len);
 
 	/* fd_head->frame is the maximum of the frame numbers of all the
 	 * fragments added to the reassembly. */
@@ -2211,7 +2197,7 @@ fragment_add_seq_common(reassembly_table *table, tvbuff_t *tvb,
 		/* not found, this must be the first snooped fragment for this
 		 * packet. Create list-head.
 		 */
-		fd_head= new_head(FD_BLOCKSEQUENCE);
+		fd_head = new_head(FD_BLOCKSEQUENCE);
 
 		if((flags & (REASSEMBLE_FLAGS_NO_FRAG_NUMBER|REASSEMBLE_FLAGS_802_11_HACK))
 		   && !more_frags) {
@@ -2640,13 +2626,7 @@ fragment_add_seq_single_work(reassembly_table *table, tvbuff_t *tvb,
 			while (fd && fd->offset == frag_number+1) {
 				/* Definitely have bad data here. Best to
 				 * delete these and leave unreassembled. */
-				fragment_item *tmp_fd;
-				tmp_fd=fd->next;
-
-				if (fd->tvb_data && !(fd->flags & FD_SUBSET_TVB))
-					tvb_free(fd->tvb_data);
-				g_slice_free(fragment_item, fd);
-				fd=tmp_fd;
+				fd = fragment_item_free(fd);
 			}
 		}
 		if (fd != NULL) {
@@ -2762,19 +2742,8 @@ fragment_start_seq_check(reassembly_table *table, const packet_info *pinfo,
 
 	if (fd_head == NULL) {
 		/* Create list-head. */
-		fd_head = g_slice_new(fragment_head);
-		fd_head->next = NULL;
-		fd_head->first_gap = NULL;
-		fd_head->contiguous_len = 0;
-		fd_head->frame = 0;
-		fd_head->len = 0;
-		fd_head->fragment_nr_offset = 0;
+		fd_head = new_head(FD_BLOCKSEQUENCE|FD_DATALEN_SET);
 		fd_head->datalen = tot_len;
-		fd_head->reassembled_in = 0;
-		fd_head->reas_in_layer_num = 0;
-		fd_head->flags = FD_BLOCKSEQUENCE|FD_DATALEN_SET;
-		fd_head->tvb_data = NULL;
-		fd_head->error = NULL;
 
 		insert_fd_head(table, fd_head, pinfo, id, data);
 	}

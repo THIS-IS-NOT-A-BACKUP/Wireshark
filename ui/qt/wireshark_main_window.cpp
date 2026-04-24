@@ -346,6 +346,7 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
     time_display_actions_(NULL),
     time_precision_actions_(NULL),
     funnel_statistics_(NULL),
+    action_telephony_dis_streams_(NULL),
     freeze_focus_(NULL),
     was_maximized_(false),
     capture_stopping_(false),
@@ -373,6 +374,9 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
 
     main_ui_->mainStack->setFocusPolicy(Qt::NoFocus);
     main_ui_->centralWidget->setFocusPolicy(Qt::NoFocus);
+    action_telephony_dis_streams_ = new QAction(tr("DIS Streams"), this);
+    action_telephony_dis_streams_->setObjectName(QStringLiteral("actionTelephonyDisStreams"));
+    action_telephony_dis_streams_->setToolTip(tr("Show and analyze DIS radio streams"));
 
 #ifdef HAVE_LUA
     QAction *luaDebuggerAction = new QAction(tr("Lua Debugger"), this);
@@ -1012,15 +1016,13 @@ void WiresharkMainWindow::closeEvent(QCloseEvent *event) {
     }
 
 #ifdef HAVE_LUA
-    /*
-     * If the Lua debugger is paused we are inside a nested event loop
-     * with the Lua dissector still on the C call stack.
-     */
-    if (wslua_debugger_is_paused()) {
-        LuaDebuggerDialog *dbg = LuaDebuggerDialog::instance();
-        if (dbg) {
-            dbg->close();
-        }
+    /* Refuse to close while the Lua debugger is paused; the debugger
+     * defers and re-delivers the close once the Lua C stack has
+     * unwound. Running tryClosingCaptureFile() / mainApp->quit() with
+     * the Lua dissector still on the C stack would tear down capture /
+     * epan state and abort in wmem_cleanup_scopes() at exit. */
+    if (LuaDebuggerDialog::handleMainCloseIfPaused(event)) {
+        return;
     }
 #endif
 
@@ -2829,6 +2831,7 @@ void WiresharkMainWindow::addDynamicMenus()
     mainApp->addDynamicMenuGroupItem(REGISTER_TELEPHONY_GROUP_3GPP_UU, main_ui_->actionTelephonyLteRlcGraph);
     mainApp->addDynamicMenuGroupItem(REGISTER_TELEPHONY_GROUP_MTP3, main_ui_->actionTelephonyMtp3Summary);
     mainApp->addDynamicMenuGroupItem(REGISTER_TELEPHONY_GROUP_UNSORTED, main_ui_->actionTelephonySipFlows);
+    mainApp->addDynamicMenuGroupItem(REGISTER_TELEPHONY_GROUP_UNSORTED, action_telephony_dis_streams_);
 
     // Fill in each menu
     foreach(register_stat_group_t menu_group, menu_groups_) {
