@@ -1612,8 +1612,24 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
             &LuaDebuggerDialog::onStepIn);
     connect(ui->actionStepOut, &QAction::triggered, this,
             &LuaDebuggerDialog::onStepOut);
-    connect(ui->actionAddWatch, &QAction::triggered, this, [this]()
-            { insertNewWatchRow(QString(), true); });
+    connect(ui->actionAddWatch, &QAction::triggered, this, [this]() {
+        QString fromEditor;
+        if (LuaDebuggerCodeView *cv = currentCodeView())
+        {
+            if (cv->textCursor().hasSelection())
+            {
+                fromEditor = cv->textCursor().selectedText().trimmed();
+            }
+        }
+        if (fromEditor.isEmpty())
+        {
+            insertNewWatchRow(QString(), true);
+        }
+        else
+        {
+            insertNewWatchRow(fromEditor, false);
+        }
+    });
     connect(ui->actionOpenFile, &QAction::triggered, this,
             &LuaDebuggerDialog::onOpenFile);
     connect(ui->actionSaveFile, &QAction::triggered, this,
@@ -3846,27 +3862,27 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
                     updateWidgets();
                     clearPausedStateUi();
                 });
+    }
 
-        // Evaluate selection if there is selected text
-        QString selectedText = codeView->textCursor().selectedText();
-        if (!selectedText.isEmpty())
-        {
-            menu.addSeparator();
-            QAction *addWatch =
-                menu.addAction(tr("Add Watch"));
-            addWatch->setShortcut(ui->actionAddWatch->shortcut());
-            connect(addWatch, &QAction::triggered,
-                    [this, selectedText]()
+    // Evaluate selection if there is selected text
+    QString selectedText = codeView->textCursor().selectedText();
+    if (!selectedText.isEmpty())
+    {
+        menu.addSeparator();
+        QAction *addWatch =
+            menu.addAction(tr("Add Watch"));
+        addWatch->setShortcut(ui->actionAddWatch->shortcut());
+        connect(addWatch, &QAction::triggered,
+                [this, selectedText]()
+                {
+                    const QString t = selectedText.trimmed();
+                    if (!watchSpecUsesPathResolution(t))
                     {
-                        const QString t = selectedText.trimmed();
-                        if (!watchSpecUsesPathResolution(t))
-                        {
-                            showPathOnlyVariablePathWatchMessage();
-                            return;
-                        }
-                        insertNewWatchRow(t, false);
-                    });
-        }
+                        showPathOnlyVariablePathWatchMessage();
+                        return;
+                    }
+                    insertNewWatchRow(t, false);
+                });
     }
 
     menu.exec(codeView->mapToGlobal(pos));
@@ -4633,22 +4649,19 @@ void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
     connect(copyBoth, &QAction::triggered, this,
             [copyToClipboard, bothText]() { copyToClipboard(bothText); });
 
-    if (eventLoop)
+    menu.addSeparator();
+    const QString varPath = item->data(VariablePathRole).toString();
+    if (!varPath.isEmpty())
     {
-        menu.addSeparator();
-        const QString varPath = item->data(VariablePathRole).toString();
-        if (!varPath.isEmpty())
-        {
-            QAction *addWatch =
-                menu.addAction(tr("Add Watch: \"%1\"")
-                                   .arg(varPath.length() > 48
-                                            ? varPath.left(48) +
-                                                  QStringLiteral("…")
-                                            : varPath));
-            addWatch->setShortcut(ui->actionAddWatch->shortcut());
-            connect(addWatch, &QAction::triggered, this,
-                    [this, varPath]() { addPathWatch(varPath); });
-        }
+        QAction *addWatch =
+            menu.addAction(tr("Add Watch: \"%1\"")
+                                .arg(varPath.length() > 48
+                                        ? varPath.left(48) +
+                                                QStringLiteral("…")
+                                        : varPath));
+        addWatch->setShortcut(ui->actionAddWatch->shortcut());
+        connect(addWatch, &QAction::triggered, this,
+                [this, varPath]() { addPathWatch(varPath); });
     }
 
     menu.exec(variablesTree->viewport()->mapToGlobal(pos));
@@ -6831,6 +6844,19 @@ void LuaDebuggerDialog::insertNewWatchRow(const QString &initialSpec,
     }
 
     const QString init = initialSpec.trimmed();
+    for (int i = 0; i < watchModel->rowCount(); ++i)
+    {
+        if (QStandardItem *r = watchModel->item(i, 0))
+        {
+            if (r->data(WatchSpecRole).toString() == init)
+            {
+                const QModelIndex wix = watchModel->indexFromItem(r);
+                watchTree->scrollTo(wix);
+                watchTree->setCurrentIndex(wix);
+                return;
+            }
+        }
+    }
     if (!init.isEmpty() && !watchSpecUsesPathResolution(init))
     {
         showPathOnlyVariablePathWatchMessage();

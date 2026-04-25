@@ -384,7 +384,7 @@ WiresharkMainWindow::WiresharkMainWindow(QWidget *parent) :
             &WiresharkMainWindow::openLuaDebuggerDialog);
     main_ui_->menuTools->addAction(luaDebuggerAction);
 
-    // Separate the Lua plugins comming after the Lua debugger
+    // Separate the Lua plugins coming after the Lua debugger
     main_ui_->menuTools->addSeparator();
 #endif
 
