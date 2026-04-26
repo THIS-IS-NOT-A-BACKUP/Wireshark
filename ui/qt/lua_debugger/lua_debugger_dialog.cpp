@@ -295,13 +295,26 @@ bool LuaDebuggerDialog::s_mainCloseDeferredByPause_ = false;
 
 bool LuaDebuggerDialog::handleMainCloseIfPaused(QCloseEvent *event)
 {
+    LuaDebuggerDialog *dbg = _instance;
     if (!wslua_debugger_is_paused())
     {
-        return false;
+        /* Keep main-window quit and debugger Ctrl+Q consistent: if the
+         * debugger owns unsaved script edits, run the debugger close gate
+         * first so Save/Discard/Cancel semantics stay identical. */
+        if (!dbg || !dbg->isVisible() || !dbg->hasUnsavedChanges())
+        {
+            return false;
+        }
+        event->ignore();
+        s_mainCloseDeferredByPause_ = true;
+        QMetaObject::invokeMethod(dbg, "close", Qt::QueuedConnection);
+        dbg->raise();
+        dbg->activateWindow();
+        return true;
     }
     event->ignore();
     s_mainCloseDeferredByPause_ = true;
-    if (LuaDebuggerDialog *dbg = instance())
+    if (dbg)
     {
         dbg->raise();
         dbg->activateWindow();
@@ -569,9 +582,20 @@ static QKeySequence luaSeqFromKeyEvent(const QKeyEvent *ke)
 #endif
 }
 
+/** @brief Sequences for context-menu labels and eventFilter (must match). */
+const QKeySequence kCtxGoToLine(QKeySequence(Qt::CTRL | Qt::Key_G));
+const QKeySequence kCtxRunToLine(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+const QKeySequence kCtxWatchEdit(Qt::Key_F2);
+const QKeySequence kCtxWatchCopyValue(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+const QKeySequence kCtxWatchDuplicate(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
+const QKeySequence kCtxWatchRemoveAll(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K));
+const QKeySequence kCtxToggleBreakpoint(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
+const QKeySequence kCtxReloadLuaPlugins(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+const QKeySequence kCtxRemoveAllBreakpoints(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F9));
+
 /**
  * @brief True if @a pressed is one of the debugger shortcuts that overlap the
- * main window (Find, Save, Go to line, Reload Lua plugins).
+ * main window and must be reserved in ShortcutOverride.
  */
 static bool matchesLuaDebuggerShortcutKeys(Ui::LuaDebuggerDialog *ui,
                                            const QKeySequence &pressed)
@@ -579,7 +603,14 @@ static bool matchesLuaDebuggerShortcutKeys(Ui::LuaDebuggerDialog *ui,
     return (pressed.matches(ui->actionFind->shortcut()) == QKeySequence::ExactMatch) ||
            (pressed.matches(ui->actionSaveFile->shortcut()) == QKeySequence::ExactMatch) ||
            (pressed.matches(ui->actionGoToLine->shortcut()) == QKeySequence::ExactMatch) ||
-           (pressed.matches(ui->actionReloadLuaPlugins->shortcut()) == QKeySequence::ExactMatch);
+           (pressed.matches(ui->actionReloadLuaPlugins->shortcut()) == QKeySequence::ExactMatch) ||
+           (pressed.matches(ui->actionAddWatch->shortcut()) == QKeySequence::ExactMatch) ||
+           (pressed.matches(ui->actionContinue->shortcut()) == QKeySequence::ExactMatch) ||
+           (pressed.matches(ui->actionStepIn->shortcut()) == QKeySequence::ExactMatch) ||
+           (pressed.matches(kCtxRunToLine) == QKeySequence::ExactMatch) ||
+           (pressed.matches(kCtxToggleBreakpoint) == QKeySequence::ExactMatch) ||
+           (pressed.matches(kCtxWatchCopyValue) == QKeySequence::ExactMatch) ||
+           (pressed.matches(kCtxWatchDuplicate) == QKeySequence::ExactMatch);
 }
 
 /**
@@ -629,7 +660,28 @@ static bool triggerLuaDebuggerShortcuts(Ui::LuaDebuggerDialog *ui,
         }
         return true;
     }
+    if (pressed.matches(ui->actionAddWatch->shortcut()) ==
+        QKeySequence::ExactMatch)
+    {
+        if (ui->actionAddWatch->isEnabled())
+        {
+            ui->actionAddWatch->trigger();
+        }
+        return true;
+    }
     return false;
+}
+
+static LuaDebuggerCodeView *codeViewFromObject(QObject *obj)
+{
+    for (QObject *o = obj; o; o = o->parent())
+    {
+        if (auto *cv = qobject_cast<LuaDebuggerCodeView *>(o))
+        {
+            return cv;
+        }
+    }
+    return nullptr;
 }
 
 static QStandardItem *watchRootItem(QStandardItem *item)
@@ -1571,21 +1623,20 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
                                    .arg(QKeySequence(QKeySequence::Find)
                                             .toString(QKeySequence::NativeText)));
     ui->actionGoToLine->setToolTip(tr("Go to line (%1)")
-                                       .arg(QKeySequence(Qt::CTRL | Qt::Key_G)
-                                                .toString(QKeySequence::NativeText)));
+                                       .arg(kCtxGoToLine
+                                            .toString(QKeySequence::NativeText)));
     ui->actionContinue->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     ui->actionStepOver->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     ui->actionStepIn->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     ui->actionStepOut->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    ui->actionReloadLuaPlugins->setShortcut(
-        QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L));
+    ui->actionReloadLuaPlugins->setShortcut(kCtxReloadLuaPlugins);
     ui->actionReloadLuaPlugins->setShortcutContext(
         Qt::WidgetWithChildrenShortcut);
     ui->actionSaveFile->setShortcut(QKeySequence::Save);
     ui->actionSaveFile->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     ui->actionFind->setShortcut(QKeySequence::Find);
     ui->actionFind->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-    ui->actionGoToLine->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_G));
+    ui->actionGoToLine->setShortcut(kCtxGoToLine);
     ui->actionGoToLine->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     folderIcon = StockIcon("folder");
     fileIcon = StockIcon("text-x-generic");
@@ -2554,8 +2605,12 @@ void LuaDebuggerDialog::reject()
 
 void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
 {
+    const bool pausedOnEntry = debuggerPaused || wslua_debugger_is_paused();
     if (!ensureUnsavedChangesHandled(tr("Lua Debugger")))
     {
+        /* User cancelled the debugger unsaved-file prompt; cancel any
+         * deferred app-quit request attached to this close attempt. */
+        s_mainCloseDeferredByPause_ = false;
         event->ignore();
         return;
     }
@@ -2579,6 +2634,14 @@ void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
      * above but hasn't unwound yet; by the time it does,
      * endPauseFreeze() there is a no-op thanks to pauseUnfrozen_. */
     endPauseFreeze();
+
+    /* For non-paused closes we can re-deliver a deferred main close now.
+     * Paused closes must wait for handlePause() post-loop cleanup so the
+     * Lua C stack is unwound first. */
+    if (!pausedOnEntry)
+    {
+        deliverDeferredMainCloseIfPending();
+    }
 
     /*
      * Do not call QDialog::closeEvent (GeometryStateDialog inherits it):
@@ -2657,7 +2720,13 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
     {
         auto *ke = static_cast<QKeyEvent *>(event);
         const QKeySequence pressed = luaSeqFromKeyEvent(ke);
-        if (matchesLuaDebuggerShortcutKeys(ui, pressed))
+        /*
+         * Reserve debugger-owned overlaps before Qt can dispatch app-level
+         * shortcuts in the main window. Keep this matcher aligned with any
+         * debugger shortcut that can collide with global actions.
+         */
+        if (pressed.matches(QKeySequence::Quit) == QKeySequence::ExactMatch ||
+            matchesLuaDebuggerShortcutKeys(ui, pressed))
         {
             ke->accept();
             return false;
@@ -2674,9 +2743,9 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
                 (breakpointsTree->viewport() &&
                  breakpointsTree->viewport()->hasFocus()))
             {
-                if ((ke->key() == Qt::Key_Delete ||
-                     ke->key() == Qt::Key_Backspace) &&
-                    ke->modifiers() == Qt::NoModifier)
+                const QKeySequence pressedB = luaSeqFromKeyEvent(ke);
+                if (pressedB.matches(QKeySequence::Delete) == QKeySequence::ExactMatch ||
+                    pressedB.matches(Qt::Key_Backspace) == QKeySequence::ExactMatch)
                 {
                     if (removeSelectedBreakpoints())
                     {
@@ -2690,23 +2759,52 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
             if (watchTree->hasFocus() ||
                 (watchTree->viewport() && watchTree->viewport()->hasFocus()))
             {
+                const QKeySequence pressedW = luaSeqFromKeyEvent(ke);
+                if (pressedW.matches(kCtxWatchRemoveAll) ==
+                        QKeySequence::ExactMatch &&
+                    watchModel && watchModel->rowCount() > 0)
+                {
+                    removeAllWatchTopLevelItems();
+                    return true;
+                }
+
                 const QModelIndex curIx = watchTree->currentIndex();
-                QStandardItem *cur =
+                QStandardItem *const cur =
                     watchModel
                         ? watchModel->itemFromIndex(
                               curIx.sibling(curIx.row(), 0))
                         : nullptr;
+                if (cur)
+                {
+                    if (pressedW.matches(kCtxWatchCopyValue) ==
+                        QKeySequence::ExactMatch)
+                    {
+                        copyWatchValueForItem(cur, curIx);
+                        return true;
+                    }
+                }
                 if (cur && cur->parent() == nullptr)
                 {
-                    if ((ke->key() == Qt::Key_Delete ||
-                         ke->key() == Qt::Key_Backspace) &&
-                        ke->modifiers() == Qt::NoModifier)
+                    if (pressedW.matches(kCtxWatchDuplicate) ==
+                        QKeySequence::ExactMatch)
+                    {
+                        duplicateWatchRootItem(cur);
+                        return true;
+                    }
+                }
+                if (cur && cur->parent() == nullptr)
+                {
+                    if (pressedW.matches(QKeySequence::Delete) ==
+                            QKeySequence::ExactMatch ||
+                        pressedW.matches(Qt::Key_Backspace) ==
+                            QKeySequence::ExactMatch)
                     {
                         QList<QStandardItem *> del;
                         if (watchTree->selectionModel())
                         {
                             for (const QModelIndex &six :
-                                 watchTree->selectionModel()->selectedIndexes())
+                                 watchTree->selectionModel()
+                                     ->selectedIndexes())
                             {
                                 if (six.column() != 0)
                                 {
@@ -2727,8 +2825,8 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
                         deleteWatchRows(del);
                         return true;
                     }
-                    if (ke->key() == Qt::Key_F2 &&
-                        ke->modifiers() == Qt::NoModifier)
+                    if (pressedW.matches(kCtxWatchEdit) ==
+                        QKeySequence::ExactMatch)
                     {
                         const QModelIndex editIx =
                             watchModel->indexFromItem(cur);
@@ -2741,6 +2839,32 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
                 }
             }
         }
+        {
+            LuaDebuggerCodeView *const focusCv = codeViewFromObject(obj);
+            if (focusCv)
+            {
+                if (focusCv->hasFocus() ||
+                    (focusCv->viewport() &&
+                     focusCv->viewport()->hasFocus()))
+                {
+                    const QKeySequence pCv = luaSeqFromKeyEvent(ke);
+                    const qint32 line = static_cast<qint32>(
+                        focusCv->textCursor().blockNumber() + 1);
+                    if (pCv.matches(kCtxToggleBreakpoint) ==
+                        QKeySequence::ExactMatch)
+                    {
+                        toggleBreakpointOnCodeViewLine(focusCv, line);
+                        return true;
+                    }
+                    if (eventLoop && pCv.matches(kCtxRunToLine) ==
+                                       QKeySequence::ExactMatch)
+                    {
+                        runToCurrentLineInPausedEditor(focusCv, line);
+                        return true;
+                    }
+                }
+            }
+        }
         /*
          * Esc must be handled here: QPlainTextEdit accepts Key_Escape without
          * propagating to QDialog::keyPressEvent, so reject() never runs.
@@ -2748,7 +2872,8 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
          * runs (unsaved-scripts prompt). Skip if a different modal dialog owns
          * the event (e.g. nested prompt).
          */
-        if (ke->key() == Qt::Key_Escape && ke->modifiers() == Qt::NoModifier)
+        const QKeySequence pressed = luaSeqFromKeyEvent(ke);
+        if (pressed.matches(Qt::Key_Escape) == QKeySequence::ExactMatch)
         {
             QWidget *const modal = QApplication::activeModalWidget();
             if (modal && modal != this)
@@ -2758,7 +2883,22 @@ bool LuaDebuggerDialog::eventFilter(QObject *obj, QEvent *event)
             handleEscapeKey();
             return true;
         }
-        const QKeySequence pressed = luaSeqFromKeyEvent(ke);
+        if (pressed.matches(QKeySequence::Quit) == QKeySequence::ExactMatch)
+        {
+            /*
+             * Keep Ctrl+Q semantics identical to main-window quit when the
+             * debugger has unsaved scripts: run the debugger close gate first
+             * (Save/Discard/Cancel), then re-deliver main close if accepted.
+             */
+            QWidget *const modal = QApplication::activeModalWidget();
+            if (modal && modal != this)
+            {
+                return QDialog::eventFilter(obj, event);
+            }
+            s_mainCloseDeferredByPause_ = true;
+            QMetaObject::invokeMethod(this, "close", Qt::QueuedConnection);
+            return true;
+        }
         if (triggerLuaDebuggerShortcuts(ui, pressed))
         {
             return true;
@@ -3739,7 +3879,7 @@ void LuaDebuggerDialog::onBreakpointContextMenuRequested(const QPoint &pos)
     if (ix.isValid())
     {
         removeAct = menu.addAction(tr("Remove"));
-        removeAct->setShortcut(QKeySequence(QKeySequence::Delete));
+        removeAct->setShortcut(QKeySequence::Delete);
     }
     QAction *removeAllAct = nullptr;
     if (breakpointsModel->rowCount() > 0)
@@ -3749,6 +3889,7 @@ void LuaDebuggerDialog::onBreakpointContextMenuRequested(const QPoint &pos)
             menu.addSeparator();
         }
         removeAllAct = menu.addAction(tr("Remove All Breakpoints"));
+        removeAllAct->setShortcut(kCtxRemoveAllBreakpoints);
     }
     if (menu.isEmpty())
     {
@@ -3782,28 +3923,34 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
     QMenu menu(this);
 
     QAction *undoAct = menu.addAction(tr("Undo"));
+    undoAct->setShortcut(QKeySequence::Undo);
     undoAct->setEnabled(codeView->document()->isUndoAvailable());
     connect(undoAct, &QAction::triggered, codeView, &QPlainTextEdit::undo);
 
     QAction *redoAct = menu.addAction(tr("Redo"));
+    redoAct->setShortcut(QKeySequence::Redo);
     redoAct->setEnabled(codeView->document()->isRedoAvailable());
     connect(redoAct, &QAction::triggered, codeView, &QPlainTextEdit::redo);
 
     menu.addSeparator();
 
     QAction *cutAct = menu.addAction(tr("Cut"));
+    cutAct->setShortcut(QKeySequence::Cut);
     cutAct->setEnabled(codeView->textCursor().hasSelection());
     connect(cutAct, &QAction::triggered, codeView, &QPlainTextEdit::cut);
 
     QAction *copyAct = menu.addAction(tr("Copy"));
+    copyAct->setShortcut(QKeySequence::Copy);
     copyAct->setEnabled(codeView->textCursor().hasSelection());
     connect(copyAct, &QAction::triggered, codeView, &QPlainTextEdit::copy);
 
     QAction *pasteAct = menu.addAction(tr("Paste"));
+    pasteAct->setShortcut(QKeySequence::Paste);
     pasteAct->setEnabled(codeView->canPaste());
     connect(pasteAct, &QAction::triggered, codeView, &QPlainTextEdit::paste);
 
     QAction *selAllAct = menu.addAction(tr("Select All"));
+    selAllAct->setShortcut(QKeySequence::SelectAll);
     connect(selAllAct, &QAction::triggered, codeView, &QPlainTextEdit::selectAll);
 
     menu.addSeparator();
@@ -3822,46 +3969,27 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
     if (state == -1)
     {
         QAction *addBp = menu.addAction(tr("Add Breakpoint"));
+        addBp->setShortcut(kCtxToggleBreakpoint);
         connect(addBp, &QAction::triggered,
                 [this, codeView, lineNumber]()
-                {
-                    wslua_debugger_add_breakpoint(
-                        codeView->getFilename().toUtf8().constData(),
-                        lineNumber);
-                    updateBreakpoints();
-                    codeView->updateBreakpointMarkers();
-                });
+                { toggleBreakpointOnCodeViewLine(codeView, lineNumber); });
     }
     else
     {
         QAction *removeBp = menu.addAction(tr("Remove Breakpoint"));
+        removeBp->setShortcut(kCtxToggleBreakpoint);
         connect(removeBp, &QAction::triggered,
                 [this, codeView, lineNumber]()
-                {
-                    wslua_debugger_remove_breakpoint(
-                        codeView->getFilename().toUtf8().constData(),
-                        lineNumber);
-                    updateBreakpoints();
-                    codeView->updateBreakpointMarkers();
-                });
+                { toggleBreakpointOnCodeViewLine(codeView, lineNumber); });
     }
 
     if (eventLoop)
     { // Only if paused
         QAction *runToLine = menu.addAction(tr("Run to this line"));
+        runToLine->setShortcut(kCtxRunToLine);
         connect(runToLine, &QAction::triggered,
                 [this, codeView, lineNumber]()
-                {
-                    ensureDebuggerEnabledForActiveBreakpoints();
-                    wslua_debugger_run_to_line(
-                        codeView->getFilename().toUtf8().constData(),
-                        lineNumber);
-                    if (eventLoop)
-                        eventLoop->quit();
-                    debuggerPaused = false;
-                    updateWidgets();
-                    clearPausedStateUi();
-                });
+                { runToCurrentLineInPausedEditor(codeView, lineNumber); });
     }
 
     // Evaluate selection if there is selected text
@@ -3881,7 +4009,7 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
                         showPathOnlyVariablePathWatchMessage();
                         return;
                     }
-                    insertNewWatchRow(t, false);
+                    addWatchFromSpec(t);
                 });
     }
 
@@ -4659,9 +4787,8 @@ void LuaDebuggerDialog::onVariablesContextMenuRequested(const QPoint &pos)
                                         ? varPath.left(48) +
                                                 QStringLiteral("…")
                                         : varPath));
-        addWatch->setShortcut(ui->actionAddWatch->shortcut());
         connect(addWatch, &QAction::triggered, this,
-                [this, varPath]() { addPathWatch(varPath); });
+                [this, varPath]() { addWatchFromSpec(varPath); });
     }
 
     menu.exec(variablesTree->viewport()->mapToGlobal(pos));
@@ -6545,6 +6672,7 @@ static void buildWatchContextMenu(
             menu.addSeparator();
             acts->removeAllWatches = menu.addAction(
                 QObject::tr("Remove All Watches"));
+            acts->removeAllWatches->setShortcut(kCtxWatchRemoveAll);
         }
         return;
     }
@@ -6553,12 +6681,14 @@ static void buildWatchContextMenu(
     {
         /* Watch root: Add Watch, then duplicate / edit, then the rest. */
         acts->duplicate = menu.addAction(QObject::tr("Duplicate Watch"));
+        acts->duplicate->setShortcut(kCtxWatchDuplicate);
         acts->editWatch = menu.addAction(QObject::tr("Edit Watch"));
-        acts->editWatch->setShortcut(QKeySequence(Qt::Key_F2));
+        acts->editWatch->setShortcut(kCtxWatchEdit);
         menu.addSeparator();
     }
 
     acts->copyValue = menu.addAction(QObject::tr("Copy Value"));
+    acts->copyValue->setShortcut(kCtxWatchCopyValue);
 
     if (item->parent() != nullptr)
     {
@@ -6567,11 +6697,12 @@ static void buildWatchContextMenu(
 
     menu.addSeparator();
     acts->remove = menu.addAction(QObject::tr("Remove"));
-    acts->remove->setShortcut(QKeySequence(QKeySequence::Delete));
+    acts->remove->setShortcut(QKeySequence::Delete);
     if (watchModel->rowCount() > 0)
     {
         acts->removeAllWatches = menu.addAction(
             QObject::tr("Remove All Watches"));
+        acts->removeAllWatches->setShortcut(kCtxWatchRemoveAll);
     }
 }
 
@@ -6607,18 +6738,7 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
     }
     if (chosen == acts.removeAllWatches)
     {
-        if (watchModel)
-        {
-            QList<QStandardItem *> all;
-            for (int i = 0; i < watchModel->rowCount(); ++i)
-            {
-                if (QStandardItem *r = watchModel->item(i, 0))
-                {
-                    all.append(r);
-                }
-            }
-            deleteWatchRows(all);
-        }
+        removeAllWatchTopLevelItems();
         return;
     }
     if (!item)
@@ -6626,47 +6746,9 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
         return;
     }
 
-    auto copyToClipboard = [](const QString &text)
-    {
-        if (QClipboard *clipboard = QGuiApplication::clipboard())
-        {
-            clipboard->setText(text);
-        }
-    };
-
-    /* Copy value works on both watch roots and sub-element rows — the
-     * value column is populated uniformly by applyWatchItemState (roots)
-     * and applyWatchChildRowPresentation (descendants).
-     *
-     * The tree's value column shows a truncated preview
-     * (WSLUA_DEBUGGER_PREVIEW_MAX_BYTES in the engine); for "Copy Value"
-     * we re-read the live, untruncated stringification via
-     * wslua_debugger_read_variable_value_full so long strings and
-     * Tvb / ByteArray dumps copy in full. If the debugger is not paused
-     * we fall back to whatever the tree currently shows — the engine has
-     * no live state to re-query then. */
     if (chosen == acts.copyValue)
     {
-        QString value;
-        const QString varPath = item->data(VariablePathRole).toString();
-        if (!varPath.isEmpty() && debuggerPaused &&
-            wslua_debugger_is_enabled() && wslua_debugger_is_paused())
-        {
-            char *val = nullptr;
-            char *err = nullptr;
-            if (wslua_debugger_read_variable_value_full(
-                    varPath.toUtf8().constData(), &val, &err))
-            {
-                value = QString::fromUtf8(val ? val : "");
-            }
-            g_free(val);
-            g_free(err);
-        }
-        if (value.isNull())
-        {
-            value = LuaDebuggerItems::rowColumnDisplayText(ix, 1);
-        }
-        copyToClipboard(value);
+        copyWatchValueForItem(item, ix);
         return;
     }
 
@@ -6718,47 +6800,157 @@ void LuaDebuggerDialog::onWatchContextMenuRequested(const QPoint &pos)
 
     if (chosen == acts.duplicate)
     {
-        auto *copy0 = new QStandardItem();
-        auto *copy1 = new QStandardItem();
-        copy0->setFlags(copy0->flags() | Qt::ItemIsEditable | Qt::ItemIsEnabled |
-                        Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-        copy1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-        copy0->setText(item->text());
-        {
-            const QModelIndex srcRow0 = watchModel->indexFromItem(item);
-            LuaDebuggerItems::setText(
-                watchModel, copy0, 1,
-                LuaDebuggerItems::rowColumnDisplayText(srcRow0, 1));
-        }
-        for (int r = WatchSpecRole; r <= WatchPendingNewRole; ++r)
-        {
-            copy0->setData(item->data(r), r);
-        }
-        copy0->setData(false, WatchPendingNewRole);
-        copy0->setData(item->data(VariablePathRole), VariablePathRole);
-        copy0->setData(item->data(VariableTypeRole), VariableTypeRole);
-        copy0->setData(item->data(VariableCanExpandRole),
-                       VariableCanExpandRole);
-        /* The duplicate is a brand-new row: it has no baseline yet, so the
-         * first refresh will not show it as "changed". No per-item role data
-         * to clear — baselines live on the dialog, keyed by spec+level, and
-         * the copy shares the spec of its source. */
-        {
-            auto *ph0 = new QStandardItem();
-            auto *ph1 = new QStandardItem();
-            ph0->setFlags(Qt::ItemIsEnabled);
-            ph1->setFlags(Qt::ItemIsEnabled);
-            copy0->appendRow({ph0, ph1});
-        }
-        watchModel->insertRow(item->row() + 1, {copy0, copy1});
-        refreshWatchDisplay();
+        duplicateWatchRootItem(item);
         return;
     }
 }
 
-void LuaDebuggerDialog::addPathWatch(const QString &debuggerPath)
+void LuaDebuggerDialog::copyWatchValueForItem(QStandardItem *item,
+                                              const QModelIndex &ix)
 {
-    insertNewWatchRow(debuggerPath, false);
+    auto copyToClipboard = [](const QString &s)
+    {
+        if (QClipboard *c = QGuiApplication::clipboard())
+        {
+            c->setText(s);
+        }
+    };
+    QString value;
+    const QString varPath = item->data(VariablePathRole).toString();
+    if (!varPath.isEmpty() && debuggerPaused && wslua_debugger_is_enabled() &&
+        wslua_debugger_is_paused())
+    {
+        char *val = nullptr;
+        char *err = nullptr;
+        if (wslua_debugger_read_variable_value_full(
+                varPath.toUtf8().constData(), &val, &err))
+        {
+            value = QString::fromUtf8(val ? val : "");
+        }
+        g_free(val);
+        g_free(err);
+    }
+    if (value.isNull())
+    {
+        value = LuaDebuggerItems::rowColumnDisplayText(ix, 1);
+    }
+    copyToClipboard(value);
+}
+
+void LuaDebuggerDialog::duplicateWatchRootItem(QStandardItem *item)
+{
+    if (!watchModel || !item || item->parent() != nullptr)
+    {
+        return;
+    }
+    auto *copy0 = new QStandardItem();
+    auto *copy1 = new QStandardItem();
+    copy0->setFlags(copy0->flags() | Qt::ItemIsEditable | Qt::ItemIsEnabled |
+                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+    copy1->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+    copy0->setText(item->text());
+    {
+        const QModelIndex srcRow0 = watchModel->indexFromItem(item);
+        LuaDebuggerItems::setText(
+            watchModel, copy0, 1,
+            LuaDebuggerItems::rowColumnDisplayText(srcRow0, 1));
+    }
+    for (int r = WatchSpecRole; r <= WatchPendingNewRole; ++r)
+    {
+        copy0->setData(item->data(r), r);
+    }
+    copy0->setData(false, WatchPendingNewRole);
+    copy0->setData(item->data(VariablePathRole), VariablePathRole);
+    copy0->setData(item->data(VariableTypeRole), VariableTypeRole);
+    copy0->setData(item->data(VariableCanExpandRole), VariableCanExpandRole);
+    /* The duplicate is a brand-new row: it has no baseline yet, so the
+     * first refresh will not show it as "changed". No per-item role data
+     * to clear — baselines live on the dialog, keyed by spec+level, and
+     * the copy shares the spec of its source. */
+    {
+        auto *ph0 = new QStandardItem();
+        auto *ph1 = new QStandardItem();
+        ph0->setFlags(Qt::ItemIsEnabled);
+        ph1->setFlags(Qt::ItemIsEnabled);
+        copy0->appendRow({ph0, ph1});
+    }
+    watchModel->insertRow(item->row() + 1, {copy0, copy1});
+    refreshWatchDisplay();
+}
+
+void LuaDebuggerDialog::removeAllWatchTopLevelItems()
+{
+    if (!watchModel)
+    {
+        return;
+    }
+    QList<QStandardItem *> all;
+    for (int i = 0; i < watchModel->rowCount(); ++i)
+    {
+        if (QStandardItem *r = watchModel->item(i, 0))
+        {
+            all.append(r);
+        }
+    }
+    deleteWatchRows(all);
+}
+
+void LuaDebuggerDialog::toggleBreakpointOnCodeViewLine(
+    LuaDebuggerCodeView *codeView, qint32 line)
+{
+    if (!codeView || line < 1)
+    {
+        return;
+    }
+    const QString file_path = codeView->getFilename();
+    const int32_t state = wslua_debugger_get_breakpoint_state(
+        file_path.toUtf8().constData(), line);
+    if (state == -1)
+    {
+        wslua_debugger_add_breakpoint(file_path.toUtf8().constData(), line);
+        ensureDebuggerEnabledForActiveBreakpoints();
+    }
+    else
+    {
+        wslua_debugger_remove_breakpoint(file_path.toUtf8().constData(), line);
+        syncDebuggerToggleWithCore();
+    }
+    updateBreakpoints();
+    const qint32 tabCount =
+        static_cast<qint32>(ui->codeTabWidget->count());
+    for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
+    {
+        LuaDebuggerCodeView *tabView = qobject_cast<LuaDebuggerCodeView *>(
+            ui->codeTabWidget->widget(static_cast<int>(tabIndex)));
+        if (tabView)
+        {
+            tabView->updateBreakpointMarkers();
+        }
+    }
+}
+
+void LuaDebuggerDialog::runToCurrentLineInPausedEditor(
+    LuaDebuggerCodeView *codeView, qint32 line)
+{
+    if (!codeView || !eventLoop || line < 1)
+    {
+        return;
+    }
+    ensureDebuggerEnabledForActiveBreakpoints();
+    wslua_debugger_run_to_line(codeView->getFilename().toUtf8().constData(),
+                              line);
+    if (eventLoop)
+    {
+        eventLoop->quit();
+    }
+    debuggerPaused = false;
+    updateWidgets();
+    clearPausedStateUi();
+}
+
+void LuaDebuggerDialog::addWatchFromSpec(const QString &watchSpec)
+{
+    insertNewWatchRow(watchSpec, false);
 }
 
 void LuaDebuggerDialog::showPathOnlyVariablePathWatchMessage()

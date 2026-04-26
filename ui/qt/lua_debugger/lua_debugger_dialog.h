@@ -248,6 +248,18 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void onEditorFind();
     /** @brief Show inline go-to-line bar. */
     void onEditorGoToLine();
+    /**
+     * @brief Copy a Watch row's value (untruncated when paused); shared with
+     *        context menu and keyboard shortcut.
+     */
+    void copyWatchValueForItem(QStandardItem *item, const QModelIndex &ix);
+    /** @brief Duplicate a top-level watch row. */
+    void duplicateWatchRootItem(QStandardItem *item);
+    /** @brief Remove every top-level watch row. */
+    void removeAllWatchTopLevelItems();
+    void toggleBreakpointOnCodeViewLine(LuaDebuggerCodeView *codeView,
+                                        qint32 line);
+    void runToCurrentLineInPausedEditor(LuaDebuggerCodeView *codeView, qint32 line);
     /** @brief Sync Watch selection when Variables row selection changes. */
     void onVariablesCurrentItemChanged(const QModelIndex &current,
                                        const QModelIndex &previous);
@@ -283,10 +295,9 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * captured "user intent" used to restore state on capture stop. */
     void reconcileWithLiveCaptureOnStartup();
 
-    /* True when the main window's closeEvent has rejected a close
-     * because the debugger was paused; consumed once the pause ends
-     * so the close request is honoured on a clean call stack. See
-     * handleMainCloseIfPaused(). */
+    /* True when a main-window close has been requested while the Lua
+     * debugger must arbitrate first (paused-stack safety or unsaved
+     * script prompt). Consumed by deliverDeferredMainCloseIfPending(). */
     static bool s_mainCloseDeferredByPause_;
 
     /* Re-deliver a main-window close that was deferred while paused.
@@ -606,8 +617,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     void rebuildWatchTreeFromSettings();
     /** @brief Refresh value/type (and expansion affordances) for all watch roots. */
     void refreshWatchDisplay();
-    /** @brief Add a path watch (e.g. from the Variables context menu). */
-    void addPathWatch(const QString &debuggerPath);
+    /** @brief Add a watch from an expression/path spec without opening the editor. */
+    void addWatchFromSpec(const QString &watchSpec);
     /**
      * @brief Insert a top-level watch row; optionally open the inline editor.
      *        The spec must be a Variables-style path (see
