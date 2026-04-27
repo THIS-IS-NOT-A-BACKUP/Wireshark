@@ -485,7 +485,7 @@ void LuaDebuggerCodeView::rebuildLineHighlights()
 {
     QList<QTextEdit::ExtraSelection> extraSelections;
 
-    /* Debugger paused line — fixed amber bar; independent of caret. */
+    /* Debugger paused line — amber bar; theme-specific (independent of caret). */
     if (pausedExecutionLine_ > 0)
     {
         QTextBlock pauseBlock = document()->findBlockByNumber(
@@ -495,8 +495,18 @@ void LuaDebuggerCodeView::rebuildLineHighlights()
             QTextCursor pauseCursor(pauseBlock);
             pauseCursor.movePosition(QTextCursor::StartOfBlock);
             QTextEdit::ExtraSelection pauseSel;
-            QColor dbgColor = QColor(QStringLiteral("#806F00"));
-            dbgColor.setAlpha(120);
+            QColor dbgColor;
+            if (resolveIsDarkTheme())
+            {
+                /* Dark: translucent deep gold (reads well on #1E1E1E). */
+                dbgColor = QColor(QStringLiteral("#806F00"));
+                dbgColor.setAlpha(120);
+            }
+            else
+            {
+                /* Light: pale warm amber; distinct from selection #ADD6FF. */
+                dbgColor = QColor(QStringLiteral("#FEF3C7"));
+            }
             pauseSel.format.setBackground(dbgColor);
             pauseSel.format.setProperty(QTextFormat::FullWidthSelection, true);
             pauseSel.cursor = pauseCursor;

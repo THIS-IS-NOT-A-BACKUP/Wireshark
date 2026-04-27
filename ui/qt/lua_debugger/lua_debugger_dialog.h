@@ -10,7 +10,9 @@
 #ifndef LUA_DEBUGGER_DIALOG_H
 #define LUA_DEBUGGER_DIALOG_H
 
+#include "epan/wslua/wslua_debugger.h"
 #include "geometry_state_dialog.h"
+
 #include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
@@ -32,8 +34,6 @@
 #include <QVariantMap>
 #include <QVector>
 
-#include "epan/wslua/wslua_debugger.h"
-
 struct _capture_session;
 
 class AccordionFrame;
@@ -43,6 +43,7 @@ class QAction;
 class QEvent;
 class QChildEvent;
 class QCloseEvent;
+class QShowEvent;
 
 namespace Ui
 {
@@ -180,6 +181,7 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * @param event Close request metadata from Qt.
      */
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *obj, QEvent *event) override;
     void childEvent(QChildEvent *event) override;
 
@@ -290,9 +292,10 @@ class LuaDebuggerDialog : public GeometryStateDialog
 
     /* Re-apply live-capture suppression at dialog startup so any
      * core-enable that leaked through constructor-time init paths
-     * (e.g. wslua_debugger_add_breakpoint() while applying saved
-     * settings) is forced back off without disturbing the previously
-     * captured "user intent" used to restore state on capture stop. */
+     * (e.g. ensureDebuggerEnabledForActiveBreakpoints after applying
+     * saved breakpoints) is forced back off without disturbing the
+     * previously captured "user intent" used to restore state on
+     * capture stop. */
     void reconcileWithLiveCaptureOnStartup();
 
     /* True when a main-window close has been requested while the Lua
@@ -335,8 +338,19 @@ class LuaDebuggerDialog : public GeometryStateDialog
     bool breakpointTabsPrimed;
     QIcon folderIcon;
     QIcon fileIcon;
+    /* True when this dialog is in a pause entry / nested event-loop UI
+     * (Continue/step, freeze, chrome). The C side reports an actual
+     * breakpoint with wslua_debugger_is_paused(); the two are usually
+     * aligned but are updated on different call paths. */
     bool debuggerPaused;
     bool reloadDeferred;
+    /* True while "Reload Lua Plugins" forces temporary reload chrome. */
+    bool reloadUiActive_ = false;
+    /* Snapshot checkbox state so we can restore prior chrome after reload. */
+    bool reloadUiSavedCheckboxChecked_ = false;
+    bool reloadUiSavedCheckboxEnabled_ = true;
+    /* Debugger enabled-state when reload was requested from this dialog. */
+    bool reloadUiRequestWasEnabled_ = false;
 
     /* Pause-freeze state: populated on outermost-frame pause entry,
      * consumed on outermost-frame resume. */
@@ -514,8 +528,24 @@ class LuaDebuggerDialog : public GeometryStateDialog
      * @return Canonical or cleaned absolute path string.
      */
     QString normalizedFilePath(const QString &file_path) const;
-    /** @brief Sync the checkbox UI state with the core debugger flag. */
+    /** @brief Sync only the checkbox checked/enabled state from core flags. */
     void syncDebuggerToggleWithCore();
+    /** @brief Refresh checkbox sync + all debugger state chrome/widgets. */
+    void refreshDebuggerStateUi();
+    /** @brief Enter transient "reload in progress" chrome when applicable. */
+    void enterReloadUiStateIfEnabled();
+    /** @brief Exit transient reload chrome and restore normal widget syncing. */
+    void exitReloadUiState();
+    /** @brief One combined status for window title and toolbar dot (single source
+     *        of truth for chrome, derived from the core and Qt members). */
+    enum class DebuggerUiStatus
+    {
+        Paused,
+        DisabledLiveCapture,
+        Disabled,
+        Running
+    };
+    DebuggerUiStatus currentDebuggerUiStatus() const;
     /** @brief Update the checkbox icon based on the enabled state. */
     void updateEnabledCheckboxIcon();
     /** @brief Enable the debugger if any active breakpoint requires it. */

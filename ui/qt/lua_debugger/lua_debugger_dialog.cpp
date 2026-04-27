@@ -9,11 +9,11 @@
 
 #include "lua_debugger_dialog.h"
 #include "accordion_frame.h"
-#include <QApplication>
 #include "lua_debugger_code_view.h"
 #include "lua_debugger_find_frame.h"
 #include "lua_debugger_goto_line_frame.h"
 #include "lua_debugger_pause_overlay.h"
+#include "lua_debugger_item_utils.h"
 #include "main_application.h"
 #include "main_window.h"
 #include "ui_lua_debugger_dialog.h"
@@ -25,6 +25,7 @@
 #endif
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QChildEvent>
 #include <QClipboard>
@@ -64,6 +65,7 @@
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QPointer>
+#include <QShowEvent>
 #include <QSet>
 #include <QStandardPaths>
 #include <QStyle>
@@ -79,10 +81,8 @@
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QTreeView>
-#include "lua_debugger_item_utils.h"
 #include <QTextStream>
 
-using namespace LuaDebuggerItems;
 #include <QVBoxLayout>
 #include <QToolButton>
 #include <QHBoxLayout>
@@ -99,6 +99,8 @@ using namespace LuaDebuggerItems;
 #include <ui/qt/utils/qt_ui_utils.h>
 
 #define LUA_DEBUGGER_SETTINGS_FILE "lua_debugger.json"
+
+using namespace LuaDebuggerItems;
 
 namespace
 {
@@ -396,10 +398,9 @@ void LuaDebuggerDialog::reconcileWithLiveCaptureOnStartup()
      *
      * What this method exists to fix: ctor init paths can re-enable the
      * core debugger after the callback already established suppression.
-     * Specifically, applyDialogSettings() -> wslua_debugger_add_breakpoint()
-     * unconditionally calls wslua_debugger_set_enabled(true), and
-     * updateBreakpoints() -> ensureDebuggerEnabledForActiveBreakpoints()
-     * can do the same. Without this reconciliation step, opening the
+     * Specifically, applyDialogSettings() → wslua_debugger_add_breakpoint,
+     * then updateBreakpoints() → ensureDebuggerEnabledForActiveBreakpoints
+     * can re-enable. Without this reconciliation step, opening the
      * dialog during a live capture would leave the core enabled despite
      * suppression being "active". */
     if (!s_captureSuppressionActive_)
@@ -414,11 +415,11 @@ void LuaDebuggerDialog::reconcileWithLiveCaptureOnStartup()
          * is what should be restored on capture stop. */
         wslua_debugger_set_enabled(false);
     }
-    /* Always refresh the toggle / icon: even if we didn't have to flip
-     * the core, the early syncDebuggerToggleWithCore() above happened
+    /* Always refresh state chrome: even if we didn't have to flip
+     * the core, the early state sync above happened
      * before applyDialogSettings()/updateBreakpoints() ran, so the
      * widgets may still reflect a transient state. */
-    syncDebuggerToggleWithCore();
+    refreshDebuggerStateUi();
 }
 
 void LuaDebuggerDialog::onCaptureSessionEvent(int event,
@@ -449,7 +450,7 @@ void LuaDebuggerDialog::onCaptureSessionEvent(int event,
 
     if (state_changed && _instance)
     {
-        _instance->syncDebuggerToggleWithCore();
+        _instance->refreshDebuggerStateUi();
     }
 #else
     Q_UNUSED(event);
@@ -1540,9 +1541,8 @@ void WatchRootDelegate::setModelData(QWidget *editor, QAbstractItemModel *model,
 LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     : GeometryStateDialog(parent), ui(new Ui::LuaDebuggerDialog),
       eventLoop(nullptr), enabledCheckBox(nullptr), breakpointTabsPrimed(false),
-      debuggerPaused(false), reloadDeferred(false),
-      pauseInputFilter(nullptr),
-      variablesSection(nullptr),
+      debuggerPaused(false), reloadDeferred(false), pauseInputFilter(nullptr),
+      stackSelectionLevel(0), variablesSection(nullptr),
       watchSection(nullptr), stackSection(nullptr), breakpointsSection(nullptr),
       filesSection(nullptr), evalSection(nullptr), settingsSection(nullptr),
       variablesTree(nullptr), variablesModel(nullptr), watchTree(nullptr),
@@ -1849,8 +1849,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     }
 
     refreshAvailableScripts();
-    syncDebuggerToggleWithCore();
-    updateWidgets();
+    refreshDebuggerStateUi();
 
     /*
      * Apply all settings from JSON file (theme, font, sections, splitters,
@@ -1864,9 +1863,8 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     installDescendantShortcutFilters();
 
     /* Reconcile with any live capture in progress AFTER all init paths
-     * that may have re-enabled the core debugger (applyDialogSettings ->
-     * wslua_debugger_add_breakpoint, updateBreakpoints ->
-     * ensureDebuggerEnabledForActiveBreakpoints, etc.). */
+     * that may have re-enabled the core debugger (applyDialogSettings
+     * / updateBreakpoints, including ensureDebuggerEnabledForActiveBreakpoints). */
     reconcileWithLiveCaptureOnStartup();
 }
 
@@ -2474,6 +2472,16 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
      * the close on the main window. Queued so it runs after the Lua
      * C stack above us has unwound. */
     deliverDeferredMainCloseIfPending();
+
+    /* If the debugger window was closed while paused, closeEvent ran with
+     * WA_DeleteOnClose temporarily disabled, so Qt hid the dialog but kept
+     * this instance alive until the pause loop unwound. Tear that hidden
+     * instance down now so the next open always starts from a fresh, fully
+     * initialized dialog state instead of reusing a half-torn-down one. */
+    if (!isVisible())
+    {
+        deleteLater();
+    }
 }
 
 void LuaDebuggerDialog::onContinue()
@@ -2573,9 +2581,10 @@ void LuaDebuggerDialog::onDebuggerToggled(bool checked)
          * applied automatically when the capture stops, and re-sync
          * the checkbox to the (still suppressed) core state. */
         s_captureSuppressionPrevEnabled_ = checked;
-        syncDebuggerToggleWithCore();
+        refreshDebuggerStateUi();
         return;
     }
+    wslua_debugger_set_user_explicitly_disabled(!checked);
     if (!checked && debuggerPaused)
     {
         onContinue();
@@ -2590,7 +2599,7 @@ void LuaDebuggerDialog::onDebuggerToggled(bool checked)
          * starts clean instead of comparing against a stale snapshot. */
         clearAllChangeBaselines();
     }
-    updateWidgets();
+    refreshDebuggerStateUi();
 }
 
 void LuaDebuggerDialog::reject()
@@ -2621,8 +2630,16 @@ void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
 
     /* Disable the debugger so breakpoints won't fire and reopen the
      * dialog after it has been closed. */
+    wslua_debugger_renounce_restore_after_reload();
+    /* "Stay off" is scoped to a visible dialog. Clear it so the next
+     * open can call ensureDebuggerEnabledForActiveBreakpoints() (same
+     * as pre–user-explicit–C–flag behavior: enable when BPs are active). */
+    wslua_debugger_set_user_explicitly_disabled(false);
     wslua_debugger_set_enabled(false);
     resumeDebuggerAndExitLoop();
+    debuggerPaused = false;
+    clearPausedStateUi();
+    refreshDebuggerStateUi();
 
     /* Tear the pause freeze down synchronously. If this closeEvent is
      * running because WiresharkMainWindow::closeEvent called
@@ -2651,6 +2668,15 @@ void LuaDebuggerDialog::closeEvent(QCloseEvent *event)
      * QWidget::closeEvent only accepts the event so the window can close.
      */
     QWidget::closeEvent(event);
+}
+
+void LuaDebuggerDialog::showEvent(QShowEvent *event)
+{
+    GeometryStateDialog::showEvent(event);
+    /* Re-apply "enable if active breakpoints" on each show; closeEvent
+     * clears user-explicit-disable so this matches pre–C–flag behavior. */
+    ensureDebuggerEnabledForActiveBreakpoints();
+    updateWidgets();
 }
 
 void LuaDebuggerDialog::handleEscapeKey()
@@ -3027,7 +3053,7 @@ void LuaDebuggerDialog::updateBreakpoints()
     {
         ensureDebuggerEnabledForActiveBreakpoints();
     }
-    syncDebuggerToggleWithCore();
+    refreshDebuggerStateUi();
 
     if (collectInitialFiles)
     {
@@ -3440,7 +3466,7 @@ LuaDebuggerCodeView *LuaDebuggerDialog::loadFile(const QString &file_path)
             {
                 wslua_debugger_remove_breakpoint(file_path.toUtf8().constData(),
                                                  line);
-                syncDebuggerToggleWithCore();
+                refreshDebuggerStateUi();
             }
             updateBreakpoints();
             // Update all views as breakpoint might affect them (unlikely but
@@ -3746,7 +3772,7 @@ void LuaDebuggerDialog::onBreakpointItemChanged(QStandardItem *item)
      * deferred via s_captureSuppressionPrevEnabled_) would silently
      * re-enable the debugger when the capture ends. Just refresh the UI to
      * mirror the (unchanged) core state. */
-    syncDebuggerToggleWithCore();
+    refreshDebuggerStateUi();
 
     const qint32 tabCount = static_cast<qint32>(ui->codeTabWidget->count());
     for (qint32 tabIndex = 0; tabIndex < tabCount; ++tabIndex)
@@ -4119,6 +4145,7 @@ void LuaDebuggerDialog::onLuaReloadCallback()
          * "changed" simply because the world was rebuilt.
          */
         dialog->clearAllChangeBaselines();
+        dialog->enterReloadUiStateIfEnabled();
 
         /*
          * If the debugger was paused, the UI layer called
@@ -4131,6 +4158,7 @@ void LuaDebuggerDialog::onLuaReloadCallback()
         {
             dialog->debuggerPaused = false;
             dialog->clearPausedStateUi();
+            dialog->refreshDebuggerStateUi();
             dialog->reloadDeferred = true;
             dialog->eventLoop->quit();
             return;
@@ -4165,6 +4193,7 @@ void LuaDebuggerDialog::onLuaReloadCallback()
                 }
             }
         }
+        dialog->refreshDebuggerStateUi();
     }
 }
 
@@ -4180,6 +4209,7 @@ void LuaDebuggerDialog::onLuaPostReloadCallback()
     LuaDebuggerDialog *dialog = _instance;
     if (dialog)
     {
+        dialog->exitReloadUiState();
         /*
          * Refresh the file tree with newly loaded scripts.
          * This is the correct place to do it because we're called
@@ -4947,6 +4977,14 @@ void LuaDebuggerDialog::syncDebuggerToggleWithCore()
     {
         return;
     }
+    if (reloadUiActive_)
+    {
+        bool previousState = enabledCheckBox->blockSignals(true);
+        enabledCheckBox->setChecked(true);
+        enabledCheckBox->setEnabled(false);
+        enabledCheckBox->blockSignals(previousState);
+        return;
+    }
     const bool debuggerEnabled = wslua_debugger_is_enabled();
     bool previousState = enabledCheckBox->blockSignals(true);
     enabledCheckBox->setChecked(debuggerEnabled);
@@ -4956,7 +4994,84 @@ void LuaDebuggerDialog::syncDebuggerToggleWithCore()
      * state, and the user gets an obvious "this is intentional, not
      * me" affordance. The disabled icon's tooltip explains why. */
     enabledCheckBox->setEnabled(!isSuppressedByLiveCapture());
+}
+
+void LuaDebuggerDialog::refreshDebuggerStateUi()
+{
+    /* Full reconciliation is centralized in updateWidgets() (which syncs
+     * the checkbox to the C core, then repaints status chrome). */
     updateWidgets();
+}
+
+void LuaDebuggerDialog::enterReloadUiStateIfEnabled()
+{
+    if (!enabledCheckBox || reloadUiActive_)
+    {
+        return;
+    }
+
+    bool shouldActivate = reloadUiRequestWasEnabled_;
+    if (!shouldActivate)
+    {
+        shouldActivate = enabledCheckBox->isChecked();
+    }
+    if (!shouldActivate)
+    {
+        return;
+    }
+
+    reloadUiSavedCheckboxChecked_ = enabledCheckBox->isChecked();
+    reloadUiSavedCheckboxEnabled_ = enabledCheckBox->isEnabled();
+    reloadUiActive_ = true;
+
+    bool previousState = enabledCheckBox->blockSignals(true);
+    enabledCheckBox->setChecked(true);
+    enabledCheckBox->setEnabled(false);
+    enabledCheckBox->blockSignals(previousState);
+
+    updateWidgets();
+}
+
+void LuaDebuggerDialog::exitReloadUiState()
+{
+    reloadUiRequestWasEnabled_ = false;
+    if (!enabledCheckBox || !reloadUiActive_)
+    {
+        return;
+    }
+
+    bool previousState = enabledCheckBox->blockSignals(true);
+    enabledCheckBox->setChecked(reloadUiSavedCheckboxChecked_);
+    enabledCheckBox->setEnabled(reloadUiSavedCheckboxEnabled_);
+    enabledCheckBox->blockSignals(previousState);
+
+    reloadUiActive_ = false;
+    refreshDebuggerStateUi();
+}
+
+LuaDebuggerDialog::DebuggerUiStatus
+LuaDebuggerDialog::currentDebuggerUiStatus() const
+{
+    if (reloadUiActive_)
+    {
+        return DebuggerUiStatus::Running;
+    }
+    const bool debuggerEnabled = wslua_debugger_is_enabled();
+    const bool showPausedChrome = wslua_debugger_is_paused() ||
+                                  (debuggerEnabled && debuggerPaused);
+    if (showPausedChrome)
+    {
+        return DebuggerUiStatus::Paused;
+    }
+    if (!debuggerEnabled)
+    {
+        if (isSuppressedByLiveCapture())
+        {
+            return DebuggerUiStatus::DisabledLiveCapture;
+        }
+        return DebuggerUiStatus::Disabled;
+    }
+    return DebuggerUiStatus::Running;
 }
 
 void LuaDebuggerDialog::updateEnabledCheckboxIcon()
@@ -4965,8 +5080,6 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
     {
         return;
     }
-
-    const bool debuggerEnabled = wslua_debugger_is_enabled();
 
     // Create a colored circle icon to indicate enabled/disabled state.
     // Render at the screen's native pixel density so the circle stays
@@ -4979,36 +5092,36 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
 
+    const DebuggerUiStatus uiStatus = currentDebuggerUiStatus();
     QColor fill;
-    if (debuggerEnabled && debuggerPaused)
+    switch (uiStatus)
     {
+    case DebuggerUiStatus::Paused:
         // Yellow circle for paused
         fill = QColor("#FFC107");
         enabledCheckBox->setToolTip(
             tr("Debugger is paused. Uncheck to disable."));
-    }
-    else if (debuggerEnabled)
-    {
+        break;
+    case DebuggerUiStatus::Running:
         // Green circle for enabled
         fill = QColor("#28A745");
         enabledCheckBox->setToolTip(
             tr("Debugger is enabled. Uncheck to disable."));
-    }
-    else if (isSuppressedByLiveCapture())
-    {
+        break;
+    case DebuggerUiStatus::DisabledLiveCapture:
         // Red circle with a "locked by live capture" tooltip so
         // the user understands the toggle is inert by design.
         fill = QColor("#DC3545");
         enabledCheckBox->setToolTip(
             tr("Debugger is disabled while a live capture is running. "
                "Stop the capture to re-enable."));
-    }
-    else
-    {
+        break;
+    case DebuggerUiStatus::Disabled:
         // Gray circle for disabled
         fill = QColor("#808080");
         enabledCheckBox->setToolTip(
             tr("Debugger is disabled. Check to enable."));
+        break;
     }
 
     // Thin darker rim gives the circle definition on both light and dark backgrounds.
@@ -5033,7 +5146,7 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
 
 void LuaDebuggerDialog::updateStatusLabel()
 {
-    const bool debuggerEnabled = wslua_debugger_is_enabled();
+    const DebuggerUiStatus uiStatus = currentDebuggerUiStatus();
     /* [*] is required for setWindowModified() to show an unsaved
      * indicator in the title. */
     QString title = QStringLiteral("[*]%1").arg(tr("Lua Debugger"));
@@ -5045,24 +5158,20 @@ void LuaDebuggerDialog::updateStatusLabel()
         title += QString(" - ");
 #endif
 
-    if (!debuggerEnabled)
+    switch (uiStatus)
     {
-        if (isSuppressedByLiveCapture())
-        {
-            title += tr("Disabled (live capture)");
-        }
-        else
-        {
-            title += tr("Disabled");
-        }
-    }
-    else if (debuggerPaused)
-    {
+    case DebuggerUiStatus::Paused:
         title += tr("Paused");
-    }
-    else
-    {
+        break;
+    case DebuggerUiStatus::DisabledLiveCapture:
+        title += tr("Disabled (live capture)");
+        break;
+    case DebuggerUiStatus::Disabled:
+        title += tr("Disabled");
+        break;
+    case DebuggerUiStatus::Running:
         title += tr("Running");
+        break;
     }
 
     setWindowTitle(title);
@@ -5080,6 +5189,13 @@ void LuaDebuggerDialog::updateContinueActionState()
 
 void LuaDebuggerDialog::updateWidgets()
 {
+#ifndef QT_NO_DEBUG
+    if (wslua_debugger_is_paused())
+    {
+        Q_ASSERT(wslua_debugger_is_enabled());
+    }
+#endif
+    syncDebuggerToggleWithCore();
     updateEnabledCheckboxIcon();
     updateStatusLabel();
     updateContinueActionState();
@@ -5089,6 +5205,13 @@ void LuaDebuggerDialog::updateWidgets()
 
 void LuaDebuggerDialog::ensureDebuggerEnabledForActiveBreakpoints()
 {
+    /* wslua_debugger owns enable *policy*; live capture gating is owned here
+     * (s_captureSuppression*): epan has no knowledge of the capture path. */
+    if (!wslua_debugger_may_auto_enable_for_breakpoints())
+    {
+        refreshDebuggerStateUi();
+        return;
+    }
     if (isSuppressedByLiveCapture())
     {
         /* A breakpoint was just (re)armed during a live capture.
@@ -5098,13 +5221,13 @@ void LuaDebuggerDialog::ensureDebuggerEnabledForActiveBreakpoints()
          * us packets is exactly what the suppression exists to
          * prevent. */
         s_captureSuppressionPrevEnabled_ = true;
-        syncDebuggerToggleWithCore();
+        refreshDebuggerStateUi();
         return;
     }
     if (!wslua_debugger_is_enabled())
     {
         wslua_debugger_set_enabled(true);
-        syncDebuggerToggleWithCore();
+        refreshDebuggerStateUi();
     }
 }
 
@@ -5131,6 +5254,7 @@ void LuaDebuggerDialog::onOpenFile()
 
 void LuaDebuggerDialog::onReloadLuaPlugins()
 {
+    reloadUiRequestWasEnabled_ = false;
     if (!ensureUnsavedChangesHandled(tr("Reload Lua Plugins")))
     {
         return;
@@ -5148,6 +5272,7 @@ void LuaDebuggerDialog::onReloadLuaPlugins()
     {
         return;
     }
+    reloadUiRequestWasEnabled_ = wslua_debugger_is_enabled();
 
     /*
      * If the debugger is currently paused, disable it (which continues
@@ -6913,7 +7038,7 @@ void LuaDebuggerDialog::toggleBreakpointOnCodeViewLine(
     else
     {
         wslua_debugger_remove_breakpoint(file_path.toUtf8().constData(), line);
-        syncDebuggerToggleWithCore();
+        refreshDebuggerStateUi();
     }
     updateBreakpoints();
     const qint32 tabCount =
@@ -7331,6 +7456,9 @@ void LuaDebuggerDialog::applyDialogSettings()
     if (watchSection)
         watchSection->setExpanded(
             settings_.value(SettingsKeys::SectionWatch, true).toBool());
+    /* Match Qt enable intent to C: persist active breakpoints, then
+     * enable only if the user is not in "disabled" mode. */
+    ensureDebuggerEnabledForActiveBreakpoints();
 }
 
 void LuaDebuggerDialog::storeDialogSettings()
