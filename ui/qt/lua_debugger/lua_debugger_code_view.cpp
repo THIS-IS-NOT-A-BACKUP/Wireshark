@@ -395,6 +395,12 @@ LuaDebuggerCodeView::LuaDebuggerCodeView(QWidget *parent)
     : QPlainTextEdit(parent), lineNumberArea(new LineNumberArea(this)),
       syntaxHighlighter(nullptr)
 {
+    /* Gutter tooltip surfaces both click affordances; the Shift+click
+     * behavior is otherwise non-discoverable. */
+    lineNumberArea->setToolTip(
+        tr("Click: add or remove breakpoint\n"
+           "Shift+click: on an empty line, add a disabled breakpoint;\n"
+           "on an existing breakpoint, toggle its active state"));
     syntaxHighlighter = new LuaSyntaxHighlighter(document());
 
     connect(this, &LuaDebuggerCodeView::blockCountChanged, this,
@@ -761,10 +767,6 @@ void LuaDebuggerCodeView::lineNumberAreaPaintEvent(QPaintEvent *event)
                     QColor circleColor = (state == 1)
                                              ? QColor("#DC3545")
                                              : QColor("#808080");
-                    if (pausedHere && state == 1)
-                    {
-                        circleColor.setAlpha(80);
-                    }
                     painter.setBrush(circleColor);
                     /* 1px darker rim matches the Enable-checkbox state
                      * indicator in the toolbar
@@ -832,8 +834,11 @@ void LineNumberArea::mousePressEvent(QMouseEvent *event)
         {
             if (click_pos.y() >= top && click_pos.y() <= bottom)
             {
+                const bool toggleActive =
+                    (event->modifiers() & Qt::ShiftModifier) != 0;
                 emit codeEditor->breakpointToggled(codeEditor->filename,
-                                                   blockNumber + 1);
+                                                   blockNumber + 1,
+                                                   toggleActive);
                 codeEditor->viewport()->update();
                 update();
                 break;
