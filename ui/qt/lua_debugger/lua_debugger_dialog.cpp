@@ -959,6 +959,47 @@ static QString watchSpecFromChangeKey(const QString &key)
 }
 
 /**
+ * Strip the synthetic @c "watch:N:" prefix Lua prepends to runtime errors
+ * raised inside an expression chunk. The C side loads the chunk with the
+ * name @c "=watch", so @c assert / @c error messages come back as
+ * @c "watch:1: <user message>". The chunk is always one line and the row's
+ * red error chrome already conveys "watch failed", so the prefix is pure
+ * noise in the *Value* cell — most painfully in predicate watches where
+ * the user-supplied message is the entire payload of the row. The full,
+ * unstripped string is preserved in the cell tooltip for anyone who wants
+ * the location.
+ *
+ * Path-watch errors ("Path not found: …") do not start with @c "watch:",
+ * so they are returned unchanged.
+ */
+static QString stripWatchExpressionErrorPrefix(const QString &errStr)
+{
+    static const QLatin1String kPrefix("watch:");
+    if (!errStr.startsWith(kPrefix))
+    {
+        return errStr;
+    }
+    qsizetype i = kPrefix.size();
+    const qsizetype digitStart = i;
+    while (i < errStr.size() && errStr.at(i).isDigit())
+    {
+        ++i;
+    }
+    if (i == digitStart || i >= errStr.size() ||
+        errStr.at(i) != QLatin1Char(':'))
+    {
+        return errStr;
+    }
+    ++i;
+    while (i < errStr.size() &&
+           (errStr.at(i) == QLatin1Char(' ') || errStr.at(i) == QLatin1Char('\t')))
+    {
+        ++i;
+    }
+    return errStr.mid(i);
+}
+
+/**
  * Lookup / compare in one place. Returns true when @a key was recorded in
  * @a baseline with a different value, or (when @a flashNew is set) when @a
  * key was absent from @a baseline but @a baseline itself is non-empty —
@@ -1023,6 +1064,27 @@ static QString variableTreeChildPath(const QString &parentPath,
         return parentPath + nameText;
     }
     return parentPath + QLatin1Char('.') + nameText;
+}
+
+/**
+ * Subpath under @a parentSubpath addressed at @a nameText for an expression
+ * watch. Unlike the Variables-tree path (variableTreeChildPath), the
+ * top-level segment is anchored to "the expression result" (parentSubpath
+ * is empty) rather than a Locals/Upvalues/Globals section, so a string
+ * key always carries a leading @c '.' even at depth 1.
+ *
+ * The result is consumed by @c wslua_debugger_traverse_subpath_on_top via
+ * @c wslua_debugger_watch_expr_get_variables; that helper accepts subpaths
+ * starting with @c '.' or @c '['.
+ */
+static QString expressionWatchChildSubpath(const QString &parentSubpath,
+                                           const QString &nameText)
+{
+    if (nameText.startsWith(QLatin1Char('[')))
+    {
+        return parentSubpath + nameText;
+    }
+    return parentSubpath + QLatin1Char('.') + nameText;
 }
 
 /** Globals subtree is sorted by name; Locals/Upvalues keep engine order. */
@@ -1781,6 +1843,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
       evalInputEdit(nullptr), evalOutputEdit(nullptr), evalButton(nullptr),
       evalClearButton(nullptr), themeComboBox(nullptr), watchRemoveButton_(nullptr),
       watchRemoveAllButton_(nullptr), breakpointHeaderToggleButton_(nullptr),
+      breakpointHeaderRemoveButton_(nullptr),
       breakpointHeaderRemoveAllButton_(nullptr)
 {
     _instance = this;
@@ -1970,6 +2033,9 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     connect(breakpointsModel, &QAbstractItemModel::modelReset, this, [this]() {
         updateBreakpointHeaderButtonState();
     });
+    connect(breakpointsTree->selectionModel(),
+            &QItemSelectionModel::selectionChanged,
+            this, [this]() { updateBreakpointHeaderButtonState(); });
     updateBreakpointHeaderButtonState();
 
     QHeaderView *breakpointHeader = breakpointsTree->header();
@@ -2203,8 +2269,11 @@ void LuaDebuggerDialog::createCollapsibleSections()
     // --- Watch Section ---
     watchSection = new CollapsibleSection(tr("Watch"), this);
     watchSection->setToolTip(
-        tr("<p>Each row is a <b>Variables-tree path</b>, not a Lua "
-           "expression. Accepted forms:</p>"
+        tr("<p>Each row is either a <b>Variables-tree path</b> or a "
+           "<b>Lua expression</b>; the panel auto-detects which based on "
+           "the syntax you type.</p>"
+           "<p><b>Path watches</b> &mdash; resolved against the paused "
+           "frame's locals, upvalues, and globals:</p>"
            "<ul>"
            "<li>Section-qualified: <code>Locals.<i>name</i></code>, "
            "<code>Upvalues.<i>name</i></code>, "
@@ -2221,15 +2290,26 @@ void LuaDebuggerDialog::createCollapsibleSections()
            "(<code>[1]</code>, <code>[-1]</code>, <code>[0x1F]</code>), "
            "boolean (<code>[true]</code>), or short-literal string "
            "(<code>[\"key\"]</code>, <code>['k']</code>). Depth is capped "
-           "at 32 segments. Use the <b>Evaluate</b> panel below for "
-           "arbitrary Lua expressions.</p>"
+           "at 32 segments.</p>"
+           "<p><b>Expression watches</b> &mdash; anything that is not a "
+           "plain path (operators, function/method calls, table "
+           "constructors, length <code>#</code>, comparisons, &hellip;) is "
+           "evaluated as Lua against the same locals/upvalues/globals. "
+           "<b>You do not need a leading <code>=</code> or <code>return</code></b>; "
+           "value-returning expressions auto-return their value. "
+           "Examples: <code>#packets</code>, <code>tbl[i + 1]</code>, "
+           "<code>obj:method()</code>, <code>a == b</code>, "
+           "<code>{x, y}</code>. Tables produced by an expression are "
+           "expandable, and children re-resolve on every pause.</p>"
            "<p>Values are only read while the debugger is "
            "<b>paused</b>; otherwise the Value column shows a muted "
            "em dash. Values that differ from the previous pause are "
            "drawn in a <b>bold accent color</b>, and briefly flash on "
            "the pause that introduced the change.</p>"
            "<p>Double-click or press <b>F2</b> to edit a row; "
-           "<b>Delete</b> removes it; drag rows to reorder.</p>"));
+           "<b>Delete</b> removes it; drag rows to reorder. Use the "
+           "<b>Evaluate</b> panel below to run statements with side "
+           "effects (assignments, blocks, loops).</p>"));
     watchTree = new WatchTreeWidget(this);
     watchModel = new WatchItemModel(this);
     watchModel->setColumnCount(2);
@@ -2344,6 +2424,7 @@ void LuaDebuggerDialog::createCollapsibleSections()
     breakpointsSection->setContentWidget(breakpointsTree);
     {
         const int hdrH = breakpointsSection->titleButtonHeight();
+        const QFont hdrTitleFont = breakpointsSection->titleButtonFont();
         auto *const bpHeaderBtnRow = new QWidget(breakpointsSection);
         auto *const bpHeaderBtnLayout = new QHBoxLayout(bpHeaderBtnRow);
         bpHeaderBtnLayout->setContentsMargins(0, 0, 0, 0);
@@ -2360,6 +2441,17 @@ void LuaDebuggerDialog::createCollapsibleSections()
         bpTglBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
         bpTglBtn->setEnabled(false);
         bpTglBtn->setToolTip(tr("No breakpoints"));
+        QToolButton *const bpRemBtn = new QToolButton(bpHeaderBtnRow);
+        breakpointHeaderRemoveButton_ = bpRemBtn;
+        styleLuaDebuggerHeaderPlusMinusButton(bpRemBtn, hdrH, hdrTitleFont);
+        bpRemBtn->setText(kLuaDbgHeaderMinus);
+        bpRemBtn->setAutoRaise(true);
+        bpRemBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
+        bpRemBtn->setEnabled(false);
+        bpRemBtn->setToolTip(
+            tr("Remove Breakpoint (%1)")
+                .arg(QKeySequence(QKeySequence::Delete)
+                         .toString(QKeySequence::NativeText)));
         QToolButton *const bpRemAllBtn = new QToolButton(bpHeaderBtnRow);
         breakpointHeaderRemoveAllButton_ = bpRemAllBtn;
         styleLuaDebuggerHeaderRemoveAllButton(bpRemAllBtn, hdrH);
@@ -2372,9 +2464,12 @@ void LuaDebuggerDialog::createCollapsibleSections()
                     kCtxRemoveAllBreakpoints.toString(
                         QKeySequence::NativeText)));
         bpHeaderBtnLayout->addWidget(bpTglBtn);
+        bpHeaderBtnLayout->addWidget(bpRemBtn);
         bpHeaderBtnLayout->addWidget(bpRemAllBtn);
         connect(bpTglBtn, &QToolButton::clicked, this,
                 &LuaDebuggerDialog::toggleAllBreakpointsActiveFromHeader);
+        connect(bpRemBtn, &QToolButton::clicked, this,
+                [this]() { removeSelectedBreakpoints(); });
         connect(bpRemAllBtn, &QToolButton::clicked, this,
                 &LuaDebuggerDialog::onClearBreakpoints);
         breakpointsSection->setHeaderTrailingWidget(bpHeaderBtnRow);
@@ -4512,13 +4607,12 @@ void LuaDebuggerDialog::onCodeViewContextMenu(const QPoint &pos)
             connect(addWatch, &QAction::triggered,
                     [this, watchSpec]()
                     {
-                        const QString t = watchSpec.trimmed();
-                        if (!watchSpecUsesPathResolution(t))
-                        {
-                            showPathOnlyVariablePathWatchMessage();
-                            return;
-                        }
-                        addWatchFromSpec(t);
+                        /* Both path watches (Locals.x, Globals.t.k) and
+                         * expression watches (e.g. pinfo.src:tostring(),
+                         * #packets) are accepted; the watch panel decides
+                         * how to evaluate based on whether the text
+                         * validates as a Variables-tree path. */
+                        addWatchFromSpec(watchSpec.trimmed());
                     });
         }
     }
@@ -6068,22 +6162,20 @@ void LuaDebuggerDialog::rebuildWatchTreeFromSettings()
     watchChildBaseline_.clear();
     watchChildCurrent_.clear();
     /* The watch list on disk is a flat array of canonical spec strings.
-     * Values that are not a valid path watch, or that are not strings, are
-     * silently dropped (see wslua_debugger_watch_spec_uses_path_resolution). */
+     * Both path watches (resolved against the Variables tree) and
+     * expression watches (re-evaluated as Lua on every pause) round-trip
+     * through this list; only empty / container entries are dropped. */
     const QVariantList rawList =
         settings_.value(QString::fromUtf8(SettingsKeys::Watches)).toList();
     for (const QVariant &entry : rawList)
     {
         /* Container QVariants (QVariantMap / QVariantList) toString() to an
          * empty string and are dropped here. Scalar-like values (numbers,
-         * booleans) convert to a non-empty string but are then rejected by
-         * watchSpecUsesPathResolution below. */
+         * booleans) convert to a non-empty string and are kept as
+         * expression watches; they will simply produce a Lua error on
+         * evaluation if they are not valid expressions. */
         const QString spec = entry.toString();
         if (spec.isEmpty())
-        {
-            continue;
-        }
-        if (!watchSpecUsesPathResolution(spec))
         {
             continue;
         }
@@ -6323,6 +6415,13 @@ void LuaDebuggerDialog::updateBreakpointHeaderButtonState()
                 luaDbgBreakpointHeaderIconForMode(editorFont, mode, side, dpr);
         }
         breakpointHeaderToggleButton_->setIcon(bpHeaderIconCache_[modeIdx]);
+    }
+    if (breakpointHeaderRemoveButton_)
+    {
+        QItemSelectionModel *const sm =
+            breakpointsTree ? breakpointsTree->selectionModel() : nullptr;
+        breakpointHeaderRemoveButton_->setEnabled(
+            sm && !sm->selectedRows().isEmpty());
     }
     if (breakpointHeaderRemoveAllButton_)
     {
@@ -6932,37 +7031,8 @@ void LuaDebuggerDialog::applyWatchItemEmpty(QStandardItem *item,
     LuaDebuggerItems::setToolTip(
         watchModel, item, 1,
         capWatchTooltipText(
-            tr("No watch path entered yet — enter a variable path in the "
-               "Watch column to see a value here.")));
-    applyChangedVisuals(item,
-                        /*changed=*/false, /*isPauseEntryRefresh=*/false);
-    while (item->rowCount() > 0)
-    {
-        item->removeRow(0);
-    }
-}
-
-void LuaDebuggerDialog::applyWatchItemNonPath(QStandardItem *item,
-                                              const QString &watchTipExtra)
-{
-    if (!watchModel)
-    {
-        return;
-    }
-    /* Defensive: normal entry points reject non-path specs before a row is
-     * created, but hand-edited lua_debugger.json could still supply one. */
-    applyWatchFilterErrorChrome(item, watchTree);
-    setText(watchModel, item, 1, tr("Not a variable path"));
-    item->setToolTip(
-        capWatchTooltipText(
-            QStringLiteral("%1\n%2")
-                .arg(item->text(),
-                     tr("Use a Variables-style path (e.g. Locals.x, "
-                        "Globals.t.k, t[1], t[\"k\"], or a single identifier).")) +
-                watchTipExtra));
-    LuaDebuggerItems::setToolTip(
-        watchModel, item, 1,
-        capWatchTooltipText(tr("Only variable paths can be watched.")));
+            tr("Enter a variable path (e.g. Locals.x, Globals.t.k) or a "
+               "Lua expression in the Watch column to see a value here.")));
     applyChangedVisuals(item,
                         /*changed=*/false, /*isPauseEntryRefresh=*/false);
     while (item->rowCount() > 0)
@@ -7032,16 +7102,27 @@ void LuaDebuggerDialog::applyWatchItemError(QStandardItem *item,
         return;
     }
     applyWatchFilterErrorChrome(item, watchTree);
-    setText(watchModel, item, 1, errStr);
+    /* The cell text shows a tidied error: for expression watches the
+     * synthetic "watch:N: " prefix is stripped (the row's red chrome
+     * already says "watch failed", and the chunk is always one line);
+     * path-watch errors pass through unchanged. The tooltip below keeps
+     * the full untouched string for diagnostics. */
+    const QString cellErrStr = stripWatchExpressionErrorPrefix(errStr);
+    setText(watchModel, item, 1, cellErrStr);
     const QString ttSuf = tr("Type: %1").arg(tr("error"));
     item->setToolTip(
         capWatchTooltipText(
             QStringLiteral("%1\n%2").arg(item->text(), ttSuf) + watchTipExtra));
+    /* "Could not evaluate watch" works for both flavors: a path watch
+     * fails to resolve or an expression watch fails to compile / runs
+     * into a Lua error. The detailed @a errStr below carries the
+     * specific reason (e.g. "Path not found", "watch:1: ...") so the
+     * generic header just acknowledges that a value could not be read. */
     LuaDebuggerItems::setToolTip(
         watchModel, item, 1,
         capWatchTooltipText(
             QStringLiteral("%1\n%2\n%3")
-                .arg(tr("Invalid watch path."), errStr, ttSuf)));
+                .arg(tr("Could not evaluate watch."), errStr, ttSuf)));
     applyChangedVisuals(item,
                         /*changed=*/false, /*isPauseEntryRefresh=*/false);
     /* An error invalidates the comparison: drop baselines for this root so
@@ -7123,6 +7204,76 @@ void LuaDebuggerDialog::applyWatchItemSuccess(QStandardItem *item,
     }
 }
 
+void LuaDebuggerDialog::applyWatchItemExpression(
+    QStandardItem *item, const QString &spec, const char *val,
+    const char *typ, bool can_expand, const QString &watchTipExtra)
+{
+    if (item->parent() == nullptr)
+    {
+        /* Expression watches have no Variables-tree counterpart; clear
+         * the role so leftover state from a prior path-style spec on the
+         * same row does not leak into Variables-tree selection sync. */
+        item->setData(QVariant(), VariablePathRole);
+    }
+    if (!watchModel)
+    {
+        return;
+    }
+    const QString v = val ? QString::fromUtf8(val) : QString();
+    const QString typStr = typ ? QString::fromUtf8(typ) : QString();
+    setText(watchModel, item, 1, v);
+
+    const QString exprNote =
+        tr("Expression — re-evaluated on every pause.");
+    const QString ttSuf =
+        typStr.isEmpty() ? QString() : tr("Type: %1").arg(typStr);
+
+    QString col0Tooltip = item->text();
+    if (!ttSuf.isEmpty())
+    {
+        col0Tooltip = QStringLiteral("%1\n%2").arg(col0Tooltip, ttSuf);
+    }
+    col0Tooltip = QStringLiteral("%1\n%2").arg(col0Tooltip, exprNote);
+    item->setToolTip(capWatchTooltipText(col0Tooltip + watchTipExtra));
+
+    QString col1Tooltip = v;
+    if (!ttSuf.isEmpty())
+    {
+        col1Tooltip = QStringLiteral("%1\n%2").arg(col1Tooltip, ttSuf);
+    }
+    col1Tooltip = QStringLiteral("%1\n%2").arg(col1Tooltip, exprNote);
+    LuaDebuggerItems::setToolTip(watchModel, item, 1,
+                                 capWatchTooltipText(col1Tooltip));
+
+    /* Change tracking — same scheme as path roots, but expression specs
+     * are not Globals-anchored (watchSpecIsGlobalScoped returns false on
+     * non-path specs), so the cue is fully gated on changeHighlightAllowed. */
+    const QString rk = changeKey(stackSelectionLevel, spec);
+    const bool changed = changeHighlightAllowed() &&
+                         shouldMarkChanged(watchRootBaseline_, rk, v);
+    applyChangedVisuals(item, changed, isPauseEntryRefresh_);
+    watchRootCurrent_[rk] = v;
+
+    if (can_expand)
+    {
+        if (item->rowCount() == 0)
+        {
+            QStandardItem *const ph0 = new QStandardItem();
+            QStandardItem *const ph1 = new QStandardItem();
+            ph0->setFlags(Qt::ItemIsEnabled);
+            ph1->setFlags(Qt::ItemIsEnabled);
+            item->appendRow({ph0, ph1});
+        }
+    }
+    else
+    {
+        while (item->rowCount() > 0)
+        {
+            item->removeRow(0);
+        }
+    }
+}
+
 void LuaDebuggerDialog::applyWatchItemState(QStandardItem *item,
                                             bool liveContext,
                                             const QString &muted)
@@ -7141,12 +7292,6 @@ void LuaDebuggerDialog::applyWatchItemState(QStandardItem *item,
         return;
     }
 
-    if (!watchSpecUsesPathResolution(spec))
-    {
-        applyWatchItemNonPath(item, watchTipExtra);
-        return;
-    }
-
     clearWatchFilterErrorChrome(item, watchTree);
     LuaDebuggerItems::setForeground(watchModel, item, 1,
                                watchTree->palette().brush(QPalette::Text));
@@ -7157,12 +7302,19 @@ void LuaDebuggerDialog::applyWatchItemState(QStandardItem *item,
         return;
     }
 
+    const bool isPathSpec = watchSpecUsesPathResolution(spec);
+
     char *val = nullptr;
     char *typ = nullptr;
     bool can_expand = false;
     char *err = nullptr;
-    const bool ok = wslua_debugger_watch_read_root(
-        spec.toUtf8().constData(), &val, &typ, &can_expand, &err);
+
+    const bool ok =
+        isPathSpec
+            ? wslua_debugger_watch_read_root(spec.toUtf8().constData(), &val,
+                                             &typ, &can_expand, &err)
+            : wslua_debugger_watch_expr_read_root(
+                  spec.toUtf8().constData(), &val, &typ, &can_expand, &err);
     if (!ok)
     {
         const QString errStr = err ? QString::fromUtf8(err) : muted;
@@ -7171,7 +7323,15 @@ void LuaDebuggerDialog::applyWatchItemState(QStandardItem *item,
         return;
     }
 
-    applyWatchItemSuccess(item, spec, val, typ, can_expand, watchTipExtra);
+    if (isPathSpec)
+    {
+        applyWatchItemSuccess(item, spec, val, typ, can_expand, watchTipExtra);
+    }
+    else
+    {
+        applyWatchItemExpression(item, spec, val, typ, can_expand,
+                                 watchTipExtra);
+    }
     g_free(val);
     g_free(typ);
 }
@@ -7280,6 +7440,110 @@ void LuaDebuggerDialog::fillWatchPathChildren(QStandardItem *parent,
     if (variableChildrenShouldSortByName(path))
     {
         parent->sortChildren(0, Qt::AscendingOrder);
+    }
+
+    wslua_debugger_free_variables(variables, variableCount);
+}
+
+void LuaDebuggerDialog::fillWatchExprChildren(QStandardItem *parent,
+                                              const QString &rootSpec,
+                                              const QString &subpath)
+{
+    if (!watchModel || !watchTree)
+    {
+        return;
+    }
+    /* The depth cap mirrors the path-based variant: deeply nested
+     * expression children would otherwise grow without bound and we want
+     * a recognizable sentinel rather than a runaway tree. */
+    if (watchSubpathBoundaryCount(subpath) >= WSLUA_WATCH_MAX_PATH_SEGMENTS)
+    {
+        auto *sent0 = new QStandardItem(QStringLiteral("\u2026"));
+        auto *sent1 = new QStandardItem(tr("Maximum watch depth reached"));
+        sent0->setFlags(Qt::ItemIsEnabled);
+        sent1->setFlags(Qt::ItemIsEnabled);
+        LuaDebuggerItems::setForeground(
+            watchModel, sent0, 1,
+            watchTree->palette().brush(QPalette::PlaceholderText));
+        LuaDebuggerItems::setToolTip(
+            watchModel, sent0, 1,
+            capWatchTooltipText(tr("Maximum watch depth reached.")));
+        parent->appendRow({sent0, sent1});
+        return;
+    }
+
+    if (rootSpec.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    char *err = nullptr;
+    wslua_variable_t *variables = nullptr;
+    int32_t variableCount = 0;
+    const QByteArray rootSpecUtf8 = rootSpec.toUtf8();
+    const QByteArray subpathUtf8 = subpath.toUtf8();
+    const bool ok = wslua_debugger_watch_expr_get_variables(
+        rootSpecUtf8.constData(),
+        subpath.isEmpty() ? nullptr : subpathUtf8.constData(),
+        &variables, &variableCount, &err);
+    g_free(err);
+    if (!ok || !variables)
+    {
+        return;
+    }
+
+    /* Expression watches have no Globals anchor, so changes are only
+     * highlighted under changeHighlightAllowed() (i.e. on the same stack
+     * frame as the pause entered at). */
+    const QString rootKey = changeKey(stackSelectionLevel, rootSpec);
+    auto &baseline = watchChildBaseline_[rootKey];
+    auto &current = watchChildCurrent_[rootKey];
+    auto &baselineParents = watchChildBaselineParents_[rootKey];
+    auto &currentParents = watchChildCurrentParents_[rootKey];
+    /* The subpath is the parent key for change tracking; it doubles as the
+     * "visited parent" identity. Empty subpath = the expression result
+     * itself, which is the same identity as the root row. */
+    const bool parentVisitedInBaseline = baselineParents.contains(subpath);
+    currentParents.insert(subpath);
+    const bool highlightAllowed = changeHighlightAllowed();
+
+    for (int32_t i = 0; i < variableCount; ++i)
+    {
+        auto *nameItem = new QStandardItem();
+        auto *valueItem = new QStandardItem();
+
+        const QString name =
+            QString::fromUtf8(variables[i].name ? variables[i].name : "");
+        const QString value =
+            QString::fromUtf8(variables[i].value ? variables[i].value : "");
+        const QString type =
+            QString::fromUtf8(variables[i].type ? variables[i].type : "");
+        const bool canExpand = variables[i].can_expand ? true : false;
+        const QString childSub = expressionWatchChildSubpath(subpath, name);
+
+        nameItem->setText(name);
+        nameItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        nameItem->setData(type, VariableTypeRole);
+        nameItem->setData(canExpand, VariableCanExpandRole);
+        nameItem->setData(childSub, WatchSubpathRole);
+        /* VariablePathRole is intentionally left empty: expression
+         * children have no Variables-tree counterpart, so any sync against
+         * it would mismatch a real path watch with the same composed name. */
+
+        parent->appendRow({nameItem, valueItem});
+
+        applyWatchChildRowTextAndTooltip(nameItem, value, type);
+
+        const bool changed =
+            highlightAllowed &&
+            shouldMarkChanged(baseline, childSub, value,
+                              /*flashNew=*/parentVisitedInBaseline);
+        applyChangedVisuals(nameItem, changed, isPauseEntryRefresh_);
+        current[childSub] = value;
+
+        applyVariableExpansionIndicator(nameItem, canExpand,
+                                        /*enabledOnlyPlaceholder=*/true,
+                                        /*columnCount=*/2);
     }
 
     wslua_debugger_free_variables(variables, variableCount);
@@ -7516,17 +7780,37 @@ void LuaDebuggerDialog::refillWatchChildren(QStandardItem *item)
     }
 
     const QStandardItem *const rootWatch = watchRootItem(item);
-    const QString rootSpec = rootWatch->data(WatchSpecRole).toString();
-    QString path = item->data(VariablePathRole).toString();
-    if (path.isEmpty())
+    if (!rootWatch)
     {
-        path = watchResolvedVariablePathForTooltip(rootSpec);
+        return;
+    }
+    const QString rootSpec = rootWatch->data(WatchSpecRole).toString();
+
+    if (watchSpecUsesPathResolution(rootSpec))
+    {
+        QString path = item->data(VariablePathRole).toString();
         if (path.isEmpty())
         {
-            path = watchVariablePathForSpec(rootSpec);
+            path = watchResolvedVariablePathForTooltip(rootSpec);
+            if (path.isEmpty())
+            {
+                path = watchVariablePathForSpec(rootSpec);
+            }
         }
+        fillWatchPathChildren(item, path);
+        return;
     }
-    fillWatchPathChildren(item, path);
+
+    /* Expression watch: descendants are addressed by a Lua-style subpath
+     * relative to the expression's root value, stored in WatchSubpathRole.
+     * The subpath of the root itself is empty — children of the root then
+     * fan out through expressionWatchChildSubpath() in
+     * fillWatchExprChildren(). */
+    const QString subpath =
+        item->parent() == nullptr
+            ? QString()
+            : item->data(WatchSubpathRole).toString();
+    fillWatchExprChildren(item, rootSpec, subpath);
 }
 
 void LuaDebuggerDialog::refreshWatchBranch(QStandardItem *item)
@@ -7735,14 +8019,45 @@ void LuaDebuggerDialog::copyWatchValueForItem(QStandardItem *item,
         }
     };
     QString value;
-    const QString varPath = item->data(VariablePathRole).toString();
-    if (!varPath.isEmpty() && debuggerPaused && wslua_debugger_is_enabled() &&
+    if (item && debuggerPaused && wslua_debugger_is_enabled() &&
         wslua_debugger_is_paused())
     {
+        const QStandardItem *const rootWatch = watchRootItem(item);
+        const QString rootSpec =
+            rootWatch ? rootWatch->data(WatchSpecRole).toString() : QString();
+
         char *val = nullptr;
         char *err = nullptr;
-        if (wslua_debugger_read_variable_value_full(
-                varPath.toUtf8().constData(), &val, &err))
+        bool ok = false;
+
+        if (watchSpecUsesPathResolution(rootSpec))
+        {
+            /* Path-style: prefer the row's resolved Variables-tree path so
+             * children copy the correct nested value, not the root. */
+            const QString varPath = item->data(VariablePathRole).toString();
+            if (!varPath.isEmpty())
+            {
+                ok = wslua_debugger_read_variable_value_full(
+                    varPath.toUtf8().constData(), &val, &err);
+            }
+        }
+        else if (!rootSpec.isEmpty())
+        {
+            /* Expression-style: re-evaluate against the root spec, then
+             * walk the row's stored subpath (empty for the root itself). */
+            const QString subpath =
+                item->parent() == nullptr
+                    ? QString()
+                    : item->data(WatchSubpathRole).toString();
+            const QByteArray rootSpecUtf8 = rootSpec.toUtf8();
+            const QByteArray subpathUtf8 = subpath.toUtf8();
+            ok = wslua_debugger_watch_expr_read_full(
+                rootSpecUtf8.constData(),
+                subpath.isEmpty() ? nullptr : subpathUtf8.constData(), &val,
+                &err);
+        }
+
+        if (ok)
         {
             value = QString::fromUtf8(val ? val : "");
         }
@@ -7884,14 +8199,6 @@ void LuaDebuggerDialog::addWatchFromSpec(const QString &watchSpec)
     insertNewWatchRow(watchSpec, false);
 }
 
-void LuaDebuggerDialog::showPathOnlyVariablePathWatchMessage()
-{
-    QMessageBox::information(
-        this, tr("Lua Debugger"),
-        tr("Only variable paths can be watched (e.g. Locals.name, Globals.x, "
-           "or a single identifier for Locals.name)."));
-}
-
 void LuaDebuggerDialog::commitWatchRootSpec(QStandardItem *item,
                                             const QString &text)
 {
@@ -7921,16 +8228,15 @@ void LuaDebuggerDialog::commitWatchRootSpec(QStandardItem *item,
     {
         QMessageBox::warning(
             this, tr("Lua Debugger"),
-            tr("Watch path is too long (maximum %Ln characters).", "",
+            tr("Watch expression is too long (maximum %Ln characters).", "",
                static_cast<qlonglong>(WATCH_EXPR_MAX_CHARS)));
         return;
     }
 
-    if (!watchSpecUsesPathResolution(t))
-    {
-        showPathOnlyVariablePathWatchMessage();
-        return;
-    }
+    /* Both path watches (Locals.x, Globals.t.k) and expression watches
+     * (any Lua expression — pinfo.src:tostring(), #packets, t[i] + 1)
+     * are accepted; the watch panel decides how to evaluate based on
+     * whether @c t validates as a Variables-tree path. */
 
     /* Editing a spec invalidates baselines for both old and new specs:
      * the old spec no longer applies to this row, and the new spec has
@@ -7980,11 +8286,8 @@ void LuaDebuggerDialog::insertNewWatchRow(const QString &initialSpec,
             }
         }
     }
-    if (!init.isEmpty() && !watchSpecUsesPathResolution(init))
-    {
-        showPathOnlyVariablePathWatchMessage();
-        return;
-    }
+    /* Both path watches and expression watches are accepted; the watch
+     * panel decides how to evaluate. */
 
     auto *row0 = new QStandardItem();
     auto *row1 = new QStandardItem();

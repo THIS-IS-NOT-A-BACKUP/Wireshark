@@ -571,6 +571,84 @@ extern "C"
     WS_DLL_PUBLIC bool wslua_debugger_read_variable_value_full(
         const char *variable_path, char **value_out, char **error_msg);
 
+    /*
+     * Watch expression APIs (below) evaluate an arbitrary Lua expression
+     * against the paused state. They share the same instruction-count and
+     * call-depth safety hooks as @ref wslua_debugger_evaluate, and run with
+     * a custom @c _ENV that exposes the paused frame's locals, upvalues,
+     * and globals — so a bare identifier in an expression resolves the
+     * same way an unqualified path watch does.
+     *
+     * Use these for any spec that does not validate as a path under
+     * @ref wslua_debugger_watch_spec_uses_path_resolution. Like the path
+     * APIs above, they take @c debugger.mutex when they touch the paused
+     * Lua state and must be called from the same execution context as the
+     * Qt debugger UI (typically the GUI thread).
+     */
+
+    /**
+     * @brief Evaluate @a spec as a Lua expression and report the root
+     *        Value/Type/expand bit.
+     *
+     * Behaves like @ref wslua_debugger_watch_read_root but with no
+     * "must be a variable path" restriction — any expression that
+     * compiles and runs is acceptable. The result is the first (and only)
+     * return value of the evaluated chunk.
+     *
+     * Outputs are caller-owned (@c g_free); on failure the function
+     * returns @c false and writes a descriptive @a *error_msg.
+     */
+    WS_DLL_PUBLIC bool wslua_debugger_watch_expr_read_root(
+        const char *spec, char **value_out, char **type_out,
+        bool *can_expand_out, char **error_msg);
+
+    /**
+     * @brief Evaluate @a spec, walk @a subpath on the result, and report
+     *        the resolved descendant's Value/Type/expand bit.
+     *
+     * @a subpath uses the same syntax as the tail of a path watch
+     * (e.g. @c "[1].name"). An empty / NULL @a subpath returns the same
+     * data as @ref wslua_debugger_watch_expr_read_root.
+     *
+     * The expression is re-evaluated on every call; the same instruction
+     * and call-depth caps as @ref wslua_debugger_evaluate apply.
+     */
+    WS_DLL_PUBLIC bool wslua_debugger_watch_expr_read_subpath(
+        const char *spec, const char *subpath, char **value_out,
+        char **type_out, bool *can_expand_out, char **error_msg);
+
+    /**
+     * @brief Evaluate @a spec, walk @a subpath, and enumerate the
+     *        descendant's children into @c wslua_variable_t records.
+     *
+     * Mirrors @ref wslua_debugger_get_variables on a path watch's
+     * sub-table — children are produced from the same enumerator
+     * (@c wslua_debugger_append_children_of_value), so the Qt layer can
+     * reuse its row-building helpers.
+     *
+     * @return @c true with @c *variables_out / @c *count_out filled
+     *         (caller frees with @c wslua_debugger_free_variables);
+     *         @c false on evaluation / lookup failure.
+     */
+    WS_DLL_PUBLIC bool wslua_debugger_watch_expr_get_variables(
+        const char *spec, const char *subpath,
+        wslua_variable_t **variables_out, int32_t *count_out,
+        char **error_msg);
+
+    /**
+     * @brief Read the full untruncated stringified value of an expression
+     *        watch (root or sub-element) for the Copy Value action.
+     *
+     * @a subpath uses the same syntax as
+     * @ref wslua_debugger_watch_expr_read_subpath; an empty / NULL subpath
+     * targets the root expression result. Tables still summarise as
+     * @c "table[N]"; binary string values (e.g. @c Tvb @c __tostring) are
+     * preserved verbatim including embedded NULs.
+     */
+    WS_DLL_PUBLIC bool wslua_debugger_watch_expr_read_full(
+        const char *spec, const char *subpath, char **value_out,
+        char **error_msg);
+
 #ifdef __cplusplus
 }
 #endif

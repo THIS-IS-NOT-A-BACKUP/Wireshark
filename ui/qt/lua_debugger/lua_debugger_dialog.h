@@ -453,6 +453,8 @@ class LuaDebuggerDialog : public GeometryStateDialog
     QToolButton *watchRemoveAllButton_ = nullptr;
     /** @brief Breakpoints section header: toggle at caret, clear all. */
     QToolButton *breakpointHeaderToggleButton_ = nullptr;
+    /** @brief Breakpoints section header: remove selected breakpoint row(s). */
+    QToolButton *breakpointHeaderRemoveButton_ = nullptr;
     QToolButton *breakpointHeaderRemoveAllButton_ = nullptr;
     /** @brief Dialog-wide QAction backing the Ctrl+Shift+F9 shortcut. */
     QAction *actionRemoveAllBreakpoints_ = nullptr;
@@ -698,8 +700,6 @@ class LuaDebuggerDialog : public GeometryStateDialog
                              const QString &muted);
     void applyWatchItemEmpty(QStandardItem *item, const QString &muted,
                              const QString &watchTipExtra);
-    void applyWatchItemNonPath(QStandardItem *item,
-                               const QString &watchTipExtra);
     void applyWatchItemNoLiveContext(QStandardItem *item,
                                      const QString &muted,
                                      const QString &watchTipExtra);
@@ -709,9 +709,17 @@ class LuaDebuggerDialog : public GeometryStateDialog
                                const char *val, const char *typ,
                                bool can_expand,
                                const QString &watchTipExtra);
+    /** @brief Apply success state for an expression watch (non-path spec). */
+    void applyWatchItemExpression(QStandardItem *item, const QString &spec,
+                                  const char *val, const char *typ,
+                                  bool can_expand,
+                                  const QString &watchTipExtra);
     /** @brief Fill children for a path-based watch using get_variables. */
     void fillWatchPathChildren(QStandardItem *parent,
                                const QString &variablePath);
+    /** @brief Fill children for an expression watch using watch_expr_get_variables. */
+    void fillWatchExprChildren(QStandardItem *parent, const QString &rootSpec,
+                               const QString &subpath);
     /** @brief Re-query children after clearing (used on expand and on refresh). */
     void refillWatchChildren(QStandardItem *item);
     /** @brief Refresh expanded watch rows depth-first (values after pause/step). */
@@ -741,8 +749,6 @@ class LuaDebuggerDialog : public GeometryStateDialog
                                   QStandardItem *item);
     /** @brief Select the Variables row matching the current watch (if any). */
     void syncVariablesTreeToCurrentWatch();
-    /** @brief Shared wording when the user enters a non-path watch spec. */
-    void showPathOnlyVariablePathWatchMessage();
 
     bool syncWatchVariablesSelection_ = false;
 
