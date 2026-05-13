@@ -601,7 +601,10 @@ void wslua_debugger_init(lua_State *L)
      * reload call stack.  The callers will call
      * wslua_debugger_notify_post_reload() after cf_reload completes.
      */
-    if (debugger.reload_in_progress)
+    g_mutex_lock(&debugger.mutex);
+    const bool reload_in_progress = debugger.reload_in_progress;
+    g_mutex_unlock(&debugger.mutex);
+    if (reload_in_progress)
     {
         /* Don't auto-enable: the hook would fire during
          * cf_reload / redissect and re-enter the event loop.
@@ -4396,19 +4399,6 @@ bool wslua_debugger_is_paused(void)
                   debugger.paused_L != NULL;
     g_mutex_unlock(&debugger.mutex);
     return paused;
-}
-
-bool wslua_debugger_should_block_dissector_entry(void)
-{
-    bool should_block;
-
-    g_mutex_lock(&debugger.mutex);
-    should_block = debugger.reload_in_progress ||
-                   (debugger.state == WSLUA_DEBUGGER_PAUSED &&
-                    debugger.paused_L != NULL);
-    g_mutex_unlock(&debugger.mutex);
-
-    return should_block;
 }
 
 void wslua_debugger_forget_lua_thread(lua_State *L)
