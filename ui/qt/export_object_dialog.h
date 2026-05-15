@@ -41,14 +41,17 @@ public slots:
     void show();
 
 protected:
-    virtual void keyPressEvent(QKeyEvent *evt);
+    void beginRetapPackets() override;
+    void endRetapPackets() override;
+    virtual void keyPressEvent(QKeyEvent *evt) override;
 
 private slots:
-    void accept();
+    void accept() override;
     void captureEvent(CaptureEvent e);
     void on_buttonBox_helpRequested();
     void on_buttonBox_clicked(QAbstractButton *button);
     void on_cmbContentType_currentIndexChanged(int index);
+    void uniqueToggled(bool checked);
 
     void modelDataChanged(const QModelIndex &topLeft, int from, int to);
     void modelRowsReset();
