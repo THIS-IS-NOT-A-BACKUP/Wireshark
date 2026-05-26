@@ -14445,19 +14445,27 @@ dissect_wrapped_data(proto_tree *tree, packet_info *pinfo, tvbuff_t *tvb,
                                              PASN_DATA_KEY);
 
   if (pasn_data) {
-    proto_tree *auth_tree = NULL;
+    proto_tree *auth_tree = NULL, *tagged_tree;
     proto_item *ai = NULL;
     uint16_t frame_len = 0;
     tvbuff_t *new_tvb = NULL;
+    unsigned tagged_parameter_tree_len, auth_offset;
 
     switch (pasn_data->pasn_seq) {
     case 1:
-      auth_tree = proto_tree_add_subtree(tree, tvb, offset, -1,
+      auth_tree = proto_tree_add_subtree(tree, tvb, offset, ext_tag_len,
                                          ett_pasn_auth_frame, &ai,
                                          "Authentication Frame");
       new_tvb = tvb_new_subset_remaining(tvb, offset);
       offset = dissect_auth_frame(auth_tree, pinfo, new_tvb);
-      proto_item_set_len(ai, offset); /* This is correct */
+      tagged_parameter_tree_len =
+        tvb_reported_length_remaining(new_tvb, offset);
+      if (tagged_parameter_tree_len > 0) {
+        tagged_tree = get_tagged_parameter_tree(auth_tree, new_tvb, offset,
+          tagged_parameter_tree_len);
+        ieee_80211_add_tagged_parameters(new_tvb, offset, pinfo, tagged_tree,
+          tagged_parameter_tree_len, MGT_AUTHENTICATION, NULL);
+      }
       break;
 
     case 2:
@@ -14470,7 +14478,17 @@ dissect_wrapped_data(proto_tree *tree, packet_info *pinfo, tvbuff_t *tvb,
                                          ett_pasn_auth_frame, NULL,
                                          "Authentication Frame 1");
       new_tvb = tvb_new_subset_length(tvb, offset, frame_len);
-      offset += dissect_auth_frame(auth_tree, pinfo, new_tvb);
+      auth_offset= dissect_auth_frame(auth_tree, pinfo, new_tvb);
+      offset += auth_offset;
+      tagged_parameter_tree_len =
+        tvb_reported_length_remaining(new_tvb, auth_offset);
+      if (tagged_parameter_tree_len > 0) {
+        tagged_tree = get_tagged_parameter_tree(auth_tree, new_tvb, auth_offset,
+          tagged_parameter_tree_len);
+        ieee_80211_add_tagged_parameters(new_tvb, auth_offset, pinfo, tagged_tree,
+          tagged_parameter_tree_len, MGT_AUTHENTICATION, NULL);
+        offset += tagged_parameter_tree_len;
+      }
 
       /* Second frame */
       frame_len = tvb_get_letohs(tvb, offset);
@@ -21191,15 +21209,15 @@ dissect_vendor_ie_wfa(tvbuff_t* tvb, packet_info* pinfo, proto_tree* tree _U_, v
   uint8_t subtype;
   tvbuff_t *vendor_tvb;
 
-  if (tag_len < 4)
+  if (tag_len < 1)
     return 0;
 
-  subtype = tvb_get_uint8(tvb, 3);
+  subtype = tvb_get_uint8(tvb, offset);
   proto_item_append_text(field_data->item_tag, ": %s", val_to_str_const(subtype, wfa_subtype_vals, "Unknown"));
-  vendor_tvb = tvb_new_subset_length(tvb, offset + 4, tag_len - 4);
+  vendor_tvb = tvb_new_subset_length(tvb, offset + 1, tag_len - 1);
   dissect = dissector_try_uint_with_data(wifi_alliance_ie_table, subtype, vendor_tvb, pinfo, field_data->item_tag, false, NULL);
   if (dissect <= 0) {
-      proto_tree_add_item(field_data->item_tag, hf_ieee80211_tag_vendor_data, vendor_tvb, 0, tag_len - 4, ENC_NA);
+      proto_tree_add_item(field_data->item_tag, hf_ieee80211_tag_vendor_data, vendor_tvb, 0, tag_len - 1, ENC_NA);
   }
 
   return tvb_captured_length(tvb);
@@ -23468,7 +23486,7 @@ dissect_extended_capabilities_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
   return offset;
 }
 
-static int
+int
 dissect_vht_mcs_set(proto_tree *tree, tvbuff_t *tvb, int offset)
 {
   proto_item *ti;
@@ -23534,12 +23552,9 @@ dissect_vht_mcs_set(proto_tree *tree, tvbuff_t *tvb, int offset)
   return offset;
 }
 
-static int
-dissect_vht_capability_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
+int
+dissect_vht_capabilities(proto_tree *tree, tvbuff_t *tvb, int offset)
 {
-  int tag_len = tvb_reported_length(tvb);
-  ieee80211_tagged_field_data_t* field_data = (ieee80211_tagged_field_data_t*)data;
-  int offset = 0;
   static int * const ieee80211_vht_caps[] = {
     &hf_ieee80211_vht_max_mpdu_length,
     &hf_ieee80211_vht_supported_chan_width_set,
@@ -23566,6 +23581,21 @@ dissect_vht_capability_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, v
     NULL
   };
 
+  /* 4 byte VHT Capabilities  Info*/
+  proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_vht_cap,
+                                    ett_vht_cap_tree, ieee80211_vht_caps,
+                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
+  offset += 4;
+  return offset;
+}
+
+static int
+dissect_vht_capability_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
+{
+  int tag_len = tvb_reported_length(tvb);
+  ieee80211_tagged_field_data_t* field_data = (ieee80211_tagged_field_data_t*)data;
+  int offset = 0;
+
   if (tag_len != 12) {
     expert_add_info_format(pinfo, field_data->item_tag_length, &ei_ieee80211_tag_length,
                            "VHT Capabilities IE length %u wrong, must be = 12", tag_len);
@@ -23573,10 +23603,7 @@ dissect_vht_capability_ie(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, v
   }
 
   /* 4 byte VHT Capabilities  Info*/
-  proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_vht_cap,
-                                    ett_vht_cap_tree, ieee80211_vht_caps,
-                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
-  offset += 4;
+  offset = dissect_vht_capabilities(tree, tvb, offset);
 
   /* 8 byte MCS set */
   offset = dissect_vht_mcs_set(tree, tvb, offset);
@@ -26337,7 +26364,7 @@ dissect_max_away_duration(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tre
   return offset;
 }
 
-static int
+int
 dissect_mcs_set(proto_tree *tree, packet_info* pinfo, tvbuff_t *tvb, int offset, bool basic, bool vendorspecific)
 {
   proto_item *ti;
@@ -27549,12 +27576,9 @@ dissect_20_40_bss_intolerant(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
   return offset;
 }
 
-static int
-dissect_ht_capability_ie_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset,
-                         uint32_t tag_len, proto_item *ti_len, bool vendorspecific)
+int
+dissect_ht_capabilities(proto_tree *tree, tvbuff_t *tvb, int offset, bool vendorspecific)
 {
-  proto_item *cap_item, *ti;
-  proto_tree *cap_tree;
   static int * const ieee80211_ht[] = {
     &hf_ieee80211_ht_ldpc_coding,
     &hf_ieee80211_ht_chan_width,
@@ -27573,6 +27597,28 @@ dissect_ht_capability_ie_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *t
     NULL
   };
 
+  /* 2 byte HT Capabilities  Info*/
+  if (vendorspecific)
+  {
+    proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_ht_vs_cap,
+                                    ett_ht_cap_tree, ieee80211_ht,
+                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
+  }
+  else
+  {
+    proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_ht_cap,
+                                    ett_ht_cap_tree, ieee80211_ht,
+                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
+  }
+  return offset + 2;
+}
+
+static int
+dissect_ht_capability_ie_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset,
+                         uint32_t tag_len, proto_item *ti_len, bool vendorspecific)
+{
+  proto_item *cap_item, *ti;
+  proto_tree *cap_tree;
   static int * const ieee80211_htex[] = {
     &hf_ieee80211_htex_reserved_b0_b7,
     &hf_ieee80211_htex_mcs,
@@ -27628,19 +27674,7 @@ dissect_ht_capability_ie_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *t
     return (offset > 0) ? offset : 1;
 
   /* 2 byte HT Capabilities  Info*/
-  if (vendorspecific)
-  {
-    proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_ht_vs_cap,
-                                    ett_ht_cap_tree, ieee80211_ht,
-                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
-  }
-  else
-  {
-    proto_tree_add_bitmask_with_flags(tree, tvb, offset, hf_ieee80211_ht_cap,
-                                    ett_ht_cap_tree, ieee80211_ht,
-                                    ENC_LITTLE_ENDIAN, BMT_NO_APPEND);
-  }
-  offset += 2;
+  offset = dissect_ht_capabilities(tree, tvb, offset, vendorspecific);
 
   /* 1 byte A-MPDU Parameters */
   if (vendorspecific)
