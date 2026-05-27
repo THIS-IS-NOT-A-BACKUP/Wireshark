@@ -675,6 +675,9 @@ void proto_report_dissector_bug(const char *format, ...)
 /** FIELD_DISPLAY_E_MASK selects the field_display_e value. */
 #define FIELD_DISPLAY_E_MASK 0xFF
 
+/**
+ * @brief Enum for specifying the display format of a field.
+ */
 typedef enum {
     BASE_NONE    = 0,   /**< none */
 
@@ -748,6 +751,9 @@ typedef enum {
 /** BASE_PT_ values display decimal and transport port service name */
 #define IS_BASE_PORT(b) (((b)==BASE_PT_UDP||(b)==BASE_PT_TCP||(b)==BASE_PT_DCCP||(b)==BASE_PT_SCTP))
 
+/**
+ * @brief Enum for specifying whether a field is referenced by a filter, and if so, how.
+ */
 typedef enum {
     HF_REF_TYPE_NONE,       /**< Field is not referenced */
     HF_REF_TYPE_INDIRECT,   /**< Field is indirectly referenced (only applicable for FT_PROTOCOL) via. its child */
@@ -3249,7 +3255,7 @@ WS_DLL_PUBLIC bool proto_tracking_interesting_fields(const proto_tree *tree);
     proto_get_finfo_ptr_array because it has to search through the tree.
  @param tree tree of interest
  @param hfindex index of field info of interest
- @return GPtrArry pointer
+ @return GPtrArray pointer
 
     The caller does need to free the returned GPtrArray with
     g_ptr_array_free(<array>, true). */
@@ -3260,7 +3266,7 @@ tree. Works with any tree, primed or unprimed, and is slower than
 proto_get_finfo_ptr_array because it has to search through the tree.
 @param tree tree of interest
 @param hfindex index of field info of interest
-@return GPtrArry pointer
+@return GPtrArray pointer
 
     The caller does need to free the returned GPtrArray with
     g_ptr_array_free(<array>, true). */
@@ -3269,7 +3275,7 @@ WS_DLL_PUBLIC GPtrArray* proto_find_first_finfo(proto_tree *tree, const int hfin
 /** Return GPtrArray* of field_info pointers containing all hfindexes that appear
     in tree.
  @param tree tree of interest
- @return GPtrArry pointer
+ @return GPtrArray pointer
 
     The caller does need to free the returned GPtrArray with
     g_ptr_array_free(<array>, true). */
@@ -3877,13 +3883,16 @@ proto_tree_add_checksum_bytes(proto_tree *tree, tvbuff_t *tvb, const unsigned of
 		const int hf_checksum, const int hf_checksum_status, struct expert_field* bad_checksum_expert,
 		packet_info *pinfo, const uint8_t *computed_checksum, size_t checksum_len, const unsigned flags);
 
+/**
+ * @brief Checksum verification result for a protocol field.
+ */
 typedef enum
 {
-    PROTO_CHECKSUM_E_BAD = 0,
-    PROTO_CHECKSUM_E_GOOD,
-    PROTO_CHECKSUM_E_UNVERIFIED,
-    PROTO_CHECKSUM_E_NOT_PRESENT,
-    PROTO_CHECKSUM_E_ILLEGAL
+    PROTO_CHECKSUM_E_BAD         = 0, /**< Checksum was computed and found to be incorrect */
+    PROTO_CHECKSUM_E_GOOD,            /**< Checksum was computed and found to be correct */
+    PROTO_CHECKSUM_E_UNVERIFIED,      /**< Checksum was not verified (e.g., offload active or verification disabled) */
+    PROTO_CHECKSUM_E_NOT_PRESENT,     /**< No checksum field is present in this packet */
+    PROTO_CHECKSUM_E_ILLEGAL          /**< Checksum value is illegal or reserved by the protocol specification */
 } proto_checksum_enum_e;
 
 #define PROTO_CHECKSUM_NO_FLAGS     0x00    /**< Don't use any flags */
