@@ -311,6 +311,12 @@ if(WIN32 AND NOT USE_MSYSTEM)
 	set(CMAKE_INSTALL_INCLUDEDIR "include")
 	set(CMAKE_INSTALL_DATADIR ".")
 	set(CMAKE_INSTALL_DOCDIR ".")
+elseif(CMAKE_SYSTEM_NAME MATCHES "Haiku")
+	# By default INSTALL_DATADIR is set to INSTALL_DATAROOTDIR, set the
+	# proper value here.
+	set(CMAKE_INSTALL_DATADIR "data/${PROJECT_NAME}"
+		CACHE PATH "Read-only architecture-independent data"
+	)
 endif()
 include(GNUInstallDirs)
 
@@ -1719,7 +1725,12 @@ if(WIN32)
 	set(WIN_IPHLPAPI_LIBRARY iphlpapi.lib)
 	set(WIN_PSAPI_LIBRARY    psapi.lib)
 	set(WIN_VERSION_LIBRARY  version.lib)
-	set(WIN_WS2_32_LIBRARY   ws2_32.lib)
+	set(SOCKET_LIBRARY       ws2_32.lib)
+elseif(CMAKE_SYSTEM_NAME MATCHES "Haiku")
+	#
+	# Haiku. We need libnetwork.
+	#
+	set(SOCKET_LIBRARY       network)
 endif()
 
 if(APPLE)
@@ -3121,7 +3132,7 @@ if(BUILD_wireshark AND QT_FOUND)
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
 		${SPARKLE_LIBRARIES}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 		${WIN_VERSION_LIBRARY}
 		${WINSPARKLE_LIBRARIES}
 		$<$<BOOL:${WIN32}>:uxtheme.lib>
@@ -3238,7 +3249,7 @@ if(BUILD_stratoshark AND QT_FOUND)
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
 		${SPARKLE_LIBRARIES}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 		${WIN_VERSION_LIBRARY}
 		${WINSPARKLE_LIBRARIES}
 		$<$<BOOL:${WIN32}>:uxtheme.lib>
@@ -3405,7 +3416,7 @@ if(BUILD_tshark)
 		wsutil
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 	)
 	set(tshark_FILES
 		$<TARGET_OBJECTS:cli_main>
@@ -3436,7 +3447,7 @@ if(BUILD_strato)
 		wsutil
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 	)
 	set(strato_FILES
 		$<TARGET_OBJECTS:cli_main>
@@ -3488,7 +3499,7 @@ if(BUILD_rawshark AND PCAP_FOUND)
 		epan
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 	)
 	set(rawshark_FILES
 		$<TARGET_OBJECTS:cli_main>
@@ -3510,7 +3521,7 @@ if(BUILD_sharkd)
 		epan
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 		${SPEEXDSP_LIBRARIES}
 		${GCRYPT_LIBRARIES}
 	)
@@ -3727,7 +3738,7 @@ if(BUILD_dumpcap AND PCAP_FOUND)
 		${NL_LIBRARIES}
 		${APPLE_CORE_FOUNDATION_LIBRARY}
 		${APPLE_SYSTEM_CONFIGURATION_LIBRARY}
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 	)
 	if(UNIX)
 		list(APPEND CAPUTILS_SRC
@@ -3858,7 +3869,7 @@ if (MAXMINDDB_FOUND)
 		# Note: libmaxminddb is not GPL-2 compatible.
 		${MAXMINDDB_LIBRARY}
 		# Needed for CMake-built libmaxminddb.lib <= 1.43.
-		${WIN_WS2_32_LIBRARY}
+		${SOCKET_LIBRARY}
 	)
 	set(mmdbresolve_FILES
 		mmdbresolve.c
