@@ -59,10 +59,11 @@ FontColorPreferencesFrame::FontColorPreferencesFrame(QWidget *parent) :
     // Persists its selection in recent_common.gui_theme_name via the
     // frame's stash/unstash flow, so the choice survives profile switches.
     themeComboBox_ = new QComboBox();
-    const QString currentTheme = QString::fromUtf8(recent.gui_theme_name);
-    stashed_theme_name_ = currentTheme.isEmpty()
-        ? QStringLiteral("default")
-        : currentTheme;
+    // Resolve empty/legacy "default" to the flavor's preferred default so
+    // the dropdown shows a real, currently-shipped theme selected on
+    // first run instead of an entry that no longer exists.
+    stashed_theme_name_ = ThemeManager::resolveThemeName(
+            QString::fromUtf8(recent.gui_theme_name));
     const QList<ThemeInfo> themes = ThemeManager::availableThemes();
     int selectedIdx = -1;
     for (int i = 0; i < themes.size(); ++i) {
@@ -100,6 +101,15 @@ FontColorPreferencesFrame::FontColorPreferencesFrame(QWidget *parent) :
     previewLayout->setContentsMargins(0, 0, 0, 0);
     previewWidget_ = new ThemePreviewWidget(ui->themePreviewContainer);
     previewLayout->addWidget(previewWidget_);
+
+    // Repaint the preview when the live theme changes underneath us.
+    // ThemeManager emits themeChanged whenever the OS scheme flips while
+    // the live mode is System (the detector hook re-applies and signals),
+    // so keeping the dialog in sync requires nothing more than re-running
+    // refreshPreview — the stashed dropdown choice doesn't change, but
+    // the OS-resolved side of it does.
+    connect(ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &FontColorPreferencesFrame::refreshPreview);
 
     // Section headers: bold and 2pt larger than the body font.  Qt propagates
     // a widget's font to its children, so set the emphasized font on each
@@ -233,14 +243,24 @@ void FontColorPreferencesFrame::refreshPreview()
         ui->themeDescriptionLabel->setText(description);
     }
 
-    // Resolve the stashed light/dark choice.  COLOR_SCHEME_LIGHT and
-    // COLOR_SCHEME_DARK are explicit; COLOR_SCHEME_DEFAULT defers to the
-    // OS-detected mode that the live ThemeManager reports.
-    bool wantDark;
+    // Map the stashed gui_color_scheme onto previewTheme's PreviewScheme
+    // enum.  Default forwards "no preference" to previewTheme, which
+    // resolves against the live OS detector — so picking System in the
+    // dropdown immediately reflects the current OS appearance instead of
+    // the previously-applied Light/Dark mode.  Resolving via the stashed
+    // value (not isDarkMode()) is what fixes the bug where the live mode_
+    // short-circuited the answer before the user pressed Apply.
+    ThemeManager::PreviewScheme previewScheme;
     switch (prefs_get_enum_value(pref_color_scheme_, pref_stashed)) {
-    case COLOR_SCHEME_LIGHT: wantDark = false; break;
-    case COLOR_SCHEME_DARK:  wantDark = true;  break;
-    default:                 wantDark = ThemeManager::instance()->isDarkMode(); break;
+    case COLOR_SCHEME_LIGHT:
+        previewScheme = ThemeManager::PreviewScheme::PreferLight;
+        break;
+    case COLOR_SCHEME_DARK:
+        previewScheme = ThemeManager::PreviewScheme::PreferDark;
+        break;
+    default:
+        previewScheme = ThemeManager::PreviewScheme::Default;
+        break;
     }
 
     // The widget falls back per-token if the hash is empty (e.g. a
@@ -248,5 +268,5 @@ void FontColorPreferencesFrame::refreshPreview()
     // safe — the preview just falls back to the live ThemeManager's
     // colors token-by-token.
     previewWidget_->setPreviewColors(
-        ThemeManager::instance()->previewTheme(stashed_theme_name_, wantDark));
+        ThemeManager::instance()->previewTheme(stashed_theme_name_, previewScheme));
 }

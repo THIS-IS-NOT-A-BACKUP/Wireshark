@@ -423,6 +423,7 @@ set(WIRESHARK_UTILS_SRCS
 	utils/themes/theme_parser.cpp
 	utils/themes/theme_stylesheet_loader.cpp
 	utils/themes/theme_token_handler.cpp
+	utils/themes/system_theme_detector_common.cpp
 	${WIRESHARK_THEMES_PLATFORM_SRC}
 	utils/wireshark_mime_data.cpp
 	utils/wireshark_zip_helper.cpp
@@ -874,7 +875,8 @@ qrc_finalize(NAME json_resource OUTPUT_VAR JSON_QRC)
 
 # Theme resources
 qrc_register(NAME themes PREFIX "/themes")
-add_theme(NAME "default")
+add_theme(NAME "wireshark")
+add_theme(NAME "stratoshark")
 add_theme(NAME "inverted")
 qrc_finalize(NAME themes OUTPUT_VAR THEMES_QRC)
 
