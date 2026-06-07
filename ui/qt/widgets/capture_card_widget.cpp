@@ -16,6 +16,8 @@
 
 #include <ui/qt/interface_frame.h>
 #include <ui/qt/main_application.h>
+#include <ui/qt/main_window.h>
+#include <ui/qt/manager/interface_list_manager.h>
 #include <ui/qt/utils/color_utils.h>
 #include <ui/qt/utils/theme_manager.h>
 #include <ui/qt/utils/qt_ui_utils.h>
@@ -75,19 +77,24 @@ CaptureCardWidget::CaptureCardWidget(QWidget *parent) :
             this, &CaptureCardWidget::startCapture);
 
     // App-level connections
-    connect(mainApp, &MainApplication::appInitialized,
-            this, &CaptureCardWidget::appInitialized);
-    connect(mainApp, &MainApplication::localInterfaceListChanged,
-            this, &CaptureCardWidget::interfaceListChanged);
-#ifdef HAVE_LIBPCAP
-    connect(mainApp, &MainApplication::scanLocalInterfaces,
-            ui_->captureInterfaceFrame, &InterfaceFrame::scanLocalInterfaces);
-#endif
+    mainApp->whenInitialized(this, [this]() { appInitialized(); });
+
+    // Interface-list notifications come from the window's InterfaceListManager;
+    // defer the connection until the window exists if needed.
+    mainApp->whenInitialized(this, [this]() { connectInterfaceListManager(); });
 }
 
 CaptureCardWidget::~CaptureCardWidget()
 {
     delete ui_;
+}
+
+void CaptureCardWidget::connectInterfaceListManager()
+{
+    MainWindow *mainWindow = mainApp->mainWindow();
+    if (mainWindow && mainWindow->interfaceListManager())
+        connect(mainWindow->interfaceListManager(), &InterfaceListManager::interfaceListChanged,
+                this, &CaptureCardWidget::interfaceListChanged, Qt::UniqueConnection);
 }
 
 InterfaceFrame *CaptureCardWidget::interfaceFrame()

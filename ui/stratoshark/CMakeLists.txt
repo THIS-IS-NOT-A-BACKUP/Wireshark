@@ -80,6 +80,9 @@ set(WIRESHARK_3RD_PARTY_WIDGET_HEADERS
 set (STRATOSHARK_3RD_PARTY_WIDGET_HEADERS ${WIRESHARK_3RD_PARTY_WIDGET_HEADERS})
 
 set(WIRESHARK_MANAGER_HEADERS
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_list_manager.h
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_statistics.h
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_stats_worker.h
 	${CMAKE_SOURCE_DIR}/ui/qt/manager/preference_manager.h
 	${CMAKE_SOURCE_DIR}/ui/qt/manager/wireshark_preference.h
 )
@@ -380,6 +383,9 @@ set(WIRESHARK_3RD_PARTY_WIDGET_SRCS
 set (STRATOSHARK_3RD_PARTY_WIDGET_SRCS ${WIRESHARK_3RD_PARTY_WIDGET_SRCS})
 
 set(WIRESHARK_MANAGER_SRCS
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_list_manager.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_statistics.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/manager/interface_stats_worker.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/manager/preference_manager.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/manager/wireshark_preference.cpp
 )
@@ -738,8 +744,6 @@ set(STRATOSHARK_QT_TS
 	${WIRESHARK_QT_TS}
 )
 
-cmake_path(SET TRANSLATION_INSTALL_DIR NORMALIZE "${CMAKE_INSTALL_BINDIR}/translations")
-
 # Translation files (i18n)
 qrc_register(NAME i18n TARGET stratoshark PREFIX "/i18n")
 foreach(_file ${STRATOSHARK_QT_TS})
@@ -747,8 +751,6 @@ foreach(_file ${STRATOSHARK_QT_TS})
     set(_qresource_qm "${CMAKE_CURRENT_BINARY_DIR}/${_qresource}.qm")
 
     qrc_add_file(NAME i18n TARGET stratoshark FILE "${_qresource_qm}" ALIAS "${_qresource}.qm" GENERATED ON)
-
-    install(FILES "${_qresource_qm}" DESTINATION "${TRANSLATION_INSTALL_DIR}")
 endforeach()
 qrc_finalize(NAME i18n TARGET stratoshark OUTPUT_FILE_NAME "i18n.qrc" OUTPUT_VAR STRATOSHARK_I18N_QRC)
 
