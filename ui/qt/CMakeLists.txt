@@ -834,16 +834,6 @@ set(WIRESHARK_QT_TS
 	wireshark_zh_CN.ts
 )
 
-# Translation files (i18n)
-qrc_register(NAME i18n PREFIX "/i18n")
-foreach(_file ${WIRESHARK_QT_TS})
-    get_filename_component(_qresource ${_file} NAME_WE)
-    set(_qresource_qm "${CMAKE_CURRENT_BINARY_DIR}/${_qresource}.qm")
-
-    qrc_add_file(NAME i18n FILE "${_qresource_qm}" ALIAS "${_qresource}.qm" GENERATED ON)
-endforeach()
-qrc_finalize(NAME i18n OUTPUT_FILE_NAME "i18n.qrc" OUTPUT_VAR I18N_QRC)
-
 # Authors file
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/authors.csv
@@ -945,39 +935,6 @@ qt_add_resources(WIRESHARK_QT_QRC
 	OPTIONS ${CMAKE_AUTORCC_OPTIONS}
 )
 
-# qt[56]_add_translation is deprecated in Qt 6.2 and later for
-# qt[6]_add_translations, so we should switch as Qt 5 support is dropped.
-#
-# Qt also provides translation catalogs for strings used in Qt modules
-# https://doc.qt.io/qt-6/localization.html#available-catalogs
-# main_application.cpp loads these too via QLibraryInfo::TranslationPath
-# On UN*X systems these will tend to be located in a common directory, e.g.
-# /usr/share/qt6/translations
-# On Windows that path will map to a relative path translations within the
-# app installation directory, but windeployqt will handle merging the
-# translations catalogs for all modules we find (we need the qtbase catalog
-# and optionally qtmultimedia) and then deploying them to the application
-# subdirectory.
-# However, on MinGW QLibraryInfo::TranslationPath resolves to the common
-# directory both when cross-compiling or for MSYS2 (and sometimes apparently
-# as the common directory but relative to the application directory), which
-# doesn't work for building a NSIS package and windeployqt does not fix this.
-# So to make this work properly we would need to manually do those merging
-# and deploying steps.
-#
-# In Qt 6.9 and later, it seems that the Qt CMake functions can merge the
-# Qt catalogs into our translations and embed them as resources directly,
-# which might both work for normal Windows builds and be significantly
-# easier on MinGW: https://doc.qt.io/qt-6/qtlinguist-cmake-qt-add-lrelease.html
-QT6_ADD_TRANSLATION(WIRESHARK_QT_QM ${WIRESHARK_QT_TS} OPTIONS -silent)
-
-add_custom_target(
-	translations
-	DEPENDS
-		${WIRESHARK_QT_QM}
-)
-set_target_properties(translations PROPERTIES FOLDER "UI")
-
 set_source_files_properties(
 	${WIRESHARK_QT_NONGENERATED_SRC}
 	PROPERTIES
@@ -1063,13 +1020,43 @@ target_include_directories(qtui
 
 set_target_properties(qtui PROPERTIES
 	LINK_FLAGS "${WS_LINK_FLAGS}"
-	FOLDER "UI"
 	AUTOMOC ON
 	AUTOUIC ON
 	# AUTORCC not needed with qt_add_resources
 	#AUTORCC ON
-	# Ensure .qm files are generated before autogenerating i18n.qrc
-	AUTOGEN_TARGET_DEPENDS "${WIRESHARK_QT_QM};translations"
+)
+
+# Qt also provides translation catalogs for strings used in Qt modules
+# https://doc.qt.io/qt-6/localization.html#available-catalogs
+# main_application.cpp loads these too via QLibraryInfo::TranslationPath
+# On UN*X systems these will tend to be located in a common directory, e.g.
+# /usr/share/qt6/translations
+# On Windows that path will map to a relative path translations within the
+# app installation directory, but windeployqt will handle merging the
+# translations catalogs for all modules we find (we need the qtbase catalog
+# and optionally qtmultimedia) and then deploying them to the application
+# subdirectory.
+# However, on MinGW QLibraryInfo::TranslationPath resolves to the common
+# directory both when cross-compiling or for MSYS2 (and sometimes apparently
+# as the common directory but relative to the application directory), which
+# doesn't work for building a NSIS package and windeployqt does not fix this.
+# So to make this work properly we would need to manually do those merging
+# and deploying steps.
+#
+# Below uses the Qt 6.2 signature for qt_add_lrelease. Eventually it would
+# be good to use the newer signature in order to merge the Qt provided
+# translation catalogs.
+# https://doc.qt.io/qt-6/qtlinguist-cmake-qt-add-lrelease.html
+qt_add_lrelease(qtui
+	TS_FILES ${WIRESHARK_QT_TS}
+	QM_FILES_OUTPUT_VARIABLE WIRESHARK_QT_QM
+	OPTIONS -silent
+)
+# Translation resource (i18n)
+qt_add_resources(qtui "i18n"
+	PREFIX "/i18n"
+	BASE "${CMAKE_CURRENT_BINARY_DIR}"
+	FILES "${WIRESHARK_QT_QM}"
 )
 
 if(MSVC)

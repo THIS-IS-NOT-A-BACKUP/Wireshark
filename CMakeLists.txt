@@ -1960,7 +1960,9 @@ add_subdirectory( wsutil )
 add_subdirectory( doc )
 
 if(BUILD_wireshark AND QT_FOUND)
+	set(CMAKE_FOLDER "UI")
 	add_subdirectory( ui/qt )
+	unset(CMAKE_FOLDER)
 	add_subdirectory( ui/plugins )
 elseif(BUILD_wireshark)
 	message(WARNING "Building Wireshark requested but Qt 6.2 or later not found.")
@@ -1970,7 +1972,9 @@ if(BUILD_stratoshark AND QT_FOUND)
 	if(NOT BUILD_wireshark)
 		add_subdirectory( ui/plugins )
 	endif()
+	set(CMAKE_FOLDER "UI")
 	add_subdirectory( ui/stratoshark )
+	unset(CMAKE_FOLDER)
 endif()
 
 # Location of our plugins. {WIRESHARK,STRATOSHARK}_PLUGIN_DIR should allow
@@ -2201,7 +2205,7 @@ set_package_properties(Lua PROPERTIES
 )
 set_package_properties(CpuInfo PROPERTIES
 	DESCRIPTION "CPU INFOrmation library"
-	URL "https://https://github.com/pytorch/cpuinfo/"
+	URL "https://github.com/pytorch/cpuinfo/"
 	PURPOSE "Detect information about host CPU, e.g., for performance optimization"
 )
 
