@@ -720,8 +720,11 @@ gluster_rpc4_0_dissect_dict(proto_tree *tree, packet_info* pinfo, tvbuff_t *tvb,
 			dict_item = proto_tree_add_guid_format(subtree, hf_glusterfs_gfid,
 								tvb, offset, val_len, &gfid,
 								"%s: %s", key, gfid_s);
-		} else if (val_type == 6) {
+		/* GF_DATA_TYPE_PTR and GF_DATA_TYPE_STR_OLD share the XDR opaque<>
+		 * arm, whose payload is padded to a 4-byte boundary. */
+		} else if (val_type == 6 || val_type == 1) {
 			val_len = tvb_get_ntohl(tvb, offset);
+			val_len = rpc_roundup(val_len);
 			offset += 4;
 
 			/* read the value, possibly '\0' terminated */
@@ -2966,8 +2969,8 @@ glusterfs_gfs4_0_op_fxattrop_call(tvbuff_t *tvb,
 	unsigned offset = 0;
 
 	offset = glusterfs_rpc_dissect_gfid(tree, tvb, hf_glusterfs_gfid, offset);
-	offset = glusterfs_rpc_dissect_flags(tree, tvb, offset);
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_fd, offset);
+	offset = glusterfs_rpc_dissect_flags(tree, tvb, offset);
 	offset = gluster_rpc4_0_dissect_dict(tree, pinfo, tvb, hf_glusterfs_dict, offset);
 	offset = gluster_rpc4_0_dissect_dict(tree, pinfo, tvb, hf_glusterfs_dict, offset);
 
@@ -3067,7 +3070,7 @@ glusterfs_gfs4_0_op_readdirp_reply(tvbuff_t *tvb,
 	return offset;
 }
 
-/* READDIRP and DISCARD both use this */
+/* used by READDIRP (DISCARD now uses the ZEROFILL decoder) */
 static int
 glusterfs_gfs4_0_op_readdirp_call(tvbuff_t *tvb,
 				packet_info *pinfo, proto_tree *tree, void* data _U_)
@@ -3133,7 +3136,7 @@ glusterfs_gfs4_0_op_fallocate_call(tvbuff_t *tvb,
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_fd, offset);
 	offset = glusterfs_rpc_dissect_flags(tree, tvb, offset);
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_offset, offset);
-	offset = dissect_rpc_uint32(tvb, tree, hf_glusterfs_size, offset);
+	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_size64, offset);
 	offset = gluster_rpc4_0_dissect_dict(tree, pinfo, tvb, hf_glusterfs_dict, offset);
 
 	return offset;
@@ -3141,7 +3144,7 @@ glusterfs_gfs4_0_op_fallocate_call(tvbuff_t *tvb,
 
 static int
 glusterfs_gfs4_0_op_zerofill_call(tvbuff_t *tvb,
-				packet_info *pinfo _U_, proto_tree *tree, void* data _U_)
+				packet_info *pinfo, proto_tree *tree, void* data _U_)
 {
 	unsigned offset = 0;
 
@@ -3149,6 +3152,7 @@ glusterfs_gfs4_0_op_zerofill_call(tvbuff_t *tvb,
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_fd, offset);
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_offset, offset);
 	offset = dissect_rpc_uint64(tvb, tree, hf_glusterfs_size64, offset);
+	offset = gluster_rpc4_0_dissect_dict(tree, pinfo, tvb, hf_glusterfs_dict, offset);
 
 	return offset;
 }
@@ -3674,16 +3678,26 @@ static const vsff glusterfs4_0_fop_proc[] = {
 	},
 	{
 		GFS3_OP_DISCARD, "DISCARD",
-		glusterfs_gfs4_0_op_readdirp_call, glusterfs_gfs4_0_op_common_2iatt_reply
+		/* gfx_discard_req is byte-identical to gfx_zerofill_req */
+		glusterfs_gfs4_0_op_zerofill_call, glusterfs_gfs4_0_op_common_2iatt_reply
 	},
 	{
 		GFS3_OP_ZEROFILL, "ZEROFILL",
 		glusterfs_gfs4_0_op_zerofill_call, glusterfs_gfs4_0_op_common_2iatt_reply
 	},
+	{ GFS3_OP_IPC, "IPC", dissect_rpc_unknown, dissect_rpc_unknown },
 	{
 		GFS3_OP_SEEK, "SEEK",
 		glusterfs_gfs4_0_op_seek_call, glusterfs_gfs4_0_op_seek_reply
 	},
+	{ GFS3_OP_COMPOUND, "COMPOUND", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_LEASE, "LEASE", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_GETACTIVELK, "GETACTIVELK", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_SETACTIVELK, "SETACTIVELK", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_ICREATE, "ICREATE", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_NAMELINK, "NAMELINK", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_PUT, "PUT", dissect_rpc_unknown, dissect_rpc_unknown },
+	{ GFS3_OP_COPY_FILE_RANGE, "COPY_FILE_RANGE", dissect_rpc_unknown, dissect_rpc_unknown },
 	{ 0, NULL, NULL, NULL }
 };
 
@@ -3737,7 +3751,6 @@ static const value_string glusterfs3_1_fop_proc_vals[] = {
 	{ GFS3_OP_SETATTR,      "SETATTR" },
 	{ GFS3_OP_FSETATTR,     "FSETATTR" },
 	{ GFS3_OP_READDIRP,     "READDIRP" },
-	{ GFS3_OP_FORGET,       "FORGET" },
 	{ GFS3_OP_RELEASE,      "RELEASE" },
 	{ GFS3_OP_RELEASEDIR,   "RELEASEDIR" },
 	{ GFS3_OP_FREMOVEXATTR, "FREMOVEXATTR" },
@@ -3746,6 +3759,14 @@ static const value_string glusterfs3_1_fop_proc_vals[] = {
 	{ GFS3_OP_ZEROFILL,     "ZEROFILL" },
 	{ GFS3_OP_IPC,	  "IPC" },
 	{ GFS3_OP_SEEK,	 "SEEK" },
+	{ GFS3_OP_COMPOUND, "COMPOUND" },
+	{ GFS3_OP_LEASE, "LEASE" },
+	{ GFS3_OP_GETACTIVELK, "GETACTIVELK" },
+	{ GFS3_OP_SETACTIVELK, "SETACTIVELK" },
+	{ GFS3_OP_ICREATE, "ICREATE" },
+	{ GFS3_OP_NAMELINK, "NAMELINK" },
+	{ GFS3_OP_PUT, "PUT" },
+	{ GFS3_OP_COPY_FILE_RANGE, "COPY_FILE_RANGE" },
 	{ 0, NULL }
 };
 static value_string_ext glusterfs3_1_fop_proc_vals_ext = VALUE_STRING_EXT_INIT(glusterfs3_1_fop_proc_vals);
