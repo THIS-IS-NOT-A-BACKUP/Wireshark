@@ -10859,8 +10859,7 @@ dissect_smb2_create_extra_info(tvbuff_t *tvb, packet_info *pinfo, proto_tree *pa
 
 	/* data */
 	dissectors = &tag_dissectors->dissectors;
-	if (dissectors)
-		dissector = (si->flags & SMB2_FLAGS_RESPONSE) ? dissectors->response : dissectors->request;
+	dissector = (si->flags & SMB2_FLAGS_RESPONSE) ? dissectors->response : dissectors->request;
 
 	dissect_smb2_olb_buffer(pinfo, sub_tree, tvb, &data_olb, si, dissector);
 
@@ -13435,12 +13434,12 @@ dissect_smb2(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_tree, bool fi
 
 			if(ssi->async
 			|| ssi->cancelled_in) {
-				command = smb2_cmd_vals[si->opcode].strptr;
+				command = decode_smb2_name(si->opcode);
 
 				if(si->opcode==SMB2_CANCEL
 				&& ssi->async
 				&& ssi->async->cancel_req_in) {
-					command = smb2_cmd_vals[ssi->async->opcode].strptr;
+					command = decode_smb2_name(ssi->async->opcode);
 				}
 
 				/* Request in */
@@ -13559,7 +13558,7 @@ dissect_smb2(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_tree, bool fi
 					&& ssi->frame_req != UINT32_MAX
 					&& ssi->frame_res==pinfo->fd->num) {
 						item = proto_tree_add_uint_format(header_tree, hf_smb2_response_to, tvb, 0, 0,
-							ssi->frame_req, "%s response to: %u", smb2_cmd_vals[si->opcode].strptr,
+							ssi->frame_req, "%s response to: %u", decode_smb2_name(si->opcode),
 							ssi->frame_req);
 						PROTO_ITEM_SET_GENERATED(item);
 
@@ -13580,7 +13579,7 @@ dissect_smb2(tvbuff_t *tvb, packet_info *pinfo, proto_tree *parent_tree, bool fi
 					&& ssi->frame_res != UINT32_MAX
 					&& ssi->frame_req==pinfo->fd->num) {
 						item = proto_tree_add_uint_format(header_tree, hf_smb2_response_in, tvb, 0, 0,
-							ssi->frame_res, "%s response in: %u", smb2_cmd_vals[si->opcode].strptr,
+							ssi->frame_res, "%s response in: %u", decode_smb2_name(si->opcode),
 							ssi->frame_res);
 						PROTO_ITEM_SET_GENERATED(item);
 					}
