@@ -288,7 +288,7 @@ window_geom_free(void *data)
 {
     window_geometry_t *geom = (window_geometry_t*)data;
     g_free(geom->key);
-    g_free(geom->qt_geom);
+    g_free((char*)geom->qt_geom); // We copied it; we can free it
     g_free(geom);
 }
 
@@ -309,6 +309,7 @@ window_geom_save(const char *name, window_geometry_t *geom)
     *work = *geom;
     key = g_strdup(name);
     work->key = key;
+    work->qt_geom = g_strdup(geom->qt_geom);
     g_hash_table_replace(window_geom_hash, key, work);
 }
 
@@ -417,7 +418,7 @@ window_geom_recent_read_pair(const char *name,
         parse_recent_boolean(value, &geom.maximized);
         geom.set_maximized = true;
     } else if (strcmp(key, "qt_geometry") == 0) {
-        geom.qt_geom = g_strdup(value);
+        geom.qt_geom = value;
     } else {
         /*
          * Silently ignore the bogus key.  We shouldn't abort here,
@@ -1760,7 +1761,7 @@ recent_read_static(char **rf_path_return, int *rf_errno_return)
 bool
 recent_read_profile_static(char **rf_path_return, int *rf_errno_return)
 {
-    char       *rf_path, *rf_common_path;
+    char       *rf_path;
     FILE       *rf;
 
     /* set defaults */
@@ -1837,23 +1838,6 @@ recent_read_profile_static(char **rf_path_return, int *rf_errno_return)
         /* We succeeded in opening it; read it. */
         read_prefs_file(rf_path, rf, read_set_recent_pair_static, NULL);
         fclose(rf);
-
-        /* XXX: The following code doesn't actually do anything since
-         *  the "recent common file" always exists. Presumably the
-         *  "if (!file_exists())" should actually be "if (file_exists())".
-         *  However, I've left the code as is because this
-         *  behaviour has existed for quite some time and I don't
-         *  know what's supposed to happen at this point.
-         *  ToDo: Determine if the "recent common file" should be read at this point
-         */
-        rf_common_path = get_persconffile_path(RECENT_COMMON_FILE_NAME, false, application_configuration_environment_prefix());
-        if (!file_exists(rf_common_path)) {
-            /* Read older common settings from recent file */
-            rf = ws_fopen(rf_path, "r");
-            read_prefs_file(rf_path, rf, read_set_recent_common_pair_static, NULL);
-            fclose(rf);
-        }
-        g_free(rf_common_path);
     } else {
         /* We failed to open it.  If we failed for some reason other than
            "it doesn't exist", return the errno and the pathname, so our
