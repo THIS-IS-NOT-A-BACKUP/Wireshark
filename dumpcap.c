@@ -230,13 +230,70 @@ static bool infoprint;      /* if true, print capture info after clearing infode
 static void capture_loop_stop(void);
 
 #if defined (__linux__)
-/* whatever the deal with pcap_breakloop, linux doesn't support timeouts
- * in pcap_dispatch(); on the other hand, select() works just fine there.
- * Hence we use a select for that come what may.
+/* To quote the pcap(3pcap) man page - note the next-to-last paragraph:
  *
- * XXX - with TPACKET_V1 and TPACKET_V2, it currently uses select()
- * internally, and, with TPACKET_V3, once that's supported, it'll
- * support timeouts, at least as I understand the way the code works.
+ * packet buffer timeout
+ *        If, when capturing, packets are delivered as soon as they
+ *        arrive, the application capturing the packets will be woken up
+ *        for each packet as it arrives, and might have to make one or
+ *        more calls to the operating system to fetch each packet.
+ *
+ *        If, instead, packets are not delivered as soon as they arrive,
+ *        but are delivered after a short delay (called a "packet buffer
+ *        timeout"), more than one packet can be accumulated before the
+ *        packets are delivered, so that a single wakeup would be done for
+ *        multiple packets, and each set of calls made to the operating
+ *        system would supply multiple packets, rather than a single
+ *        packet.  This reduces the per-packet CPU overhead if packets are
+ *        arriving at a high rate, increasing the number of packets per
+ *        second that can be captured.
+ *
+ *        The packet buffer timeout is required so that an application
+ *        won't wait for the operating system's capture buffer to fill up
+ *        before packets are delivered; if packets are arriving slowly,
+ *        that wait could take an arbitrarily long period of time.
+ *
+ *        Not all platforms support a packet buffer timeout; on platforms
+ *        that don't, the packet buffer timeout is ignored.  A zero value
+ *        for the timeout, on platforms that support a packet buffer
+ *        timeout, will cause a read to wait forever to allow enough
+ *        packets to arrive, with no timeout.  A negative value is
+ *        invalid; the result of setting the timeout to a negative value
+ *        is unpredictable.
+ *
+ *        NOTE: the packet buffer timeout cannot be used to cause calls
+ *        that read packets to return within a limited period of time,
+ *        because, on some platforms, the packet buffer timeout isn't
+ *        supported, and, on other platforms, the timer doesn't start
+ *        until at least one packet arrives.  This means that the packet
+ *        buffer timeout should NOT be used, for example, in an
+ *        interactive application to allow the packet capture loop to
+ *        ``poll'' for user input periodically, as there's no guarantee
+ *        that a call reading packets will return after the timeout
+ *        expires even if no packets have arrived.
+ *
+ *        The packet buffer timeout is set with pcap_set_timeout().
+ *
+ * In particular, this means you can't rely on the timer expiring if
+ * no packets have arrived.
+ *
+ * It does not, in fact, do so with Linux TPACKET_V3. (It also didn't
+ * do so with pre-memory-mapped capture on Linux.)
+ *
+ * On the other hand, select() works just fine there.
+ * Hence we use a select for that come what may, so that switching
+ * capture files after a certain amount of time works.
+ *
+ * select() doesn't work on all platforms that use BPF capture devices,
+ * however, so we don't use it on all platforms; timeouts do happen to
+ * occur even if no packets have arrived with BPF capture devices.
+ *
+ * Note also that pcap_breakloop() does not break out of the system
+ * calls that block waiting for packets to arrive except on Windows;
+ * it does so with newer versions of libpcap on Linux, by having
+ * an event FD on which libpcap blocks, along with the PF_PACKET FD.
+ *
+ * Yes, this is a mess.
  */
 #define MUST_DO_SELECT
 #endif
@@ -3475,7 +3532,7 @@ capture_loop_init_output(capture_options *capture_opts, loop_data *ld, char *err
                      " saved (\"%s\") could not be written to: %s.",
                      capture_opts->save_file, g_strerror(err));
         }
-        ws_cwstream_close(ld->pdh, NULL);
+        ws_cwstream_close_after_error(ld->pdh);
         ld->pdh = NULL;
         return false;
     }
@@ -3489,7 +3546,7 @@ capture_loop_finish_output(capture_options *capture_opts, loop_data *ld)
     /*
      * Write out statistics if we're writing to a single pcapng file.
      *
-     * XXX - if we're writing to multiple files, hould we write out
+     * XXX - if we're writing to multiple files, should we write out
      * statistics showing counts since we started writing this file?
      */
     if (!capture_opts->multi_files_on) {
@@ -3986,7 +4043,7 @@ do_file_switch_or_stop(capture_options *capture_opts)
             }
 
             if (!successful) {
-                ws_cwstream_close(global_ld.pdh, NULL);
+                ws_cwstream_close_after_error(global_ld.pdh);
                 global_ld.pdh = NULL;
                 global_ld.go = false;
                 return false;
@@ -4221,7 +4278,7 @@ capture_loop_start(capture_options *capture_opts, bool *stats_known, struct pcap
     } else {
         /* If we're not writing to a file, we're not writing to a pipe.
          * This is a programming error with the caller, and would lead
-         * to NULL pointer deferences. */
+         * to NULL pointer dereferences. */
         ws_assert(!capture_opts->output_to_pipe);
     }
 
@@ -5162,7 +5219,7 @@ main(int argc, char *argv[])
      * So we do an early parse of the arguments, checking only for -Z
      * an --application-flavor,
      *
-     * We also ignore errors other than errors in the opations we're
+     * We also ignore errors other than errors in the options we're
      * processing - *and* set "ws_opterr" to 0 to suppress the
      * error messages for invalid options.
      *
@@ -5667,7 +5724,7 @@ main(int argc, char *argv[])
         /*
          * Don't print the usage for the -Z and --application-flavor
          * options, as they're not described in the usage message
-         * because they're only for use by other Wirehsark/Stratoshark
+         * because they're only for use by other Wireshark/Stratoshark
          * programs when they're doing captures.
          *
          * The problem is that it's a long message and will probably
@@ -6023,7 +6080,7 @@ main(int argc, char *argv[])
                 }
                 if (interface_opts->ifname != NULL) {
                     /*
-                     * Re-generate the display name based on the strins
+                     * Re-generate the display name based on the strings
                      * we were handed.
                      */
                     g_free(interface_opts->display_name);
