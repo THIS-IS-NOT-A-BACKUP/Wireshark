@@ -442,21 +442,23 @@ static loop_data   global_ld;
  */
 #define CAP_READ_TIMEOUT        250
 
-/*
- * Timeout, in microseconds, for reads from the stream of captured packets
- * from a pipe.  Pipes don't have the same problem that BPF devices do
- * in Mac OS X 10.6, 10.6.1, 10.6.3, and 10.6.4, so we always use a timeout
- * of 250ms, i.e. the same value as CAP_READ_TIMEOUT when not on one
- * of the offending versions of Snow Leopard.
- *
- * On Windows this value is converted to milliseconds and passed to
- * WaitForSingleObject. If it's less than 1000 WaitForSingleObject
- * will return immediately.
- */
 #if defined(_WIN32)
-#define PIPE_READ_TIMEOUT   100000
+/*
+ * Windows. This value is used as the timeout for g_async_queue_timeout_pop()
+ * on pipes.
+ */
+#define PIPE_READ_TIMEOUT   100000 /* .1 s */
 #else
-#define PIPE_READ_TIMEOUT   250000
+/*
+ * UNIX-like systems (UN*Xes and Haiku). This value is used as the timeout,
+ * in microseconds, for reads from the stream of captured packets from a pipe.
+ *
+ * Pipes don't have the same problem that BPF devices do in Mac OS X 10.6,
+ * 10.6.1, 10.6.3, and 10.6.4, so we always use a timeout of 250ms, i.e.
+ * the same value as CAP_READ_TIMEOUT when not on one of the offending
+ * versions of Snow Leopard.
+ */
+#define PIPE_READ_TIMEOUT   250000 /* .25 s */
 #endif
 
 #define WRITER_THREAD_TIMEOUT 100000 /* usecs */
@@ -2030,10 +2032,10 @@ cap_pipe_open_live(char *pipename,
     /*
      * On UN*X, we can use select() on pipes or sockets.
      *
-     * On Windows, we can only use it on sockets; to do non-blocking
-     * reads from pipes, we currently do reads in a separate thread
-     * and use GLib asynchronous queues from the main thread to start
-     * read operations and to wait for them to complete.
+     * XXX - we use multiple threads for capturing, in part because
+     * select() isn't guaranteed to work on capture devices; should
+     * we use multiple threas if use_threads is set, which it will be
+     * if we have more than one capture device?
      */
     bytes_read = 0;
     while (bytes_read < sizeof magic) {
@@ -2064,7 +2066,14 @@ cap_pipe_open_live(char *pipename,
         }
     }
 #else
-    /* Create a thread to read from this pipe */
+    /*
+     * On Windows, we can only use select() on sockets; to do non-blocking
+     * reads from pipes, we currently do reads in a separate thread
+     * and use GLib asynchronous queues from the main thread to start
+     * read operations and to wait for them to complete.
+     *
+     * Create a thread to read from this pipe.
+     */
     g_thread_new("cap_pipe_open_live", &cap_thread_read, pcap_src);
 
     pipe_read_sync(pcap_src, &magic, sizeof(magic));
@@ -3689,8 +3698,8 @@ capture_loop_dispatch(loop_data *ld,
                     inpkts = pcap_dispatch(pcap_src->pcap_h, 1, capture_loop_write_packet_cb, (uint8_t *)pcap_src);
                 }
                 if (inpkts < 0) {
-                    if (inpkts == PCAP_ERROR) {
-                        /* Error, rather than pcap_breakloop(). */
+                    if (inpkts != PCAP_ERROR_BREAK) {
+                        /* An error, rather than a pcap_breakloop() call. */
                         pcap_src->pcap_err = true;
                     }
                     ld->go = false; /* error or pcap_breakloop() - stop capturing */
@@ -3708,7 +3717,6 @@ capture_loop_dispatch(loop_data *ld,
 #endif /* MUST_DO_SELECT */
         {
             /* dispatch from pcap without select */
-#if 1
 #ifdef LOG_CAPTURE_VERBOSE
             ws_debug("capture_loop_dispatch: from pcap_dispatch");
 #endif
@@ -3732,49 +3740,12 @@ capture_loop_dispatch(loop_data *ld,
             }
 #endif
             if (inpkts < 0) {
-                if (inpkts == PCAP_ERROR) {
-                    /* Error, rather than pcap_breakloop(). */
+                if (inpkts != PCAP_ERROR_BREAK) {
+                    /* An error, rather than a pcap_breakloop() call. */
                     pcap_src->pcap_err = true;
                 }
                 ld->go = false; /* error or pcap_breakloop() - stop capturing */
             }
-#else /* pcap_next_ex */
-#ifdef LOG_CAPTURE_VERBOSE
-            ws_debug("capture_loop_dispatch: from pcap_next_ex");
-#endif
-            /* XXX - this is currently unused, as there is some confusion with pcap_next_ex() vs. pcap_dispatch() */
-
-            /*
-             * WinPcap's remote capturing feature doesn't work with pcap_dispatch(),
-             * see https://gitlab.com/wireshark/wireshark/-/wikis/CaptureSetup/WinPcapRemote
-             * This should be fixed in the WinPcap 4.0 alpha release.
-             *
-             * For reference, an example remote interface:
-             * rpcap://[1.2.3.4]/\Device\NPF_{39993D68-7C9B-4439-A329-F2D888DA7C5C}
-             */
-
-            /* emulate dispatch from pcap */
-            {
-                int in;
-                struct pcap_pkthdr *pkt_header;
-                uint8_t *pkt_data;
-
-                in = 0;
-                while(ld->go &&
-                      (in = pcap_next_ex(pcap_src->pcap_h, &pkt_header, &pkt_data)) == 1) {
-                    if (use_threads) {
-                        capture_loop_queue_packet_cb((uint8_t *)pcap_src, pkt_header, pkt_data);
-                    } else {
-                        capture_loop_write_packet_cb((uint8_t *)pcap_src, pkt_header, pkt_data);
-                    }
-                }
-
-                if (in < 0) {
-                    pcap_src->pcap_err = true;
-                    ld->go = false;
-                }
-            }
-#endif /* pcap_next_ex */
         }
     }
 
@@ -4074,6 +4045,8 @@ do_file_switch_or_stop(capture_options *capture_opts)
     return true;
 }
 
+/* Runs in a per-capture-source thread, receiving packets from the
+   capture source and pushing them onto the end of the packet queue. */
 static void *
 pcap_read_handler(void* arg)
 {
@@ -4093,7 +4066,8 @@ pcap_read_handler(void* arg)
     return (NULL);
 }
 
-/* Try to pop an item off the packet queue and if it exists, write it */
+/* Try to pop an item off the head of the packet queue and if it exists,
+   write it */
 static bool
 capture_loop_dequeue_packet(void) {
     pcap_queue_element *queue_element;
@@ -4315,6 +4289,8 @@ capture_loop_start(capture_options *capture_opts, bool *stats_known, struct pcap
     /* WOW, everything is prepared! */
     /* please fasten your seat belts, we will enter now the actual capture loop */
     if (use_threads) {
+        /* Start threads, one per capture device, to queue incoming packets
+           for writing. */
         pcap_queue = g_async_queue_new();
         pcap_queue_bytes = 0;
         pcap_queue_packets = 0;
@@ -4325,8 +4301,9 @@ capture_loop_start(capture_options *capture_opts, bool *stats_known, struct pcap
         }
     }
     while (global_ld.go) {
-        /* dispatch incoming packets */
         if (use_threads) {
+            /* Write out the packet at the head of the queue of received
+               packets. */
             bool dequeued = capture_loop_dequeue_packet();
 
             if (dequeued) {
@@ -4335,6 +4312,7 @@ capture_loop_start(capture_options *capture_opts, bool *stats_known, struct pcap
                 inpkts = 0;
             }
         } else {
+            /* Dispatch incoming packets and write them out. */
             pcap_src = g_array_index(global_ld.pcaps, capture_src *, 0);
             inpkts = capture_loop_dispatch(&global_ld, errmsg,
                                            sizeof(errmsg), pcap_src);
