@@ -618,6 +618,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-clnp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-cmpp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-cnip.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-coap-eap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-coap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-cola.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-collectd.c
@@ -1502,6 +1503,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-raknet.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-raw.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rdm.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-rdm-etc.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rdp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rdp_multitransport.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-rdp_conctrl.c
@@ -1952,6 +1954,7 @@ set(EVENT_DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-data.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-json.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-media-type.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-mime-encap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-pcapng_block.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-text-media.c
 	${EVENT_FILES}
