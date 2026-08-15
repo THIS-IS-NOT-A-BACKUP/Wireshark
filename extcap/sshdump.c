@@ -28,8 +28,6 @@
 #include <string.h>
 #include <fcntl.h>
 
-#include <cli_main.h>
-
 static char* sshdump_extcap_interface;
 #define DEFAULT_SSHDUMP_EXTCAP_INTERFACE "sshdump"
 
@@ -349,7 +347,7 @@ int main(int argc, char *argv[])
 	g_set_prgname("sshdump");
 
 	/* Initialize log handler early so we can have proper logging during startup. */
-	extcap_log_init();
+	extcap_log_init(extcap_conf);
 
 	sshdump_extcap_interface = g_path_get_basename(argv[0]);
 	if (g_str_has_suffix(sshdump_extcap_interface, ".exe")) {

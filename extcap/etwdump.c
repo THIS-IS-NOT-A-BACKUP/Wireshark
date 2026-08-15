@@ -23,7 +23,6 @@
 #include <wsutil/wslog.h>
 #include <app/application_flavor.h>
 
-#include <cli_main.h>
 #include <wsutil/cmdarg_err.h>
 #include "etl.h"
 
@@ -122,8 +121,8 @@ static DWORD list_providers(unsigned inc)
     // Retrieve the required buffer size.
     status = TdhEnumerateProviders(penum, &BufferSize);
 
-    // Allocate the required buffer and call TdhEnumerateProviders. The list of 
-    // providers can change between the time you retrieved the required buffer 
+    // Allocate the required buffer and call TdhEnumerateProviders. The list of
+    // providers can change between the time you retrieved the required buffer
     // size and the time you enumerated the providers, so call TdhEnumerateProviders
     // in a loop until the function does not return ERROR_INSUFFICIENT_BUFFER.
 
@@ -425,7 +424,7 @@ int main(int argc, char* argv[])
     g_set_prgname("etwdump");
 
     /* Initialize log handler early so we can have proper logging during startup. */
-    extcap_log_init();
+    extcap_log_init(extcap_conf);
 
     /*
      * Get credential information for later use.
