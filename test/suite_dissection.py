@@ -648,7 +648,7 @@ class TestDissectHttp2:
         key_file = os.path.join(dirs.key_dir, 'http2-data-reassembly.keys')
         stdout = subprocess.check_output((cmd_tshark,
                 '-r', capture_file('http2-data-reassembly.pcap'),
-                '-o', 'tls.keylog_file: {}'.format(key_file),
+                '-o', f'tls.keylog_file: {key_file}',
                 '-d', 'tcp.port==8443,tls',
                 '-Y', 'http2.data.data matches "PNG" && http2.data.data matches "END"',
             ), encoding='utf-8', env=test_env)
@@ -685,7 +685,7 @@ class TestDissectHttp2:
         key_file = os.path.join(dirs.key_dir, 'http2-data-reassembly.keys')
         stdout = subprocess.check_output((cmd_tshark,
                 '-r', capture_file('http2-data-reassembly.pcap'),
-                '-o', 'tls.keylog_file: {}'.format(key_file),
+                '-o', f'tls.keylog_file: {key_file}',
                 '-z', 'follow,http2,hex,0,0'
             ), encoding='utf-8', env=test_env)
         # Stream ID 0 bytes
@@ -702,7 +702,7 @@ class TestDissectHttp2:
         key_file = os.path.join(dirs.key_dir, 'http2-data-reassembly.keys')
         stdout = subprocess.check_output((cmd_tshark,
                 '-r', capture_file('http2-data-reassembly.pcap'),
-                '-o', 'tls.keylog_file: {}'.format(key_file),
+                '-o', f'tls.keylog_file: {key_file}',
                 '-z', 'follow,http2,hex,0,1'
             ), encoding='utf-8', env=test_env)
         # Stream ID 0 bytes
@@ -822,7 +822,7 @@ class TestDissectProtobuf:
                 '-o', 'uat:protobuf_udp_message_types: "8127","tutorial.AddressBook"',
                 '-o', 'protobuf.preload_protos: TRUE',
                 '-o', 'protobuf.pbf_as_hf: TRUE',
-                '-X', 'lua_script:{}'.format(lua_file),
+                '-X', f'lua_script:{lua_file}',
                 '-Y', 'pbf.tutorial.Person.name == "Jason" && pbf.tutorial.Person.last_updated && png',
             ), encoding='utf-8', env=test_env)
         assert grep_output(stdout, 'PB[(]tutorial.AddressBook[)]')
@@ -840,7 +840,7 @@ class TestDissectProtobuf:
                 '-o', 'uat:protobuf_search_paths: "{}","{}"'.format(user_defined_types_dir, 'TRUE'),
                 '-o', 'protobuf.preload_protos: TRUE',
                 '-o', 'protobuf.pbf_as_hf: TRUE',
-                '-X', 'lua_script:{}'.format(lua_file),
+                '-X', f'lua_script:{lua_file}',
                 '-d', 'tcp.port==18127,addrbook',
                 '-Y', 'pbf.tutorial.Person.name == "Jason" && pbf.tutorial.Person.last_updated',
             ), encoding='utf-8', env=test_env)
@@ -1500,3 +1500,34 @@ class TestDissectUdx:
             return [l for l in stdout.splitlines() if l.strip() and not l.strip().isdigit()]
 
         assert payload('udx_clean.pcap.gz')[-20:] == payload('udx_loss.pcap.gz')[-20:]
+
+
+class TestDissectGsmtapUm:
+    def test_gsmtap_um_encap(self, cmd_tshark, capture_file, test_env):
+        '''A LINKTYPE_GSMTAP_UM (217) capture opens and every frame reaches
+        the GSMTAP dissector.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_um_lte.pcap'),
+                '-Tfields', '-egsmtap.type',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip().split() == ['15', '13', '15', '15', '15', '18']
+
+    def test_gsmtap_lte_mac_framed_rar(self, cmd_tshark, capture_file, test_env):
+        '''A GSMTAP LTE MAC framed payload reaches mac-lte: RAR fields decode.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_um_lte.pcap'),
+                '-Y', 'mac-lte.rar',
+                '-Tfields', '-emac-lte.rar.rapid', '-emac-lte.rar.ta',
+                '-emac-lte.rar.temporary-crnti',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '0x06\t0\t70'
+
+    def test_gsmtap_lte_mac_framed_rrc_chain(self, cmd_tshark, capture_file, test_env):
+        '''MAC framed payloads chain through mac-lte into the RRC dissector
+        (frames 1, 4 and 5); frame 2 is a plain GSMTAP LTE RRC packet.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_um_lte.pcap'),
+                '-Y', 'lte_rrc',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip().split() == ['1', '2', '4', '5']
