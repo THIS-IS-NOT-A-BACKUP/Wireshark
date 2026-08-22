@@ -392,6 +392,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/file-jpeg.c
 	${CMAKE_CURRENT_SOURCE_DIR}/file-mmodule.c
 	${CMAKE_CURRENT_SOURCE_DIR}/file-mp4.c
+	${CMAKE_CURRENT_SOURCE_DIR}/file-ogg.c
 	${CMAKE_CURRENT_SOURCE_DIR}/file-pcap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/file-pcapng.c
 	${CMAKE_CURRENT_SOURCE_DIR}/file-pcapng-darwin.c
@@ -1713,6 +1714,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tacacs.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tali.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tapa.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-tcg-storage.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tcp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tcpcl.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-tcpros.c
