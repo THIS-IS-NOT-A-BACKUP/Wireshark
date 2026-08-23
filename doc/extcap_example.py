@@ -10,18 +10,22 @@
 #
 
 r"""
-This is a generic example, which produces pcap packages every n seconds, and
+This is a generic example, which produces pcap packets every n seconds, and
 is configurable via extcap options.
 
 @note
 {
-To use this script on Windows, please also include extcap_example.bat inside
-the extcap folder, next to extcap_example.py.
+To use this script on Windows, please either make sure that the .py extension is
+associated with the Python interpreter *and* is in the PATHEXT environment
+variable, or also include extcap_example.bat inside the extcap folder, next to
+extcap_example.py.
 
 https://gitlab.com/wireshark/wireshark/-/blob/master/doc/extcap_example.bat
 
-Windows is not able to execute Python scripts directly, which also goes for all
-other script-based formats beside VBScript
+Windows is not able to execute Python scripts directly unless the extension is
+in PATHEXT, which also goes for all other script-based formats (the extensions
+for Batch, PowerShell, and (deprecated) VBScript scripts are in PATHEXT by
+default.)
 }
 
 """
@@ -183,7 +187,8 @@ def extcap_config_option(interface, option_name, option_value):
         print("arg {number=%d}{call=%s}{display=%s}{tooltip=%s}{type=%s}%s" % arg)
 
 def extcap_version():
-    print("extcap {version=1.0}{help=https://www.wireshark.org}{display=Example extcap interface}{control=2}")
+    # control=3 == EXTCAP_CONTROL_TOOLBAR | EXTCAP_CONTROL_QUIT
+    print("extcap {version=1.0}{help=https://www.wireshark.org}{display=Example extcap interface}{control=3}")
 
 def extcap_interfaces():
     extcap_version();

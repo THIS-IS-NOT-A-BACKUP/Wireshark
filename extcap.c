@@ -233,6 +233,51 @@ extcap_dump_all(void)
     extcap_get_descriptions(print_extcap_description, NULL);
 }
 
+static bool
+is_valid_extcap_binary(const char *extcap_path)
+{
+    bool ok = true;
+    if (!g_file_test(extcap_path, G_FILE_TEST_IS_REGULAR) ||
+        !g_file_test(extcap_path, G_FILE_TEST_IS_EXECUTABLE)) {
+        /* Not executable, so not an extcap binary.
+         * Note on Windows this just tests if the extension is
+         * in PATHEXT. We could try to special case some extensions,
+         * like .py, even if they're not in PATHEXT. */
+        return false;
+    }
+#ifdef _WIN32
+    /*
+     * If both foo.bat and foo.py exists, then assume that foo.bat is a wrapper
+     * script that ends up calling foo.py. Do not execute foo.py in that case.
+     */
+#define MAX_EXT_LEN 3
+    static const char exe_exts[][MAX_EXT_LEN + 1] = { "exe", "bat", "cmd" };
+    const char *dotpos = strrchr(extcap_path, '.');
+    if (!dotpos) {
+        return false;
+    }
+    // If this is already an executable, just accept it.
+    for (unsigned i = 0; i < G_N_ELEMENTS(exe_exts); i++) {
+        if (g_ascii_strcasecmp(dotpos + 1, exe_exts[i]) == 0) {
+            return true;
+        }
+    }
+    // Otherwise assume it to be a script and check that no wrapper exists.
+    const size_t noext_len = (size_t) (dotpos + 1 - extcap_path);
+    char *filename = g_new0(gchar, noext_len + MAX_EXT_LEN + 1);
+    memcpy(filename, extcap_path, noext_len);
+    for (unsigned i = 0; i < G_N_ELEMENTS(exe_exts); i++) {
+        memcpy(filename + noext_len, exe_exts[i], MAX_EXT_LEN + 1);
+        if (g_file_test(filename, G_FILE_TEST_IS_REGULAR)) {
+            ok = false;
+            break;
+        }
+    }
+    g_free(filename);
+#endif
+    return ok;
+}
+
 static GSList *
 extcap_get_extcap_paths_from_dir(GSList * list, const char * dirname)
 {
@@ -246,8 +291,7 @@ extcap_get_extcap_paths_from_dir(GSList * list, const char * dirname)
             /* full path to extcap binary */
             char *extcap_path = ws_strdup_printf("%s" G_DIR_SEPARATOR_S "%s", dirname, file);
             /* treat anything executable as an extcap binary */
-            if (g_file_test(extcap_path, G_FILE_TEST_IS_REGULAR) &&
-                g_file_test(extcap_path, G_FILE_TEST_IS_EXECUTABLE)) {
+            if (is_valid_extcap_binary(extcap_path)) {
                 paths = g_slist_append(paths, extcap_path);
             } else {
                 g_free(extcap_path);
@@ -1313,7 +1357,7 @@ extcap_get_control_for_ifname(const char *ifname)
 
     extcap_interface* interface = extcap_find_interface_for_ifname(ifname);
     if (!interface || (interface->control == 1 && !iface_toolbar_use())) {
-        return 0;
+        return EXTCAP_CONTROL_NONE;
     }
 
     return interface->control;
@@ -1426,7 +1470,7 @@ void extcap_request_stop(capture_session *cap_session)
         ws_info("Extcap [%s] - Requesting stop PID: %"PRIdMAX, interface_opts->name,
               (intmax_t)interface_opts->extcap_pid);
 
-        if (interface_opts->extcap_control_out_watch > 0)
+        if (interface_opts->extcap_control_out_watch > 0 && (extcap_get_control_for_ifname(interface_opts->name) & EXTCAP_CONTROL_QUIT))
         {
             static uint8_t quit_msg[4] = { SP_QUIT, 0, 0, 0};
             g_async_queue_push_front(interface_opts->extcap_control_out_q, g_bytes_new_static(quit_msg, sizeof(quit_msg)));
@@ -2316,6 +2360,39 @@ extcap_setup_control_in(capture_session *cap_session, interface_options *interfa
 #endif
 }
 
+void
+extcap_setup_control_out(capture_session *cap_session, interface_options *interface_opts)
+{
+    interface_opts->extcap_control_out_watch = 0;
+    if (!interface_opts->extcap_control_out) {
+        return;
+    }
+
+    GSource *source = g_source_new(&msg_queue_source_funcs, sizeof(MessageQueueSource));
+    MessageQueueSource *control_out_source = (MessageQueueSource*)source;
+    control_out_source->queue = g_async_queue_ref(interface_opts->extcap_control_out_q);
+    control_out_source->fifo = g_strdup(interface_opts->extcap_control_out);
+    /* Opening the control out pipe blocking can hang the program waiting
+     * for a connection or even run into a Dining Philosophers deadlock,
+     * depending on how and in what order the extcap opens the main FIFO
+     * and the control pipes. On non-Windows we try to open it non-blocking
+     * in the source, saving pending messages in the queue. */
+    control_out_source->out_fd = -1;
+    control_out_source->start_time = g_get_monotonic_time();
+    control_out_source->check_time = 0;
+
+    // Do this before we watch
+    ws_pipe_t *pipedata = (ws_pipe_t *)interface_opts->extcap_pipedata;
+    pipedata->other_sources = g_slist_append(pipedata->other_sources, source);
+
+    if (interface_opts->extcap_control_out) {
+        g_source_set_callback(source, G_SOURCE_FUNC(extcap_control_out_cb), cap_session, NULL);
+    }
+    GMainContext *context = g_main_context_default();
+    interface_opts->extcap_control_out_watch = g_source_attach(source, context);
+    g_source_unref(source);
+}
+
 /* call mkfifo for each extcap,
  * returns false if there's an error creating a FIFO */
 bool
@@ -2342,8 +2419,8 @@ extcap_init_interfaces(capture_session *cap_session)
         }
 
         /* create control pipes if necessary */
-        unsigned control_needed = extcap_get_control_for_ifname(interface_opts->name);
-        if (control_needed)
+        unsigned control_supported = extcap_get_control_for_ifname(interface_opts->name);
+        if (control_supported & (EXTCAP_CONTROL_QUIT | EXTCAP_CONTROL_TOOLBAR))
         {
             extcap_create_pipe(interface_opts->name, &interface_opts->extcap_control_in,
 #ifdef _WIN32
@@ -2352,6 +2429,9 @@ extcap_init_interfaces(capture_session *cap_session)
                                capture_opts->temp_dir,
 #endif
                                EXTCAP_CONTROL_IN_PREFIX);
+        }
+        if (control_supported & EXTCAP_CONTROL_TOOLBAR)
+        {
             extcap_create_pipe(interface_opts->name, &interface_opts->extcap_control_out,
 #ifdef _WIN32
                                &interface_opts->extcap_control_out_h,
@@ -2425,12 +2505,14 @@ extcap_init_interfaces(capture_session *cap_session)
             int num_pipe_handles = 1;
             pipe_handles[0] = interface_opts->extcap_pipe_h;
 
-            if (control_needed)
+            if (interface_opts->extcap_control_in)
             {
-                pipe_handles[1] = interface_opts->extcap_control_in_h;
-                pipe_handles[2] = interface_opts->extcap_control_out_h;
-                num_pipe_handles += 2;
-             }
+                pipe_handles[num_pipe_handles++] = interface_opts->extcap_control_in_h;
+            }
+            if (interface_opts->extcap_control_out)
+            {
+                pipe_handles[num_pipe_handles++] = interface_opts->extcap_control_out_h;
+            }
 
             // XXX - Handle failure?
             ws_pipe_wait_for_pipe(pipe_handles, num_pipe_handles, pid);
@@ -2438,26 +2520,7 @@ extcap_init_interfaces(capture_session *cap_session)
 #endif
 
         extcap_setup_control_in(cap_session, interface_opts);
-
-        GSource *source = g_source_new(&msg_queue_source_funcs, sizeof(MessageQueueSource));
-        MessageQueueSource *control_out_source = (MessageQueueSource*)source;
-        control_out_source->queue = g_async_queue_ref(interface_opts->extcap_control_out_q);
-        control_out_source->fifo = g_strdup(interface_opts->extcap_control_out);
-        /* Opening the control out pipe blocking can hang the program waiting
-         * for a connection or even run into a Dining Philosophers deadlock,
-         * depending on how and in what order the extcap opens the main FIFO
-         * and the control pipes. On non-Windows we try to open it non-blocking
-         * in the source, saving pending messages in the queue. */
-        control_out_source->out_fd = -1;
-        control_out_source->start_time = g_get_monotonic_time();
-        control_out_source->check_time = 0;
-        // Do this before we watch
-        pipedata->other_sources = g_slist_append(pipedata->other_sources, source);
-
-        g_source_set_callback(source, G_SOURCE_FUNC(extcap_control_out_cb), cap_session, NULL);
-        GMainContext *context = g_main_context_default();
-        interface_opts->extcap_control_out_watch = g_source_attach(source, context);
-        g_source_unref(source);
+        extcap_setup_control_out(cap_session, interface_opts);
     }
 
     return true;
@@ -2657,15 +2720,7 @@ process_new_extcap(const char *extcap, char *output)
 
             if (toolbar_entry)
             {
-                if (!int_iter->control) {
-                    /* XXX - Are we assured that iface_toolbar_use() already
-                     * returns true at this point, or can the interfaces be
-                     * loaded before that callback is set? If the former, we
-                     * could check it here, instead of setting the control
-                     * protocol version to 1 and verifying iface_toolbar_use()
-                     * later. */
-                    int_iter->control = 1;
-                }
+                int_iter->control |= EXTCAP_CONTROL_TOOLBAR;
                 if (!toolbar_entry->menu_title)
                 {
                     toolbar_entry->menu_title = g_strdup(int_iter->display);
