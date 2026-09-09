@@ -1172,6 +1172,33 @@ class TestDissectTls:
         self.check_tls_out_of_order(cmd_tshark, capture_file,
             test_env, extraArgs=['-2'])
 
+class TestDissectRoq:
+    def test_roq_recognized(self, cmd_tshark, capture_file, test_env):
+        '''Verify that RTP over QUIC packets are recognized as RoQ.'''
+        stdout = subprocess.check_output((
+            cmd_tshark,
+            '-2',
+            '-d', 'udp.port==4433,quic',
+            '-r', capture_file('roq-with-keys.pcapng.gz'),
+            '-Y', 'roq',
+            '-Tfields', '-e', 'frame.number',
+        ), encoding='utf-8', env=test_env)
+
+        assert stdout.splitlines() == ['9', '88', '165', '243']
+
+    def test_roq_payload_is_rtp(self, cmd_tshark, capture_file, test_env):
+        '''Verify that RoQ media payload is handed to the RTP dissector.'''
+        stdout = subprocess.check_output((
+            cmd_tshark,
+            '-2',
+            '-d', 'udp.port==4433,quic',
+            '-r', capture_file('roq-with-keys.pcapng.gz'),
+            '-Y', 'roq && rtp',
+            '-Tfields', '-e', 'frame.number',
+        ), encoding='utf-8', env=test_env)
+
+        assert stdout.splitlines() == ['88', '165', '243']
+
 class TestDissectQuic:
     @staticmethod
     def check_quic_tls_handshake_reassembly(cmd_tshark, capture_file, test_env,
@@ -1354,8 +1381,9 @@ class TestDissectTns:
     def test_tns_oer(self, cmd_tshark, capture_file, test_env):
         '''TTI_OER (Oracle Error Return) decodes call_status, rowcount,
         err_code, cursor_id, and the trailing ORA-NNNNN message text.
-        Two frames: a successful DML (rowcount=3, err=0) and a failed
-        DML (err=1, with message body).'''
+        Four frames: a successful DML (rowcount=3, err=0), a failed DML
+        (err=1, with message body), one whose message is the null marker,
+        and one carrying a non-empty oerrdd.'''
         stdout = subprocess.check_output((cmd_tshark,
             '-r', capture_file('tns_oer.pcap'),
             '-d', 'tcp.port==1521,tns',
@@ -1366,11 +1394,32 @@ class TestDissectTns:
             '-e', 'tns.data_oer.cursor_id',
             '-e', 'tns.data_oer.message',
         ), encoding='utf-8', env=test_env)
-        rows = [r.split('\t') for r in stdout.strip().splitlines()]
-        assert len(rows) == 2, rows
+        # Not stdout.strip(): the last row ends in an empty field, and
+        # stripping would take the tab that holds it with the newline.
+        rows = [r.split('\t') for r in stdout.splitlines() if r]
+        assert len(rows) == 4, rows
         assert rows[0] == ['0', '3', '0', '42', ''], rows[0]
         assert rows[1][0] == '0' and rows[1][2] == '1' and rows[1][3] == '42', rows[1]
         assert 'ORA-00001' in rows[1][4], rows[1]
+        # 0xFF is the null marker and stands for itself. Read as a length it
+        # claims 255 bytes that are not there.
+        assert rows[2][2] == '1722' and rows[2][3] == '9', rows[2]
+        assert rows[2][4] == '', rows[2]
+        # oerrdd is a ub4 count and then a DALC, not a bare DALC. Taking the
+        # count for a length puts every later field one field early, and the
+        # message is the first thing that visibly goes missing.
+        assert rows[3][2] == '942' and rows[3][3] == '7', rows[3]
+        assert 'ORA-00942' in rows[3][4], rows[3]
+
+    def test_tns_oer_no_malformed(self, cmd_tshark, capture_file, test_env):
+        '''No OER frame may be reported as malformed.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oer.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', '_ws.malformed',
+            '-T', 'fields', '-e', 'frame.number',
+        ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '', stdout
 
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
