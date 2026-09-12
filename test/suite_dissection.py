@@ -1421,6 +1421,184 @@ class TestDissectTns:
         ), encoding='utf-8', env=test_env)
         assert stdout.strip() == '', stdout
 
+    def test_tns_iov(self, cmd_tshark, capture_file, test_env):
+        '''TTI_IOV (I/O vector) decodes the bind count and the per-bind
+        direction vector. Two frames: a PL/SQL block with IN/OUT/IN OUT
+        binds (followed by a TTI_RXD row of returned values, left raw), and
+        a block with two pure-IN binds (no values follow).'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_iov.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_id',
+            '-e', 'tns.data_iov.num_binds',
+            '-e', 'tns.data_iov.bind_dir',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # data_id = 11 (Sending I/O Vec only for fast UPI).
+        assert rows[0][0] == '0x0000000b', rows[0]
+        # 16 = OUT, 32 = IN, 48 = IN OUT.
+        assert rows[0][1] == '3' and rows[0][2] == '32,16,48', rows[0]
+        assert rows[1][1] == '2' and rows[1][2] == '32,32', rows[1]
+
+    def test_tns_dcb(self, cmd_tshark, capture_file, test_env):
+        '''TTI_DCB (Describe) decodes the column count and per-column
+        metadata (type, scale, charset, name), and TTI_RXH (Row Header)
+        decodes the iteration counts. Two frames: a 2-column describe
+        (NUMBER "ID" / VARCHAR2 "NAME") and a row header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_dcb.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_dcb.num_columns',
+            '-e', 'tns.data_col.type',
+            '-e', 'tns.data_col.scale',
+            '-e', 'tns.data_col.charset',
+            '-e', 'tns.data_col.name',
+            '-e', 'tns.data_rxh.num_iters',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # DCB: 2 columns; types 2 (NUMBER) and 1 (VARCHAR); NUMBER scale
+        # -127; VARCHAR charset 873 (AL32UTF8); names ID and NAME.
+        assert rows[0][0] == '2', rows[0]
+        assert rows[0][1] == '2,1', rows[0]
+        assert '-127' in rows[0][2].split(','), rows[0]
+        assert '873' in rows[0][3].split(','), rows[0]
+        assert rows[0][4] == 'ID,NAME', rows[0]
+        # RXH: num_iters = 2.
+        assert rows[1][5] == '2', rows[1]
+
+    def test_tns_all8(self, cmd_tshark, capture_file, test_env):
+        '''TTI_ALL8 (SQL execute) decodes the options bitmask, fetch rows,
+        bind count and the SQL text. Three frames: a SELECT (options 0x8021,
+        fetch 15), an autocommit DELETE (options 0x8121), and a two-bind
+        UPDATE (options 0x8029).'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_all8.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_oci.id',
+            '-e', 'tns.data_all8.options',
+            '-e', 'tns.data_all8.options.commit',
+            '-e', 'tns.data_all8.fetch_rows',
+            '-e', 'tns.data_all8.bind_count',
+            '-e', 'tns.data_all8.sql',
+            '-e', 'tns.data_col.type',
+            '-e', 'tns.data_bind.value',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 3, rows
+        # oci id 0x5e = 94 (TTI_ALL8) on all.
+        assert all(r[0] == '0x5e' for r in rows), rows
+        # SELECT: options 0x8021, autocommit off, fetch 15, no binds.
+        assert rows[0][1] == '0x00008021', rows[0]
+        assert rows[0][2] == 'False' and rows[0][3] == '15' and rows[0][4] == '0', rows[0]
+        assert rows[0][5] == 'SELECT ID, NAME FROM USERS', rows[0]
+        # DELETE: options 0x8121, autocommit on, fetch 0.
+        assert rows[1][1] == '0x00008121', rows[1]
+        assert rows[1][2] == 'True' and rows[1][3] == '0', rows[1]
+        assert rows[1][5] == 'DELETE FROM USERS WHERE ID = 5', rows[1]
+        # UPDATE with two binds: VARCHAR (1) then NUMBER (2), values "hi"
+        # (6869) and Oracle NUMBER 10 (c10b).
+        assert rows[2][1] == '0x00008029' and rows[2][4] == '2', rows[2]
+        assert rows[2][5] == 'UPDATE USERS SET NAME=:1 WHERE ID=:2', rows[2]
+        assert rows[2][6] == '1,2', rows[2]
+        assert rows[2][7] == '6869,c10b', rows[2]
+
+    def test_tns_fetch(self, cmd_tshark, capture_file, test_env):
+        '''TTI_FETCH decodes the cursor id and row count. Two frames:
+        fetch 15 rows from cursor 3, and 100 rows from cursor 7.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_fetch.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_oci.id',
+            '-e', 'tns.data.cursor',
+            '-e', 'tns.data_fetch.rows',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # oci id 0x05 = 5 (TTI_FETCH / "Fetch a Row").
+        assert rows[0] == ['0x05', '3', '15'], rows[0]
+        assert rows[1] == ['0x05', '7', '100'], rows[1]
+
+    def test_tns_lobops(self, cmd_tshark, capture_file, test_env):
+        '''TTI_LOBOPS decodes the operation opcode and source offset. Two
+        frames: a READ (op 0x0002) and a GET_LENGTH (op 0x0001), both from
+        source offset 1.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_lobops.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_oci.id',
+            '-e', 'tns.data_lob.op',
+            '-e', 'tns.data_lob.offset',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # oci id 0x60 = 96 (TTI_LOBOPS / "LOB and FILE related calls").
+        assert rows[0] == ['0x60', '0x00000002', '1'], rows[0]
+        assert rows[1] == ['0x60', '0x00000001', '1'], rows[1]
+
+    def test_tns_marker(self, cmd_tshark, capture_file, test_env):
+        '''TNS_MARKER decodes the break/reset function byte. Two frames:
+        a break marker (01 00 01) and a reset marker (01 00 02).'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_marker.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.type',
+            '-e', 'tns.marker.function',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # packet type 12 = Marker; function 1 = break, 2 = reset.
+        assert rows[0] == ['12', '1'], rows[0]
+        assert rows[1] == ['12', '2'], rows[1]
+
+    def test_tns_rxd(self, cmd_tshark, capture_file, test_env):
+        '''TTI_RXD row data is split into per-column values using the column
+        types remembered from the preceding TTI_DCB (threaded through
+        conversation state). A describe of two columns (NUMBER, VARCHAR2)
+        then a row-data packet of two rows: (10, "hi") and (20, NULL).'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_rxd.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'frame.number',
+            '-e', 'tns.data_dcb.num_columns',
+            '-e', 'tns.data_col.value',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # Frame 1 describes 2 columns; frame 2 carries their values.
+        assert rows[0][1] == '2', rows[0]
+        # NUMBER 10 (c10b), VARCHAR "hi" (6869), NUMBER 20 (c115), NULL (00).
+        assert rows[1][2] == 'c10b,6869,c115,00', rows[1]
+
+    def test_tns_rxd_types(self, cmd_tshark, capture_file, test_env):
+        '''TTI_RXD splits a row with mixed column kinds using their per-type
+        value framings: an ordinary NUMBER, a structured ROWID, and a LONG.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_rxd_types.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'frame.number',
+            '-e', 'tns.data_col.value',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 2, rows
+        # NUMBER 10 shown data-only (c10b); ROWID and LONG shown whole:
+        #   ROWID: 0a | 0164 | 0104 | 00 | 0132 | 00
+        #   LONG "abc": 03 616263 | 00 | 00
+        vals = rows[1][1].split(',')
+        assert len(vals) == 3, vals
+        assert vals[0] == 'c10b', vals
+        assert vals[1] == '0a0164010400013200', vals
+        assert vals[2] == '036162630000', vals
+
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
         if not features.have_zstd:
@@ -1904,3 +2082,32 @@ class TestDissectGsmtapUm:
                 '-Tfields', '-eframe.number',
             ), encoding='utf-8', env=test_env)
         assert stdout.strip().split() == ['1', '2', '4', '5']
+
+
+class TestDissectPcapngProcessIdThreadId:
+    '''The pcapng epb_processid_threadid option (code 8) as frame.process.pid
+    and frame.process.tid.
+
+    The capture is generated by test/captures/_gen_epb_processid_threadid.py
+    and has a little-endian and a big-endian section, so that the option is
+    read in both byte orders.
+    '''
+    CAPTURE = 'epb_processid_threadid.pcapng'
+
+    def test_frame_process_fields(self, assert_frames_match):
+        assert_frames_match(self.CAPTURE, [
+            (1, 'frame.process.pid == 1234 && frame.process.tid == 5678'),
+            (2, 'frame.process.pid == 0 && frame.process.tid == 0'),
+            (3, 'frame.process.pid == 4321 && frame.process.tid == 8765'),
+            (4, '!frame.process'),
+        ])
+
+    def test_frame_process_fields_survive_rewrite(self, cmd_editcap, cmd_tshark, capture_file, result_file, base_env, test_env):
+        '''Rewriting the file must keep the process and thread IDs in the
+        right order whatever the byte order of the input sections.'''
+        testout_file = result_file('epb_processid_threadid_rewritten.pcapng')
+        subprocess.check_call((cmd_editcap, '-F', 'pcapng', capture_file(self.CAPTURE), testout_file), env=base_env)
+        stdout = subprocess.check_output((cmd_tshark, '-r', testout_file,
+                '-Tfields', '-e', 'frame.number', '-e', 'frame.process.pid', '-e', 'frame.process.tid',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['1\t1234\t5678', '2\t0\t0', '3\t4321\t8765', '4\t\t']
