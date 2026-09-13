@@ -43,6 +43,44 @@ void proto_register_tns(void);
 #define TNS_TYPE_DD             15
 #define TNS_TYPE_MAX            19
 
+/*
+ * Oracle datatype codes as they appear on the wire and in tns_data_types[].
+ * python-oracledb lists most of these as its ORA_TYPE_NUM_* constants.
+ */
+#define TNS_DATATYPE_VARCHAR        1
+#define TNS_DATATYPE_NUMBER         2
+#define TNS_DATATYPE_INTEGER        3
+#define TNS_DATATYPE_FLOAT          4
+#define TNS_DATATYPE_STRING         5
+#define TNS_DATATYPE_VARNUM         6
+#define TNS_DATATYPE_DECIMAL        7
+#define TNS_DATATYPE_LONG           8
+#define TNS_DATATYPE_VCS            9
+#define TNS_DATATYPE_ROWID          11   /* RID */
+#define TNS_DATATYPE_DATE           12
+#define TNS_DATATYPE_VBI            15
+#define TNS_DATATYPE_RAW            23
+#define TNS_DATATYPE_LONG_RAW       24
+#define TNS_DATATYPE_CHAR           96
+#define TNS_DATATYPE_BINARY_FLOAT   100
+#define TNS_DATATYPE_BINARY_DOUBLE  101
+#define TNS_DATATYPE_REFCURSOR      102
+#define TNS_DATATYPE_ROWID_EXT      104  /* ROWID */
+#define TNS_DATATYPE_ADT            109  /* object */
+#define TNS_DATATYPE_REF            111
+#define TNS_DATATYPE_CLOB           112
+#define TNS_DATATYPE_BLOB           113
+#define TNS_DATATYPE_BFILE          114
+#define TNS_DATATYPE_RSET           116
+#define TNS_DATATYPE_JSON           119  /* OSON */
+#define TNS_DATATYPE_VECTOR         127
+#define TNS_DATATYPE_TIMESTAMP      180
+#define TNS_DATATYPE_TIMESTAMP_TZ   181
+#define TNS_DATATYPE_INTERVAL_YM    182
+#define TNS_DATATYPE_INTERVAL_DS    183
+#define TNS_DATATYPE_UROWID         208
+#define TNS_DATATYPE_TIMESTAMP_LTZ  231
+
 /* Data Packet Functions */
 #define SQLNET_SET_PROTOCOL     1
 #define SQLNET_SET_DATATYPES    2
@@ -388,37 +426,39 @@ static const value_string tns_data_funcs[] = {
 /* Oracle TNS native data-type ids. Used by the Set Datatypes
  * negotiation to label override entries with human names. */
 static const value_string tns_data_types[] = {
-	{1,   "VARCHAR"},
-	{2,   "NUMBER"},
-	{3,   "INTEGER"},
-	{4,   "FLOAT"},
-	{5,   "STRING"},
-	{6,   "VARNUM"},
-	{7,   "DECIMAL"},
-	{8,   "LONG"},
-	{9,   "VCS"},
-	{11,  "RID"},
-	{12,  "DATE"},
-	{15,  "VBI"},
-	{23,  "RAW"},
-	{24,  "LONG RAW"},
-	{96,  "CHAR"},
-	{100, "BINARY_FLOAT"},
-	{101, "BINARY_DOUBLE"},
-	{102, "REFCURSOR"},
-	{104, "ROWID"},
-	{109, "ADT"},
-	{111, "REF"},
-	{112, "CLOB"},
-	{113, "BLOB"},
-	{114, "BFILE"},
-	{116, "RSET"},
-	{180, "TIMESTAMP"},
-	{181, "TIMESTAMP WITH TIME ZONE"},
-	{182, "INTERVAL YEAR TO MONTH"},
-	{183, "INTERVAL DAY TO SECOND"},
-	{208, "UROWID"},
-	{231, "TIMESTAMP WITH LOCAL TIME ZONE"},
+	{TNS_DATATYPE_VARCHAR,        "VARCHAR"},
+	{TNS_DATATYPE_NUMBER,         "NUMBER"},
+	{TNS_DATATYPE_INTEGER,        "INTEGER"},
+	{TNS_DATATYPE_FLOAT,          "FLOAT"},
+	{TNS_DATATYPE_STRING,         "STRING"},
+	{TNS_DATATYPE_VARNUM,         "VARNUM"},
+	{TNS_DATATYPE_DECIMAL,        "DECIMAL"},
+	{TNS_DATATYPE_LONG,           "LONG"},
+	{TNS_DATATYPE_VCS,            "VCS"},
+	{TNS_DATATYPE_ROWID,          "RID"},
+	{TNS_DATATYPE_DATE,           "DATE"},
+	{TNS_DATATYPE_VBI,            "VBI"},
+	{TNS_DATATYPE_RAW,            "RAW"},
+	{TNS_DATATYPE_LONG_RAW,       "LONG RAW"},
+	{TNS_DATATYPE_CHAR,           "CHAR"},
+	{TNS_DATATYPE_BINARY_FLOAT,   "BINARY_FLOAT"},
+	{TNS_DATATYPE_BINARY_DOUBLE,  "BINARY_DOUBLE"},
+	{TNS_DATATYPE_REFCURSOR,      "REFCURSOR"},
+	{TNS_DATATYPE_ROWID_EXT,      "ROWID"},
+	{TNS_DATATYPE_ADT,            "ADT"},
+	{TNS_DATATYPE_REF,            "REF"},
+	{TNS_DATATYPE_CLOB,           "CLOB"},
+	{TNS_DATATYPE_BLOB,           "BLOB"},
+	{TNS_DATATYPE_BFILE,          "BFILE"},
+	{TNS_DATATYPE_RSET,           "RSET"},
+	{TNS_DATATYPE_JSON,           "JSON"},
+	{TNS_DATATYPE_VECTOR,         "VECTOR"},
+	{TNS_DATATYPE_TIMESTAMP,      "TIMESTAMP"},
+	{TNS_DATATYPE_TIMESTAMP_TZ,   "TIMESTAMP WITH TIME ZONE"},
+	{TNS_DATATYPE_INTERVAL_YM,    "INTERVAL YEAR TO MONTH"},
+	{TNS_DATATYPE_INTERVAL_DS,    "INTERVAL DAY TO SECOND"},
+	{TNS_DATATYPE_UROWID,         "UROWID"},
+	{TNS_DATATYPE_TIMESTAMP_LTZ,  "TIMESTAMP WITH LOCAL TIME ZONE"},
 	{0, NULL}
 };
 
@@ -867,6 +907,135 @@ static int get_field_with_length(tvbuff_t *tvb, packet_info *pinfo, int offset, 
 	return used;
 }
 
+/* Render an Oracle NUMBER value as a decimal string.
+ * Base-100 float: byte 0 is the biased exponent (top bit = sign, inverted
+ * for negatives); the rest are base-100 mantissa groups, with a trailing
+ * 0x66 terminator on negatives.
+ * Returns a pinfo->pool string, or NULL if the value is not renderable. */
+static const char *tns_format_number(packet_info *pinfo, const uint8_t *data, int len)
+{
+	if ( len <= 0 )
+		return NULL;
+	if ( len == 1 )
+		return (data[0] == 0x80) ? "0" : NULL; /* 0x80 = zero; sentinels skipped */
+
+	uint8_t exp_byte = data[0];
+	bool is_pos = (exp_byte & 0x80) != 0;
+	int exponent = is_pos ? (exp_byte & 0x7f) - 65 : ((~exp_byte) & 0x7f) - 65;
+
+	int mant_len = len - 1;
+	if ( !is_pos && mant_len > 0 && data[len - 1] == 0x66 )
+		mant_len--; /* drop the negative terminator */
+
+	/* Build the base-100 digit string (two decimal digits per group). */
+	wmem_strbuf_t *digits = wmem_strbuf_new(pinfo->pool, "");
+	for ( int i = 0; i < mant_len; i++ )
+	{
+		int pair = is_pos ? (data[1 + i] - 1) : (101 - data[1 + i]);
+		if ( pair < 0 || pair > 99 )
+			return NULL; /* malformed */
+		wmem_strbuf_append_printf(digits, "%02d", pair);
+	}
+	const char *ds = wmem_strbuf_get_str(digits);
+	int dlen = (int)wmem_strbuf_get_len(digits);
+	int int_digits = (exponent + 1) * 2;
+
+	wmem_strbuf_t *ip = wmem_strbuf_new(pinfo->pool, "");
+	wmem_strbuf_t *fp = wmem_strbuf_new(pinfo->pool, "");
+	if ( int_digits >= dlen )
+	{
+		wmem_strbuf_append(ip, ds);
+		for ( int i = 0; i < int_digits - dlen; i++ )
+			wmem_strbuf_append_c(ip, '0');
+	}
+	else if ( int_digits <= 0 )
+	{
+		wmem_strbuf_append_c(ip, '0');
+		for ( int i = 0; i < -int_digits; i++ )
+			wmem_strbuf_append_c(fp, '0');
+		wmem_strbuf_append(fp, ds);
+	}
+	else
+	{
+		wmem_strbuf_append(ip, wmem_strndup(pinfo->pool, ds, int_digits));
+		wmem_strbuf_append(fp, ds + int_digits);
+	}
+
+	/* Trim leading zeros on the integer part, trailing zeros on the fraction. */
+	const char *ips = wmem_strbuf_get_str(ip);
+	while ( ips[0] == '0' && ips[1] != '\0' )
+		ips++;
+	char *fps = wmem_strdup(pinfo->pool, wmem_strbuf_get_str(fp));
+	int flen = (int)strlen(fps);
+	while ( flen > 0 && fps[flen - 1] == '0' )
+		fps[--flen] = '\0';
+
+	const char *sign = is_pos ? "" : "-";
+	if ( flen > 0 )
+		return wmem_strdup_printf(pinfo->pool, "%s%s.%s", sign, ips, fps);
+	return wmem_strdup_printf(pinfo->pool, "%s%s", sign, ips);
+}
+
+/* Render an Oracle DATE / TIMESTAMP value as an
+ * ISO-ish string. 7 bytes: century+100, year+100, month, day, hour+1,
+ * minute+1, second+1; 11 bytes add 4-byte big-endian nanoseconds.
+ * Returns a pinfo->pool string, or NULL. */
+static const char *tns_format_date(packet_info *pinfo, const uint8_t *data, int len)
+{
+	if ( len < 7 )
+		return NULL;
+	int year = (data[0] - 100) * 100 + (data[1] - 100);
+	int month = data[2], day = data[3];
+	int hour = data[4] - 1, minute = data[5] - 1, second = data[6] - 1;
+	if ( month < 1 || month > 12 || day < 1 || day > 31 ||
+	     hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 )
+		return NULL;
+	if ( len >= 11 )
+	{
+		uint32_t nsec = ((uint32_t)data[7] << 24) | ((uint32_t)data[8] << 16) |
+				((uint32_t)data[9] << 8) | data[10];
+		if ( nsec > 0 )
+			return wmem_strdup_printf(pinfo->pool, "%04d-%02d-%02d %02d:%02d:%02d.%09u",
+				year, month, day, hour, minute, second, nsec);
+	}
+	return wmem_strdup_printf(pinfo->pool, "%04d-%02d-%02d %02d:%02d:%02d",
+		year, month, day, hour, minute, second);
+}
+
+/* Render an Oracle BINARY_FLOAT (4 bytes) / BINARY_DOUBLE (8 bytes) value
+ * Stored in an order-preserving IEEE-754 form: if the
+ * high bit is set the value was positive (clear it), else it was negative
+ * (invert all bits); then read as big-endian IEEE-754. Returns a
+ * pinfo->pool string, or NULL. */
+static const char *tns_format_binary_float(packet_info *pinfo, const uint8_t *data, int len)
+{
+	char buf[G_ASCII_DTOSTR_BUF_SIZE];
+
+	if ( len == 4 )
+	{
+		uint32_t u = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+			     ((uint32_t)data[2] << 8) | data[3];
+		u = (u & 0x80000000u) ? (u & 0x7fffffffu) : ~u;
+		float f;
+		memcpy(&f, &u, 4);
+		/* Locale-independent '.' decimal separator. */
+		g_ascii_formatd(buf, sizeof(buf), "%g", (double)f);
+		return wmem_strdup(pinfo->pool, buf);
+	}
+	if ( len == 8 )
+	{
+		uint64_t u = 0;
+		for ( int i = 0; i < 8; i++ )
+			u = (u << 8) | data[i];
+		u = (u & UINT64_C(0x8000000000000000)) ? (u & UINT64_C(0x7fffffffffffffff)) : ~u;
+		double d;
+		memcpy(&d, &u, 8);
+		g_ascii_formatd(buf, sizeof(buf), "%g", d);
+		return wmem_strdup(pinfo->pool, buf);
+	}
+	return NULL;
+}
+
 static void vsnum_to_vstext_basecustom(char *result, uint32_t vsnum)
 {
 	/*
@@ -969,27 +1138,28 @@ static int dissect_tns_dcb_column(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
 	return offset;
 }
 
-/* Decode one TTI_RXD column value by its describe data type, and add it as a
- * "Column N (TYPE)" item showing the raw value bytes. Ordinary values are a
+/* Decode one row/bind value by its data type, and add it as a
+ * "<prefix> N (TYPE)" item under `hf`. Ordinary values are a
  * DALC blob; ROWID / UROWID / LONG / LOB carry their own framings.
  * Object / JSON / VECTOR values have richer image
  * framings not handled here, so on those the caller stops (sets *bail) and
  * leaves the remainder to the data dissector. Returns the new offset. */
-static int dissect_tns_rxd_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint8_t dtype, int idx, int *bail)
+static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint8_t dtype, int idx, int *bail, int hf, const char *prefix)
 {
 	int v_start = offset, disp_start = offset, v = 0;
 	int is_null = 0;
 	uint8_t first;
+	const char *rendered = NULL;
 
 	switch ( dtype )
 	{
-		case 109: /* ADT / object */
-		case 119: /* JSON (OSON) */
-		case 127: /* VECTOR */
+		case TNS_DATATYPE_ADT:    /* object */
+		case TNS_DATATYPE_JSON:   /* OSON */
+		case TNS_DATATYPE_VECTOR:
 			*bail = 1;
 			return offset;
 
-		case 11:  /* ROWID: indicator, then obj/file/unused/block/slot (ub4) */
+		case TNS_DATATYPE_ROWID:  /* indicator, then obj/file/unused/block/slot (ub4) */
 			first = tvb_get_uint8(tvb, offset);
 			offset += 1;
 			if ( first == 0 || first == 0xff )
@@ -999,7 +1169,7 @@ static int dissect_tns_rxd_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 					offset += get_sb4_custom(tvb, offset, &v);
 			break;
 
-		case 208: /* UROWID: ub4 num_bytes, a length echo byte, then the bytes */
+		case TNS_DATATYPE_UROWID: /* ub4 num_bytes, a length echo byte, then the bytes */
 			offset += get_sb4_custom(tvb, offset, &v);
 			if ( v > 0 )
 				offset += 1 + v;
@@ -1007,8 +1177,8 @@ static int dissect_tns_rxd_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 				is_null = 1;
 			break;
 
-		case 8:   /* LONG */
-		case 24:  /* LONG RAW: value then two trailing ub4 length indicators */
+		case TNS_DATATYPE_LONG:
+		case TNS_DATATYPE_LONG_RAW: /* value then two trailing ub4 length indicators */
 			first = tvb_get_uint8(tvb, offset);
 			if ( first == 0 )
 			{
@@ -1033,9 +1203,9 @@ static int dissect_tns_rxd_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 			offset += get_sb4_custom(tvb, offset, &v);
 			break;
 
-		case 112: /* CLOB */
-		case 113: /* BLOB */
-		case 114: /* BFILE: 0x00 NULL, else ub4 num_bytes + DALC locator block */
+		case TNS_DATATYPE_CLOB:
+		case TNS_DATATYPE_BLOB:
+		case TNS_DATATYPE_BFILE: /* 0x00 NULL, else ub4 num_bytes + DALC locator block */
 			first = tvb_get_uint8(tvb, offset);
 			if ( first == 0 )
 			{
@@ -1055,17 +1225,41 @@ static int dissect_tns_rxd_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 			if ( first == 0 )
 				is_null = 1;
 			else
+			{
 				disp_start = v_start + 1; /* show the value bytes, not the length */
+				/* Render common scalar types (never chunked): NUMBER as
+				 * decimal, DATE / TIMESTAMP / TIMESTAMP LTZ as a datetime. */
+				if ( first != 254 && offset > disp_start )
+				{
+					const uint8_t *vb = tvb_get_ptr(tvb, disp_start, offset - disp_start);
+					int vlen = offset - disp_start;
+					if ( dtype == TNS_DATATYPE_NUMBER )
+						rendered = tns_format_number(pinfo, vb, vlen);
+					else if ( dtype == TNS_DATATYPE_DATE || dtype == TNS_DATATYPE_TIMESTAMP || dtype == TNS_DATATYPE_TIMESTAMP_LTZ )
+						rendered = tns_format_date(pinfo, vb, vlen);
+					else if ( dtype == TNS_DATATYPE_BINARY_FLOAT || dtype == TNS_DATATYPE_BINARY_DOUBLE )
+						rendered = tns_format_binary_float(pinfo, vb, vlen);
+					else if ( dtype == TNS_DATATYPE_VARCHAR || dtype == TNS_DATATYPE_STRING || dtype == TNS_DATATYPE_CHAR )
+						/* VARCHAR / STRING / CHAR: character data (session
+						 * charset, ordinarily UTF-8). */
+						rendered = (const char *)tvb_get_string_enc(pinfo->pool,
+							tvb, disp_start, vlen, ENC_UTF_8|ENC_NA);
+				}
+			}
 			break;
 	}
 
 	if ( is_null )
-		proto_tree_add_bytes_format(tree, hf_tns_data_col_value, tvb,
-			v_start, offset - v_start, NULL, "Column %d (%s): NULL", idx,
+		proto_tree_add_bytes_format(tree, hf, tvb,
+			v_start, offset - v_start, NULL, "%s %d (%s): NULL", prefix, idx,
 			val_to_str_const(dtype, tns_data_types, "unknown"));
+	else if ( rendered )
+		proto_tree_add_bytes_format(tree, hf, tvb,
+			disp_start, offset - disp_start, NULL, "%s %d (%s): %s", prefix, idx,
+			val_to_str_const(dtype, tns_data_types, "unknown"), rendered);
 	else
-		proto_tree_add_bytes_format(tree, hf_tns_data_col_value, tvb,
-			disp_start, offset - disp_start, NULL, "Column %d (%s)", idx,
+		proto_tree_add_bytes_format(tree, hf, tvb,
+			disp_start, offset - disp_start, NULL, "%s %d (%s)", prefix, idx,
 			val_to_str_const(dtype, tns_data_types, "unknown"));
 	return offset;
 }
@@ -1636,8 +1830,8 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 						ett_tns_rxd_row, &row_item, "Row %d", ++rownum);
 					for ( uint32_t c = 0; c < desc->num_cols
 						&& tvb_reported_length_remaining(tvb, offset) > 0 && !bail; c++ )
-						offset = dissect_tns_rxd_value(tvb, pinfo, row_tree, offset,
-							desc->types[c], c + 1, &bail);
+						offset = dissect_tns_value(tvb, pinfo, row_tree, offset,
+							desc->types[c], c + 1, &bail, hf_tns_data_col_value, "Column");
 					proto_item_set_len(row_item, offset - r_start);
 				}
 			}
@@ -1649,6 +1843,10 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 			guint32 oci_id = 0;
 			proto_tree_add_item_ret_uint(data_tree, hf_tns_data_oci_id, tvb, offset, 1, ENC_BIG_ENDIAN, &oci_id);
 			offset += 1;
+			/* Name the specific OCI call in the Info column — otherwise every
+			 * function call reads only as the generic "User OCI Functions". */
+			col_append_fstr(pinfo->cinfo, COL_INFO, " (%s)",
+				val_to_str_ext_const(oci_id, &tns_data_oci_subfuncs_ext, "unknown"));
 			proto_tree_add_item(data_tree, hf_tns_data_tseq, tvb, offset, 1, ENC_BIG_ENDIAN);
 			offset += 1;
 			if((oci_id == 115) || (oci_id == 118)){
@@ -1772,23 +1970,23 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 						int b_start = offset;
 						uint8_t btype = tvb_get_uint8(tvb, offset);
 						btypes[i] = btype;
-						/* CLOB (112) / BLOB (113) binds use a temp-LOB
-						 * locator value form we do not unpack. */
-						if ( btype == 112 || btype == 113 )
+						/* CLOB / BLOB binds use a temp-LOB locator value
+						 * form we do not unpack. */
+						if ( btype == TNS_DATATYPE_CLOB || btype == TNS_DATATYPE_BLOB )
 							has_lob = 1;
 						bind_tree = proto_tree_add_subtree_format(binds_tree, tvb, offset, -1,
 							ett_tns_bind, &bind_item, "Bind %d: %s", i + 1,
 							val_to_str_const(btype, tns_data_types, "unknown"));
 						offset = dissect_tns_oac(tvb, pinfo, bind_tree, offset);
 						/* A CLOB/BLOB bind OAC carries a trailing oaccolid byte. */
-						if ( btype == 112 || btype == 113 )
+						if ( btype == TNS_DATATYPE_CLOB || btype == TNS_DATATYPE_BLOB )
 							offset += 1;
 						proto_item_set_len(bind_item, offset - b_start);
 					}
 
 					/* Value rows: a TTI_RXD token then one DALC value per bind
 					 * column (an ordinary execute sends one row, executemany
-					 * sends N). Values are type-encoded and shown raw. */
+					 * sends N), decoded and rendered by the bind's type. */
 					while ( !has_lob && tvb_reported_length_remaining(tvb, offset) > 0
 						&& tvb_get_uint8(tvb, offset) == SQLNET_ROW_TRANSF_DATA )
 					{
@@ -1796,22 +1994,14 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 						offset += 1; /* TTI_RXD token */
 						row_tree = proto_tree_add_subtree_format(binds_tree, tvb, offset, -1,
 							ett_tns_bind_row, &row_item, "Row %d", ++rownum);
-						for ( int i = 0; i < bind_count && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
-						{
-							uint8_t first = tvb_get_uint8(tvb, offset);
-							int val_start = offset;
-							offset += get_dalc_custom(tvb, pinfo, offset, NULL);
-							if ( first == 0 )
-								proto_tree_add_bytes_format_value(row_tree, hf_tns_data_bind_value,
-									tvb, val_start, offset - val_start, NULL, "NULL");
-							else if ( first == 254 )
-								proto_tree_add_item(row_tree, hf_tns_data_bind_value,
-									tvb, val_start, offset - val_start, ENC_NA);
-							else
-								proto_tree_add_item(row_tree, hf_tns_data_bind_value,
-									tvb, val_start + 1, first, ENC_NA);
-						}
+						int row_bail = 0;
+						for ( int i = 0; i < bind_count
+							&& tvb_reported_length_remaining(tvb, offset) > 0 && !row_bail; i++ )
+							offset = dissect_tns_value(tvb, pinfo, row_tree, offset,
+								btypes[i], i + 1, &row_bail, hf_tns_data_bind_value, "Bind");
 						proto_item_set_len(row_item, offset - r_start);
+						if ( row_bail )
+							break;
 					}
 					proto_item_set_len(binds_item, offset - binds_start);
 				}

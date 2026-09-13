@@ -9,11 +9,12 @@
 different kinds followed by a row, so the dissector's per-type TTI_RXD value
 framings (ordinary DALC, ROWID, LONG) are exercised.
 
-    Frame 1 — TTI_DCB describing: NUMBER "N", ROWID "R", LONG "L"
+    Frame 1 — TTI_DCB describing: NUMBER "N", ROWID "R", LONG "L", DATE "D"
     Frame 2 — TTI_RXD with one row:
                 NUMBER 10   -> c1 0b
                 ROWID       -> indicator + obj/file/unused/block/slot
                 LONG "abc"  -> single chunk + two trailing length indicators
+                DATE        -> 2024-01-15 10:30:00 (7 bytes)
 
 Bytes are built by hand in the Oracle 11g wire shape.
 """
@@ -25,6 +26,9 @@ TTI_DCB = 16
 TYPE_NUMBER = 2
 TYPE_ROWID = 11
 TYPE_LONG = 8
+TYPE_DATE = 12
+TYPE_BINARY_FLOAT = 100
+TYPE_BINARY_DOUBLE = 101
 
 
 def ub4(val: int) -> bytes:
@@ -81,6 +85,9 @@ def build_dcb() -> bytes:
         dcb_column(TYPE_NUMBER, 0, 0, 22, b"N"),
         dcb_column(TYPE_ROWID, 0, 0, 16, b"R"),
         dcb_column(TYPE_LONG, 873, 1, 0, b"L"),
+        dcb_column(TYPE_DATE, 0, 0, 7, b"D"),
+        dcb_column(TYPE_BINARY_FLOAT, 0, 0, 4, b"BF"),
+        dcb_column(TYPE_BINARY_DOUBLE, 0, 0, 8, b"BD"),
     ]
     b = bytes([TTI_DCB])
     b += dalc(b"\x00" * 16)
@@ -112,8 +119,19 @@ def long_value(data: bytes) -> bytes:
     return bytes([len(data)]) + data + ub4(0) + ub4(0)
 
 
+def date_value() -> bytes:
+    # 2024-01-15 10:30:00 -> century+100, year+100, month, day, h+1, m+1, s+1.
+    return dalc(bytes([120, 124, 1, 15, 11, 31, 1]))
+
+
 def build_rxd() -> bytes:
-    row = dalc(b"\xc1\x0b") + rowid_value() + long_value(b"abc")
+    # BINARY_FLOAT 1.5: IEEE 3fc00000, positive -> set high bit -> bfc00000.
+    # BINARY_DOUBLE 2.25: IEEE 4002.., positive -> set high bit -> c002...
+    row = (
+        dalc(b"\xc1\x0b") + rowid_value() + long_value(b"abc") + date_value()
+        + dalc(b"\xbf\xc0\x00\x00")
+        + dalc(b"\xc0\x02\x00\x00\x00\x00\x00\x00")
+    )
     return bytes([TTI_RXD]) + row
 
 
