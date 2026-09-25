@@ -268,14 +268,14 @@ void PacketListModel::resetColorized()
 #endif
 }
 
-void PacketListModel::toggleFrameMark(const QModelIndexList &indeces)
+void PacketListModel::toggleFrameMark(const QModelIndexList &indices)
 {
-    if (!cap_file_ || indeces.count() <= 0)
+    if (!cap_file_ || indices.count() <= 0)
         return;
 
     int sectionMax = columnCount() - 1;
 
-    foreach (QModelIndex index, indeces) {
+    foreach (QModelIndex index, indices) {
         if (! index.isValid())
             continue;
 
@@ -314,14 +314,14 @@ void PacketListModel::setDisplayedFrameMark(bool set)
 #endif
 }
 
-void PacketListModel::toggleFrameIgnore(const QModelIndexList &indeces)
+void PacketListModel::toggleFrameIgnore(const QModelIndexList &indices)
 {
-    if (!cap_file_ || indeces.count() <= 0)
+    if (!cap_file_ || indices.count() <= 0)
         return;
 
     int sectionMax = columnCount() - 1;
 
-    foreach (QModelIndex index, indeces) {
+    foreach (QModelIndex index, indices) {
         if (! index.isValid())
             continue;
 
@@ -360,29 +360,47 @@ void PacketListModel::setDisplayedFrameIgnore(bool set)
 #endif
 }
 
-void PacketListModel::toggleFrameRefTime(const QModelIndex &rt_index)
+void PacketListModel::toggleFrameRefTime(const QModelIndexList &indices)
 {
-    if (!cap_file_ || !rt_index.isValid()) return;
-
-    PacketListRecord *record = static_cast<PacketListRecord*>(rt_index.internalPointer());
-    if (!record) return;
-
-    frame_data *fdata = record->frameData();
-    if (!fdata) return;
+    if (!cap_file_ || indices.count() <= 0)
+        return;
 
     emit layoutAboutToBeChanged();
-    if (fdata->ref_time) {
-        fdata->ref_time=0;
-        cap_file_->ref_time_count--;
-    } else {
-        fdata->ref_time=1;
-        cap_file_->ref_time_count++;
+    for (const auto& rt_index : indices) {
+        if (! rt_index.isValid())
+            continue;
+
+        PacketListRecord *record = static_cast<PacketListRecord*>(rt_index.internalPointer());
+        if (!record) continue;
+
+        frame_data *fdata = record->frameData();
+        if (!fdata) continue;
+
+        if (fdata->ref_time) {
+            fdata->ref_time=0;
+            cap_file_->ref_time_count--;
+            if (!fdata->passed_dfilter) {
+                // XXX - We might not want to change this (#10142), but we would
+                // need to touch several places in the code
+                cap_file_->displayed_count--;
+                // XXX - recreateVisibleRows() to remove the row? That resets the
+                // model, which is a bit strong. We might want a method to remove
+                // one row.
+            }
+        } else {
+            fdata->ref_time=1;
+            cap_file_->ref_time_count++;
+            if (!fdata->passed_dfilter) {
+                // It is a little odd that we managed to change a frame that wasn't
+                // displayed, but that can happen if we change the row state again
+                // without rescanning to pick up the change (see above), and might
+                // be possible if the row was pinned and then filtered out.
+                cap_file_->displayed_count++;
+            }
+        }
     }
     cf_reftime_packets(cap_file_);
-    if (!fdata->ref_time && !fdata->passed_dfilter) {
-        cap_file_->displayed_count--;
-    }
-    record->resetColumns(&cap_file_->cinfo);
+    PacketListRecord::resetColumns(&cap_file_->cinfo);
     emit layoutChanged();
 #if 0
     emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
@@ -664,14 +682,30 @@ void PacketListModel::sort(int column, Qt::SortOrder order)
         }
         std::sort(sorted_visible_rows_.begin(), sorted_visible_rows_.end(), recordLessThan);
 
-        beginResetModel();
+        // This causes the QItemSelectionModel to create persistent indexes for
+        // each row (instead of just storing the top left and bottom right.)
+        // XXX - layoutChanged might be slow if the user has 100 k rows selected,
+        // but then again other things in the GUI with multi-select are probably
+        // slow then too. We could use resetModel in such a case.
+        emit layoutAboutToBeChanged(QList<QPersistentModelIndex>(), QAbstractItemModel::VerticalSortHint);
+        QModelIndexList oldIndexes = persistentIndexList();
         visible_rows_.resize(0);
         number_to_row_.fill(0);
         aggregation_key_row_.clear();
         foreach (PacketListRecord *record, sorted_visible_rows_) {
             updateVisibleRows(record);
         }
-        endResetModel();
+        QModelIndexList newIndexes;
+        for (const auto &oldIdx : oldIndexes) {
+            PacketListRecord *record = static_cast<PacketListRecord*>(oldIdx.internalPointer());
+            if (!record)
+                continue;
+            int row = visibleIndexOf(record->frameData());
+            newIndexes.append(createIndex(row, oldIdx.column(), record));
+        }
+        changePersistentIndexList(oldIndexes, newIndexes);
+        emit layoutChanged(QList<QPersistentModelIndex>(), QAbstractItemModel::VerticalSortHint);
+
     } catch (const SortAbort& e) {
         mainApp->pushStatus(MainApplication::TemporaryStatus, e.what());
     }
@@ -683,6 +717,12 @@ void PacketListModel::sort(int column, Qt::SortOrder order)
     }
     sort_cap_file_->read_lock = false;
 
+    // Using layoutChanged keeps the current selection but does not necessarily
+    // scroll to it if it is not visible. If we have a single current frame we
+    // can scroll to it. It's harder to determine what to do for multi-select.
+    // XXX - It might make more sense to have the PacketList connect to
+    // layoutChanged and call scrollTo with the currentIndex there. That would
+    // be a little lighter weight and better separation of model vs view.
     if (cap_file_->current_frame) {
         emit goToPacket(cap_file_->current_frame->num);
     }
