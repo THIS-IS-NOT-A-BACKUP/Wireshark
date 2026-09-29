@@ -27,6 +27,9 @@ The following changes have been made since version 4.7.3:
 
 * Holding down kbd:[↓] and kbd:[↑] will move rapidly through the packet list.
 
+* Coloring rules are now saved as a JSONC file.
+  The legacy file format is still supported, but support will be removed in a future release.
+
 The following changes have been made since version 4.7.2:
 
 * The minimum supported Windows version is Windows 10 21H2 (build 19044) or
@@ -200,6 +203,12 @@ The following features are either new or have been significantly updated since v
   1803 and later, including Windows Server 2019 and later, all support Unix domain
   sockets.)
 
+* The OPC UA dissector can decode ExtensionObjects of custom datatypes described
+  in an information model, a UANodeSet XML file set in the new
+  `opcua.information_model` preference, in client/server and PubSub messages.
+  The new `opcua.ns_offset` preference maps the namespace indexes of the file
+  to those in the packets.
+
 === Removed Features and Support
 
 Dumpcap's TCP@host:port interface has been removed. Tools like `socat`, `ncat`,
@@ -254,6 +263,7 @@ MySQL X Protocol (MySQLX)
 NATS
 NMEA 2000
 Object Transform Protocol (OTP)
+OPC UA PubSub UADP
 Perforce P4RPC
 PosiStageNet (PSN)
 PROFINET SXP (PN-SXP)
