@@ -47,6 +47,7 @@
 #include <ui/qt/utils/variant_pointer.h>
 #include <ui/qt/models/pref_models.h>
 #include <ui/qt/widgets/packet_list_header.h>
+#include <ui/qt/widgets/pinned_overlay_view.h>
 #include <ui/qt/utils/wireshark_mime_data.h>
 #include <ui/qt/widgets/drag_label.h>
 #include <ui/qt/filter_action.h>
@@ -326,6 +327,12 @@ PacketList::PacketList(QWidget *parent) :
     connect(verticalScrollBar(), &QScrollBar::actionTriggered, this, &PacketList::vScrollBarActionTriggered);
 
     connect(packet_list_header_, &PacketListHeader::freezeColumnsToHere, this, &PacketList::setPinnedColumnBoundary);
+    // While the real header is being dragged, let it show through the
+    // frozen-column overlay so the drag is visible when crossing the freeze.
+    connect(packet_list_header_, &PacketListHeader::dragActiveChanged, this, [this](bool active) {
+        header_drag_active_ = active;
+        updateFrozenOverlayMask();
+    });
     connect(packet_list_header_, &PacketListHeader::unfreezeColumns, this, [this]() { setPinnedColumnBoundary(0); });
 
     pinned_rows_model_ = new PinnedRowsModel(this);
@@ -661,6 +668,31 @@ int PacketList::currentFrameNum() const
     return (int)cap_file_->current_frame->num;
 }
 
+frame_data *PacketList::filteredOutSelectedFrame() const
+{
+    if (!cap_file_ || !cap_file_->current_frame || !packet_list_model_ || !pinned_rows_model_) {
+        return nullptr;
+    }
+    if (selectionModel() && selectionModel()->hasSelection()) {
+        return nullptr;
+    }
+    int frame_num = (int)cap_file_->current_frame->num;
+    if (!pinned_rows_model_->isPinned(frame_num) || packet_list_model_->packetNumberToRow(frame_num) >= 0) {
+        return nullptr;
+    }
+    return cap_file_->current_frame;
+}
+
+void PacketList::refreshFilteredOutFrame(frame_data *fdata)
+{
+    // Re-selecting re-dissects the frame; drawCurrentPacket() would instead
+    // unselect it, since there is no row here to resolve it from.
+    packet_list_model_->invalidateAllColumnStrings();
+    selectFrameFromOverlay((int)fdata->num);
+    create_far_overlay_ = true;
+    packets_bar_update();
+}
+
 void PacketList::selectionChanged (const QItemSelection & selected, const QItemSelection & deselected)
 {
     QTreeView::selectionChanged(selected, deselected);
@@ -716,25 +748,6 @@ void PacketList::contextMenuEvent(QContextMenuEvent *event)
     ctx_menu->addAction(window()->findChild<QAction *>("actionEditIgnoreSelected"));
     ctx_menu->addAction(window()->findChild<QAction *>("actionEditSetTimeReference"));
     ctx_menu->addAction(window()->findChild<QAction *>("actionEditTimeShift"));
-    ctx_menu->addMenu(window()->findChild<QMenu *>("menuPacketComment"));
-
-    ctx_menu->addSeparator();
-
-    // Code for custom context menus from Lua's register_packet_menu()
-    MainWindow * mainWindow = mainApp->mainWindow();
-    // N.B., will only call for a single frame selection,
-    if (cap_file_ && cap_file_->edt && cap_file_->edt->tree) {
-        finfo_array = proto_all_finfos(cap_file_->edt->tree);
-        if (mainWindow) {
-            bool insertedPacketMenu = mainWindow->addPacketMenus(ctx_menu, finfo_array);
-            if (insertedPacketMenu) {
-                ctx_menu->addSeparator();
-            }
-        }
-    }
-
-    ctx_menu->addAction(window()->findChild<QAction *>("actionViewEditResolvedName"));
-
     frame_data *ctx_fdata = ctx_row_fdata;
     if (ctx_fdata) {
         bool rowPinned = pinned_rows_model_->isPinned((int)ctx_fdata->num);
@@ -770,6 +783,25 @@ void PacketList::contextMenuEvent(QContextMenuEvent *event)
         QAction *unpin_all_action = ctx_menu->addAction(tr("Unpin All Rows"));
         connect(unpin_all_action, &QAction::triggered, this, &PacketList::unpinAllRows);
     }
+    ctx_menu->addMenu(window()->findChild<QMenu *>("menuPacketComment"));
+
+    ctx_menu->addSeparator();
+
+    // Code for custom context menus from Lua's register_packet_menu()
+    MainWindow * mainWindow = mainApp->mainWindow();
+    // N.B., will only call for a single frame selection,
+    if (cap_file_ && cap_file_->edt && cap_file_->edt->tree) {
+        finfo_array = proto_all_finfos(cap_file_->edt->tree);
+        if (mainWindow) {
+            bool insertedPacketMenu = mainWindow->addPacketMenus(ctx_menu, finfo_array);
+            if (insertedPacketMenu) {
+                ctx_menu->addSeparator();
+            }
+        }
+    }
+
+    ctx_menu->addAction(window()->findChild<QAction *>("actionViewEditResolvedName"));
+
     // Reset for the next context menu request: showContextMenuForRow()/
     // showContextMenuForFrame() set this immediately before calling here,
     // but a direct right-click on the primary view calls this override
@@ -1323,80 +1355,92 @@ void PacketList::mouseMoveEvent (QMouseEvent *event)
 
     if (event->buttons() & Qt::LeftButton && curIndex.isValid() && curIndex == mouse_pressed_at_)
     {
-        ctx_column_ = curIndex.column();
-        QMimeData * mimeData = new QMimeData();
-        DragLabel * drag_label = nullptr;
+        startCellDrag(packet_list_model_ ? packet_list_model_->getRowFdata(curIndex.row()) : nullptr,
+                      curIndex.column(), model()->data(curIndex).toString());
+    }
+}
 
-        QString filter = getFilterFromRowAndColumn(curIndex);
-        QList<int> rows = selectedRows();
-        if (rows.count() > 1)
+void PacketList::startCellDragFromOverlay(int row, int column)
+{
+    QModelIndex idx = model()->index(row, column);
+    if (!idx.isValid() || !packet_list_model_) {
+        return;
+    }
+    startCellDrag(packet_list_model_->getRowFdata(row), column, model()->data(idx).toString());
+}
+
+void PacketList::startCellDragForFrameFromOverlay(int frame_num, int column)
+{
+    if (!packet_list_model_) {
+        return;
+    }
+    PacketListRecord *record = packet_list_model_->physicalRecordForFrameNum(frame_num);
+    startCellDrag(record ? record->frameData() : nullptr, column, QString());
+}
+
+void PacketList::startCellDrag(frame_data *fdata, int column, const QString &cell_text)
+{
+    ctx_column_ = column;
+    QMimeData * mimeData = new QMimeData();
+    DragLabel * drag_label = nullptr;
+
+    QString filter = getFilterFromFdataAndColumn(fdata, column);
+    QList<int> rows = selectedRows();
+    if (rows.count() > 1)
+    {
+        QStringList entries;
+        foreach (int row, rows)
         {
-            QStringList entries;
-            foreach (int row, rows)
-            {
-                QModelIndex idx = model()->index(row, 0);
-                if (! idx.isValid())
-                    continue;
+            QModelIndex idx = model()->index(row, 0);
+            if (! idx.isValid())
+                continue;
 
-                QString entry = createSummaryText(idx, CopyAsText);
-                entries << entry;
-            }
-
-            if (entries.count() > 0)
-                mimeData->setText(entries.join("\n"));
-        }
-        else if (! filter.isEmpty())
-        {
-            QString abbrev;
-            QString name = model()->headerData(curIndex.column(), header()->orientation()).toString();
-
-            if (! filter.isEmpty())
-            {
-                abbrev = filter.left(filter.indexOf(' '));
-            }
-            else
-            {
-                filter = model()->data(curIndex).toString().toLower();
-                abbrev = filter;
-            }
-
-            mimeData->setText(filter);
-
-            QJsonObject filterData;
-            filterData["filter"] = filter;
-            filterData["name"] = abbrev;
-            filterData["description"] = name;
-
-            mimeData->setData(WiresharkMimeData::DisplayFilterMimeType, QJsonDocument(filterData).toJson());
-            drag_label = new DragLabel(QStringLiteral("%1\n%2").arg(name, abbrev), this);
-        }
-        else
-        {
-            QString text = model()->data(curIndex).toString();
-            if (! text.isEmpty())
-                mimeData->setText(text);
+            QString entry = createSummaryText(idx, CopyAsText);
+            entries << entry;
         }
 
-        if (mimeData->hasText() || mimeData->hasFormat(WiresharkMimeData::DisplayFilterMimeType))
-        {
-            QDrag * drag = new QDrag(this);
-            drag->setMimeData(mimeData);
-            if (drag_label)
-            {
-                qreal dpr = window()->windowHandle()->devicePixelRatio();
-                QPixmap pixmap= QPixmap(drag_label->size() * dpr);
-                pixmap.setDevicePixelRatio(dpr);
-                drag_label->render(&pixmap);
-                drag->setPixmap(pixmap);
-                delete drag_label;
-            }
+        if (entries.count() > 0)
+            mimeData->setText(entries.join("\n"));
+    }
+    else if (! filter.isEmpty())
+    {
+        QString name = model()->headerData(column, header()->orientation()).toString();
+        QString abbrev = filter.left(filter.indexOf(' '));
 
-            drag->exec(Qt::CopyAction);
-        }
-        else
+        mimeData->setText(filter);
+
+        QJsonObject filterData;
+        filterData["filter"] = filter;
+        filterData["name"] = abbrev;
+        filterData["description"] = name;
+
+        mimeData->setData(WiresharkMimeData::DisplayFilterMimeType, QJsonDocument(filterData).toJson());
+        drag_label = new DragLabel(QStringLiteral("%1\n%2").arg(name, abbrev), this);
+    }
+    else if (! cell_text.isEmpty())
+    {
+        mimeData->setText(cell_text);
+    }
+
+    if (mimeData->hasText() || mimeData->hasFormat(WiresharkMimeData::DisplayFilterMimeType))
+    {
+        QDrag * drag = new QDrag(this);
+        drag->setMimeData(mimeData);
+        if (drag_label)
         {
-            delete mimeData;
+            qreal dpr = window()->windowHandle()->devicePixelRatio();
+            QPixmap pixmap= QPixmap(drag_label->size() * dpr);
+            pixmap.setDevicePixelRatio(dpr);
+            drag_label->render(&pixmap);
+            drag->setPixmap(pixmap);
+            delete drag_label;
         }
+
+        drag->exec(Qt::CopyAction);
+    }
+    else
+    {
+        delete mimeData;
     }
 }
 
@@ -1642,13 +1686,24 @@ void PacketList::setColumnDelegate()
         }
     }
 
-    for (unsigned i = 0; i < prefs.num_cols; i++) {
-        QAbstractItemDelegate *col_delegate = itemDelegateForColumn(i);
-        if (!col_delegate) {
-            continue;
+    auto row_height = [this]() { return pinnedRowHeight(); };
+    for (QTreeView *view : pinnedOverlayViews()) {
+        for (unsigned i = 0; i < prefs.num_cols; i++) {
+            view->setItemDelegateForColumn(i, nullptr);
         }
-        for (QTreeView *view : pinnedOverlayViews()) {
-            view->setItemDelegateForColumn(i, col_delegate);
+        QList<QObject *> old_wrappers;
+        for (QObject *child : view->children()) {
+            if (dynamic_cast<PinnedOverlayView::FixedRowHeightDelegate *>(child)) {
+                old_wrappers << child;
+            }
+        }
+        view->setItemDelegate(new PinnedOverlayView::FixedRowHeightDelegate(nullptr, row_height, view));
+        qDeleteAll(old_wrappers);
+        for (unsigned i = 0; i < prefs.num_cols; i++) {
+            QAbstractItemDelegate *col_delegate = itemDelegateForColumn(i);
+            if (col_delegate) {
+                view->setItemDelegateForColumn(i, new PinnedOverlayView::FixedRowHeightDelegate(col_delegate, row_height, view));
+            }
         }
     }
 }
@@ -2238,19 +2293,18 @@ bool PacketList::contextMenuActive()
 
 QString PacketList::getFilterFromRowAndColumn(QModelIndex idx)
 {
-    frame_data *fdata;
+    if (! idx.isValid() || !packet_list_model_)
+        return QString();
+
+    return getFilterFromFdataAndColumn(packet_list_model_->getRowFdata(idx.row()), idx.column());
+}
+
+QString PacketList::getFilterFromFdataAndColumn(frame_data *fdata, int column)
+{
     QString filter;
-
-    if (! idx.isValid())
-        return filter;
-
-    int row = idx.row();
-    int column = idx.column();
 
     if (!cap_file_ || !packet_list_model_ || column < 0 || (unsigned)column >= cap_file_->cinfo.num_cols)
         return filter;
-
-    fdata = packet_list_model_->getRowFdata(row);
 
     if (fdata != NULL) {
         epan_dissect_t edt;
@@ -2321,6 +2375,7 @@ QString PacketList::getPacketComment(unsigned c_number)
     if (!cap_file_ || !packet_list_model_) return NULL;
 
     fdata = packet_list_model_->getRowFdata(row);
+    if (!fdata) fdata = filteredOutSelectedFrame();
 
     if (!fdata) return NULL;
 
@@ -2353,7 +2408,10 @@ void PacketList::addPacketComment(QString new_comment)
         return;
     }
 
-    if (selectionModel() && selectionModel()->hasSelection()) {
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->addFrameComment(packet_list_model_->physicalRecordForFrameNum((int)hidden->num), ba);
+        refreshFilteredOutFrame(hidden);
+    } else if (selectionModel() && selectionModel()->hasSelection()) {
         packet_list_model_->addFrameComment(selectionModel()->selectedRows(), ba);
         drawCurrentPacket();
     }
@@ -2376,6 +2434,12 @@ void PacketList::setPacketComment(unsigned c_number, QString new_comment)
     if (ba.size() > 65535) {
         simple_dialog(ESD_TYPE_ERROR, ESD_BTN_OK,
                       "That comment is too large to save in a capture file.");
+        return;
+    }
+
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->setFrameComment(packet_list_model_->physicalRecordForFrameNum((int)hidden->num), ba, c_number);
+        refreshFilteredOutFrame(hidden);
         return;
     }
 
@@ -2418,7 +2482,10 @@ void PacketList::deleteCommentsFromPackets()
 {
     if (!cap_file_ || !packet_list_model_) return;
 
-    if (selectionModel() && selectionModel()->hasSelection()) {
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->deleteFrameComments(packet_list_model_->physicalRecordForFrameNum((int)hidden->num));
+        refreshFilteredOutFrame(hidden);
+    } else if (selectionModel() && selectionModel()->hasSelection()) {
         packet_list_model_->deleteFrameComments(selectionModel()->selectedRows());
         drawCurrentPacket();
     }
@@ -2565,6 +2632,12 @@ void PacketList::markFrame()
 {
     if (!cap_file_ || !packet_list_model_) return;
 
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->toggleFrameMark(packet_list_model_->physicalRecordForFrameNum((int)hidden->num));
+        refreshFilteredOutFrame(hidden);
+        return;
+    }
+
     QModelIndexList frames;
 
     if (selectionModel() && selectionModel()->hasSelection())
@@ -2607,6 +2680,13 @@ void PacketList::ignoreFrame()
 {
     if (!cap_file_ || !packet_list_model_) return;
 
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->toggleFrameIgnore(packet_list_model_->physicalRecordForFrameNum((int)hidden->num));
+        refreshFilteredOutFrame(hidden);
+        emit packetDissectionChanged();
+        return;
+    }
+
     QModelIndexList frames;
 
     if (selectionModel() && selectionModel()->hasSelection())
@@ -2644,6 +2724,12 @@ void PacketList::ignoreAllDisplayedFrames(bool set)
 void PacketList::setTimeReference()
 {
     if (!cap_file_ || !packet_list_model_) return;
+
+    if (frame_data *hidden = filteredOutSelectedFrame()) {
+        packet_list_model_->toggleFrameRefTime(packet_list_model_->physicalRecordForFrameNum((int)hidden->num));
+        refreshFilteredOutFrame(hidden);
+        return;
+    }
 
     QModelIndexList frames;
 
@@ -2923,6 +3009,20 @@ void PacketList::updatePinnedRowVisibility()
     layoutPinnedOverlays();
 }
 
+void PacketList::updateFrozenOverlayMask()
+{
+    if (!pinned_column_view_) {
+        return;
+    }
+    if (header_drag_active_ && pinned_column_view_->isVisible()) {
+        int header_height = header()->height();
+        pinned_column_view_->setMask(QRegion(0, header_height, pinned_column_view_->width(),
+                                             pinned_column_view_->height() - header_height));
+    } else {
+        pinned_column_view_->clearMask();
+    }
+}
+
 void PacketList::layoutPinnedOverlays()
 {
     // Width of the frozen-column portion, shared between the column-freeze
@@ -2970,6 +3070,7 @@ void PacketList::layoutPinnedOverlays()
             pinned_column_view_->refreshLayout();
         }
         pinned_column_view_size_ = new_size;
+        updateFrozenOverlayMask();
         pinned_column_view_->setVerticalScrollValue(verticalScrollBar()->value());
     } else {
         pinned_column_view_->setVisible(false);

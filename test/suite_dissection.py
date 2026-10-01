@@ -1660,6 +1660,112 @@ class TestDissectTns:
         # The VARCHAR value "hi" is rendered as text, not raw bytes.
         assert '(VARCHAR): hi' in stdout, stdout
 
+    def test_tns_dalc_absent(self, cmd_tshark, capture_file, test_env):
+        '''A bind value of FD 01 is the DALC absent-value placeholder, not a
+        length of 253. The binds after it keep their values: NUMBER 10 and
+        VARCHAR "ok".'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_dalc_absent.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_bind.value',
+            '-e', '_ws.expert',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert len(rows) == 1, rows
+        assert rows[0][0] == 'fd01,c10b,6f6b', rows[0]
+        assert rows[0][1] == '', rows[0]
+        verbose = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_dalc_absent.pcap'),
+            '-d', 'tcp.port==1521,tns', '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Bind 1 (VARCHAR): no value' in verbose, verbose
+        assert 'Bind 3 (VARCHAR): ok' in verbose, verbose
+
+    def test_tns_rxd_nodata(self, cmd_tshark, capture_file, test_env):
+        '''A column the describe gives a zero data length carries no bytes in
+        the row. Describe (NUMBER, VARCHAR of length 0, VARCHAR), then two
+        rows that hold only the first and last values.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_rxd_nodata.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Column 1 (NUMBER): 10' in stdout, stdout
+        assert 'Column 2 (VARCHAR): NULL (no data length)' in stdout, stdout
+        assert 'Column 3 (VARCHAR): hi' in stdout, stdout
+        assert 'Column 1 (NUMBER): 20' in stdout, stdout
+        assert 'Column 3 (VARCHAR): yo' in stdout, stdout
+        assert 'Malformed' not in stdout, stdout
+
+    def test_tns_piggyback(self, cmd_tshark, capture_file, test_env):
+        '''The close-cursors piggyback is a pointer byte, a count and the
+        cursor ids. Two frames: cursors 3 and 5, then 300 and 70000.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_piggyback.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_piggyback.id',
+            '-e', 'tns.data.cursor',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert rows == [['0x69', '3,5'], ['0x69', '300,70000']], rows
+
+    def test_tns_walk(self, cmd_tshark, capture_file, test_env):
+        '''Every TTC message in a packet is decoded, not only the first. A
+        close-cursors piggyback in front of an execute, then a response that
+        carries describe, row header, two rows and the closing status.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_walk.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data.cursor',
+            '-e', 'tns.data_all8.sql',
+            '-e', 'tns.data_dcb.num_columns',
+            '-e', 'tns.data_rxh.num_iters',
+            '-e', 'tns.data_col.value',
+            '-e', 'tns.data_oer.err_code',
+            '-e', 'tns.data_oer.cursor_id',
+            '-e', 'tns.data_oer.message',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert len(rows) == 2, rows
+        # The piggyback's two cursors, then the execute's own (new) cursor.
+        assert rows[0][0] == '3,5,0', rows[0]
+        assert rows[0][1] == 'SELECT ID, NAME FROM USERS', rows[0]
+        assert rows[1][2] == '2' and rows[1][3] == '2', rows[1]
+        assert rows[1][4] == 'c10b,6869,c115,796f', rows[1]
+        assert rows[1][5] == '1403' and rows[1][6] == '7', rows[1]
+        assert rows[1][7].startswith('ORA-01403: no data found'), rows[1]
+
+    def test_tns_sta(self, cmd_tshark, capture_file, test_env):
+        '''TTI_STA decodes its call status and end-to-end sequence, and the
+        END_OF_RESPONSE marker behind it is named.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_sta.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_sta.call_status',
+            '-e', 'tns.data_sta.seq',
+            '-e', '_ws.col.info',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert len(rows) == 3, rows
+        assert rows[1][:2] == ['0x00000001', '0'], rows[1]
+        assert rows[2][:2] == ['0x00000005', '300'], rows[2]
+        assert rows[1][2].endswith('Function Complete, End of Response'), rows[1]
+
+    def test_tns_txn(self, cmd_tshark, capture_file, test_env):
+        '''The call status of TTI_OER and TTI_STA flags an open transaction
+        (0x02). An uncommitted INSERT has it; a query and a commit do not.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_txn.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data.call_status.txn_in_progress',
+        ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['True', 'False', 'False'], stdout
+
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
         if not features.have_zstd:
