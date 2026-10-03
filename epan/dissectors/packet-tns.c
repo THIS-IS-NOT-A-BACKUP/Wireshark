@@ -85,6 +85,30 @@ void proto_register_tns(void);
 /* DALC length byte marking a slot with no value (see get_dalc_custom). */
 #define TNS_DALC_ABSENT             0xFD
 
+/* TTC field versions (compile capability 7), as python-oracledb's
+ * TNS_CCAP_FIELD_VERSION_* name them. The wire shape of several messages
+ * depends on the one a connection negotiates. */
+#define TNS_CCAP_FIELD_VERSION  7
+#define TNS_FV_11_2             6
+#define TNS_FV_12_1             7
+#define TNS_FV_12_2             8
+#define TNS_FV_12_2_EXT1        9
+#define TNS_FV_18_1             10
+#define TNS_FV_18_1_EXT_1       11
+#define TNS_FV_19_1             12
+#define TNS_FV_19_1_EXT_1       13
+#define TNS_FV_20_1             14
+#define TNS_FV_20_1_EXT_1       15
+#define TNS_FV_21_1             16
+#define TNS_FV_23_1             17
+#define TNS_FV_23_1_EXT_1       18
+#define TNS_FV_23_1_EXT_2       19
+#define TNS_FV_23_1_EXT_3       20
+#define TNS_FV_23_1_EXT_4       21
+#define TNS_FV_23_1_EXT_5       22
+#define TNS_FV_23_3_EXT_6       23
+#define TNS_FV_23_4             24
+
 /* Data Packet Functions */
 #define SQLNET_SET_PROTOCOL     1
 #define SQLNET_SET_DATATYPES    2
@@ -109,6 +133,7 @@ void proto_register_tns(void);
 #define SQLNET_SERVER_PIGGYBACK 23
 #define SQLNET_IMPLICIT_RESULTS 27
 #define SQLNET_END_OF_RESPONSE  29
+#define SQLNET_TOKEN            33
 #define SQLNET_SNS              0xdeadbeef
 #define SQLNET_XTRN_PROCSERV_R1 32
 #define SQLNET_XTRN_PROCSERV_R2 68
@@ -133,11 +158,15 @@ void proto_register_tns(void);
 #define TTI_REEXECUTE_AND_FETCH 78
 #define TTI_ALL8                94
 #define TTI_LOBOPS              96
+#define TTI_TPC_TXN_SWITCH      103
+#define TTI_TPC_TXN_CHANGE_STATE 104
 #define TTI_CLOSE_CURSORS       105
 #define TTI_SET_END_TO_END_ATTR 135
 #define TTI_SET_SCHEMA          152
+#define TTI_SESSION_RELEASE     163
 #define TTI_SESSION_STATE       176
 #define TTI_PIPELINE_BEGIN      199
+#define TTI_PIPELINE_END        200
 #define TTI_END_USER_SEC_CTX    205
 
 /* desegmentation of TNS over TCP */
@@ -211,6 +240,11 @@ static int hf_tns_trace_cid;
 
 static int hf_tns_accept_data_length;
 static int hf_tns_accept_data_offset;
+static int hf_tns_accept_sdu;
+static int hf_tns_accept_flags2;
+static int hf_tns_accept_flags2_check_oob;
+static int hf_tns_accept_flags2_end_of_response;
+static int hf_tns_accept_flags2_fast_auth;
 static int hf_tns_accept_data;
 
 static int hf_tns_refuse_reason_user;
@@ -243,11 +277,15 @@ static int hf_tns_data_flag_eof;
 static int hf_tns_data_flag_dic;
 static int hf_tns_data_flag_rts;
 static int hf_tns_data_flag_sntt;
+static int hf_tns_data_flag_end_of_request;
+static int hf_tns_data_flag_begin_pipeline;
+static int hf_tns_data_flag_end_of_response;
 
 static int hf_tns_data_id;
 static int hf_tns_data_length;
 static int hf_tns_data_oci_id;
 static int hf_tns_data_tseq;
+static int hf_tns_data_token;
 static int hf_tns_data_piggyback_id;
 static int hf_tns_data_unused;
 
@@ -261,15 +299,37 @@ static int hf_tns_data_opi_num_of_params;
 static int hf_tns_data_opi_param_length;
 static int hf_tns_data_opi_param_name;
 static int hf_tns_data_opi_param_value;
+static int hf_tns_data_auth_mode;
+static int hf_tns_data_auth_mode_logon;
+static int hf_tns_data_auth_mode_change_password;
+static int hf_tns_data_auth_mode_sysdba;
+static int hf_tns_data_auth_mode_sysoper;
+static int hf_tns_data_auth_mode_with_password;
+static int hf_tns_data_auth_user;
 
 static int hf_tns_data_setp_acc_version;
 static int hf_tns_data_setp_cli_plat;
 static int hf_tns_data_setp_version;
 static int hf_tns_data_setp_banner;
+static int hf_tns_data_setp_charset;
+static int hf_tns_data_setp_flags;
+static int hf_tns_data_setp_ncharset;
+static int hf_tns_data_setp_compile_caps;
+static int hf_tns_data_setp_runtime_caps;
+static int hf_tns_data_setp_field_version;
 
 static int hf_tns_data_sns_cli_vers;
 static int hf_tns_data_sns_srv_vers;
 static int hf_tns_data_sns_srvcnt;
+static int hf_tns_data_sns_error;
+static int hf_tns_data_sns_service;
+static int hf_tns_data_sns_subpackets;
+static int hf_tns_data_sns_svc_error;
+static int hf_tns_data_sns_sub_type;
+static int hf_tns_data_sns_sub_data;
+static int hf_tns_data_sns_version;
+static int hf_tns_data_sns_encryption;
+static int hf_tns_data_sns_integrity;
 
 static int hf_tns_data_setdt_charset_in;
 static int hf_tns_data_setdt_charset_out;
@@ -277,6 +337,8 @@ static int hf_tns_data_setdt_flag;
 static int hf_tns_data_setdt_caphdr;
 static int hf_tns_data_setdt_caphdr_version;
 static int hf_tns_data_setdt_caphdr_flags;
+static int hf_tns_data_setdt_field_version;
+static int hf_tns_data_field_version;
 static int hf_tns_data_setdt_tblhdr;
 static int hf_tns_data_setdt_idmap;
 static int hf_tns_data_setdt_overrides;
@@ -292,6 +354,10 @@ static int hf_tns_data_oer_n_batch_errcodes;
 static int hf_tns_data_oer_n_batch_offsets;
 static int hf_tns_data_oer_n_batch_messages;
 static int hf_tns_data_oer_message;
+static int hf_tns_data_oer_err_num_ext;
+static int hf_tns_data_oer_rowcount_ext;
+static int hf_tns_data_oer_sql_type;
+static int hf_tns_data_oer_checksum;
 
 static int hf_tns_data_rpa_num_al8o4;
 static int hf_tns_data_rpa_al8o4;
@@ -342,6 +408,12 @@ static int hf_tns_data_col_csform;
 static int hf_tns_data_col_max_size;
 static int hf_tns_data_col_nulls_ok;
 static int hf_tns_data_col_name;
+static int hf_tns_data_col_uds_flags;
+static int hf_tns_data_col_domain_schema;
+static int hf_tns_data_col_domain_name;
+static int hf_tns_data_col_annotation;
+static int hf_tns_data_col_vector_dims;
+static int hf_tns_data_col_vector_format;
 
 static int hf_tns_data_rxh_num_requests;
 static int hf_tns_data_rxh_iter_num;
@@ -388,6 +460,21 @@ static int hf_tns_data_lob_charset;
 static int hf_tns_data_lob_data;
 static int hf_tns_data_lob_amount;
 static int hf_tns_data_lob_flag;
+static int hf_tns_data_tpc_switch_op;
+static int hf_tns_data_release_tag;
+static int hf_tns_data_release_mode;
+static int hf_tns_data_release_mode_deauth;
+static int hf_tns_data_tpc_change_op;
+static int hf_tns_data_tpc_format_id;
+static int hf_tns_data_tpc_gtrid;
+static int hf_tns_data_tpc_bqual;
+static int hf_tns_data_tpc_flags;
+static int hf_tns_data_tpc_timeout;
+static int hf_tns_data_tpc_state;
+static int hf_tns_data_tpc_context;
+static int hf_tns_data_tpc_app_value;
+static int hf_tns_data_tpc_internal_name;
+static int hf_tns_data_tpc_external_name;
 static int hf_tns_data_lob_total_size;
 static int hf_tns_data_pgy_schema;
 static int hf_tns_data_pgy_session_state;
@@ -431,12 +518,17 @@ static int ett_tns_opi_par;
 static int ett_tns_sopt_flag;
 static int ett_tns_ntp_flag;
 static int ett_tns_conn_flag;
+static int ett_tns_accept_flags2;
 static int ett_tns_rows;
 static int ett_tns_setdt_caphdr;
 static int ett_tns_setdt_overrides;
 static int ett_tns_setdt_override;
 static int ett_tns_oer;
 static int ett_tns_call_status;
+static int ett_tns_auth_mode;
+static int ett_tns_sns_service;
+static int ett_tns_sns_subpacket;
+static int ett_tns_release_mode;
 static int ett_tns_rpa;
 static int ett_tns_kv;
 static int ett_tns_iov;
@@ -459,8 +551,17 @@ static expert_field ei_tns_connect_data_next_packet;
 static expert_field ei_tns_data_descriptor_size_mismatch;
 static expert_field ei_tns_data_piggyback_cursors;
 static expert_field ei_tns_data_count_too_large;
+static expert_field ei_tns_data_encrypted;
 
 #define TCP_PORT_TNS			1521 /* Not IANA registered */
+
+/* The ACCEPT's flags2 word, what the server offers from version 318. */
+static int * const tns_accept_flags2[] = {
+	&hf_tns_accept_flags2_check_oob,
+	&hf_tns_accept_flags2_end_of_response,
+	&hf_tns_accept_flags2_fast_auth,
+	NULL
+};
 
 static int * const tns_connect_flags[] = {
 	&hf_tns_conn_flag_nareq,
@@ -542,10 +643,27 @@ static const value_string tns_data_funcs[] = {
 	{SQLNET_SERVER_PIGGYBACK, "Server-side Piggyback"},
 	{SQLNET_IMPLICIT_RESULTS, "Implicit Result Sets"},
 	{SQLNET_END_OF_RESPONSE,  "End of Response"},
+	{SQLNET_TOKEN,            "Token"},
 	{SQLNET_XTRN_PROCSERV_R1, "External Procedures and Services Registrations"},
 	{SQLNET_XTRN_PROCSERV_R2, "External Procedures and Services Registrations"},
 	{SQLNET_SNS,              "Secure Network Services"},
 	{0, NULL}
+};
+
+/* The authentication mode of an authentication call. */
+static int * const tns_auth_modes[] = {
+	&hf_tns_data_auth_mode_logon,
+	&hf_tns_data_auth_mode_change_password,
+	&hf_tns_data_auth_mode_sysdba,
+	&hf_tns_data_auth_mode_sysoper,
+	&hf_tns_data_auth_mode_with_password,
+	NULL
+};
+
+/* The mode of a DRCP session release. */
+static int * const tns_release_modes[] = {
+	&hf_tns_data_release_mode_deauth,
+	NULL
 };
 
 /* The second options word of a re-execute. */
@@ -624,6 +742,110 @@ static const value_string tns_command_types[] = {
 	{45, "ROLLBACK"},
 	{47, "PL/SQL EXECUTE"},
 	{85, "TRUNCATE TABLE"},
+	{0, NULL}
+};
+
+static const value_string tns_field_versions[] = {
+	{TNS_FV_11_2,       "11.2"},
+	{TNS_FV_12_1,       "12.1"},
+	{TNS_FV_12_2,       "12.2"},
+	{TNS_FV_12_2_EXT1,  "12.2 ext 1"},
+	{TNS_FV_18_1,       "18.1"},
+	{TNS_FV_18_1_EXT_1, "18.1 ext 1"},
+	{TNS_FV_19_1,       "19.1"},
+	{TNS_FV_19_1_EXT_1, "19.1 ext 1"},
+	{TNS_FV_20_1,       "20.1"},
+	{TNS_FV_20_1_EXT_1, "20.1 ext 1"},
+	{TNS_FV_21_1,       "21.1"},
+	{TNS_FV_23_1,       "23.1"},
+	{TNS_FV_23_1_EXT_1, "23.1 ext 1"},
+	{TNS_FV_23_1_EXT_2, "23.1 ext 2"},
+	{TNS_FV_23_1_EXT_3, "23.1 ext 3"},
+	{TNS_FV_23_1_EXT_4, "23.1 ext 4"},
+	{TNS_FV_23_1_EXT_5, "23.1 ext 5"},
+	{TNS_FV_23_3_EXT_6, "23.3 ext 6"},
+	{TNS_FV_23_4,       "23.4"},
+	{0, NULL}
+};
+
+/* Two-phase commit operations (python-oracledb's TNS_TPC_*). */
+static const value_string tns_tpc_switch_ops[] = {
+	{0x01, "Start"},
+	{0x02, "Detach"},
+	{0x04, "Post-detach"},
+	{0, NULL}
+};
+
+static const value_string tns_tpc_change_ops[] = {
+	{0x01, "Commit"},
+	{0x02, "Abort"},
+	{0x03, "Prepare"},
+	{0x04, "Forget"},
+	{0, NULL}
+};
+
+static const value_string tns_tpc_states[] = {
+	{0, "Prepared"},
+	{1, "Requires commit"},
+	{2, "Committed"},
+	{3, "Aborted"},
+	{4, "Read only"},
+	{5, "Forgotten"},
+	{0, NULL}
+};
+
+/* Native network services (ANO) negotiation: services, sub-packet types
+ * and the encryption and integrity algorithm ids. */
+#define TNS_ANO_AUTHENTICATION   1
+#define TNS_ANO_ENCRYPTION       2
+#define TNS_ANO_DATA_INTEGRITY   3
+#define TNS_ANO_SUPERVISOR       4
+#define TNS_ANO_SP_BYTES         1
+#define TNS_ANO_SP_UB1           2
+#define TNS_ANO_SP_VERSION       5
+
+static const value_string tns_sns_services[] = {
+	{TNS_ANO_AUTHENTICATION, "Authentication"},
+	{TNS_ANO_ENCRYPTION,     "Encryption"},
+	{TNS_ANO_DATA_INTEGRITY, "Data Integrity"},
+	{TNS_ANO_SUPERVISOR,     "Supervisor"},
+	{0, NULL}
+};
+
+static const value_string tns_sns_subpacket_types[] = {
+	{0, "String"},
+	{1, "Bytes"},
+	{2, "UB1"},
+	{3, "UB2"},
+	{4, "UB4"},
+	{5, "Version"},
+	{6, "Status"},
+	{0, NULL}
+};
+
+static const value_string tns_sns_encryption_algs[] = {
+	{0,  "None"},
+	{1,  "RC4_40"},
+	{2,  "DES"},
+	{3,  "DES40"},
+	{6,  "RC4_256"},
+	{8,  "RC4_56"},
+	{10, "RC4_128"},
+	{11, "3DES112"},
+	{12, "3DES168"},
+	{15, "AES128"},
+	{16, "AES192"},
+	{17, "AES256"},
+	{0, NULL}
+};
+
+static const value_string tns_sns_integrity_algs[] = {
+	{0, "None"},
+	{1, "MD5"},
+	{3, "SHA1"},
+	{4, "SHA512"},
+	{5, "SHA256"},
+	{6, "SHA384"},
 	{0, NULL}
 };
 
@@ -902,6 +1124,11 @@ static const value_string tns_data_oci_subfuncs[] = {
 	{170, "Replay PL/SQL RPC"},
 	{171, "XStream Out"},
 	{172, "Golden Gate RPC"},
+	{176, "Session state"},
+	{187, "Notify"},
+	{199, "Pipeline begin"},
+	{200, "Pipeline end"},
+	{205, "End-user security context"},
 	{0, NULL}
 };
 static value_string_ext tns_data_oci_subfuncs_ext = VALUE_STRING_EXT_INIT(tns_data_oci_subfuncs);
@@ -971,6 +1198,17 @@ typedef struct _tns_conv_info_t {
 	 * integers and 8-byte pointer indicators, where a thin client uses
 	 * variable-length integers and 1-byte pointer flags. */
 	bool oci_dialect;
+	/* The TTC field version the client and server settled on, from the
+	 * client's TTI_DTY; 0 until seen. */
+	uint8_t field_version;
+	/* The TTC field version the server offered in its TTI_PRO reply,
+	 * which can be higher; 0 until seen. */
+	uint8_t server_field_version;
+	/* Native network encryption: the server picked an algorithm, and
+	 * the frame of the client's last negotiation packet, after which the
+	 * data packets are encrypted. */
+	bool ano_encryption;
+	uint32_t ano_active_after;
 	tns_describe_t *last_describe;
 	/* Bind types of an execute that opened a new cursor, waiting for the
 	 * status that names the cursor id. */
@@ -987,6 +1225,12 @@ typedef struct _tns_conv_info_t {
 #define TNS_PROTO_DATA_CALL     3
 /* p_add_proto_data key for whether a packet is in the OCI dialect. */
 #define TNS_PROTO_DATA_OCI      4
+/* p_add_proto_data key for the field version in force for a packet. */
+#define TNS_PROTO_DATA_FV       5
+/* p_add_proto_data key for whether a packet is encrypted. */
+#define TNS_PROTO_DATA_ENCRYPTED 6
+/* p_add_proto_data key for the field version the server offered. */
+#define TNS_PROTO_DATA_SERVER_FV 7
 
 /* Execute flag asking for the rows each array DML iteration affected. */
 #define TNS_EXEC_FLAGS_DML_ROWCOUNTS 0x4000
@@ -1006,6 +1250,56 @@ tns_get_conv_info(packet_info *pinfo)
 		conversation_add_proto_data(conversation, proto_tns, tns_info);
 	}
 	return tns_info;
+}
+
+/* The TTC field version negotiated on the packet's connection, or 0 when
+ * the negotiation was not seen - which the decoders read as the 11g
+ * shape. Stored per packet on the first pass. */
+static unsigned tns_field_version(packet_info *pinfo)
+{
+	void *stored = p_get_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_FV);
+	if ( stored || PINFO_FD_VISITED(pinfo) )
+		return stored ? GPOINTER_TO_UINT(stored) - 1 : 0;
+
+	unsigned fv = tns_get_conv_info(pinfo)->field_version;
+	p_add_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_FV, GUINT_TO_POINTER(fv + 1));
+	return fv;
+}
+
+/* The TTC field version the server offered on the packet's connection -
+ * its own release, before the client lowered it - or 0 when the
+ * negotiation was not seen. Stored per packet on the first pass. */
+static unsigned tns_server_field_version(packet_info *pinfo)
+{
+	void *stored = p_get_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_SERVER_FV);
+	if ( stored || PINFO_FD_VISITED(pinfo) )
+		return stored ? GPOINTER_TO_UINT(stored) - 1 : 0;
+
+	unsigned fv = tns_get_conv_info(pinfo)->server_field_version;
+	p_add_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_SERVER_FV, GUINT_TO_POINTER(fv + 1));
+	return fv;
+}
+
+/* Whether the connection is known to predate 11g (a 10g server): its
+ * describe lacks the fields 11g added. */
+static bool tns_before_11g(packet_info *pinfo)
+{
+	unsigned fv = tns_field_version(pinfo);
+	return fv != 0 && fv < TNS_FV_11_2;
+}
+
+/* Whether a data packet is encrypted by native network encryption.
+ * Stored per packet on the first pass. */
+static bool tns_is_encrypted(packet_info *pinfo)
+{
+	void *stored = p_get_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_ENCRYPTED);
+	if ( stored || PINFO_FD_VISITED(pinfo) )
+		return GPOINTER_TO_UINT(stored) == 2;
+
+	tns_conv_info_t *tns_info = tns_get_conv_info(pinfo);
+	bool encrypted = tns_info->ano_active_after && pinfo->num > tns_info->ano_active_after;
+	p_add_proto_data(wmem_file_scope(), pinfo, proto_tns, TNS_PROTO_DATA_ENCRYPTED, GUINT_TO_POINTER(encrypted ? 2 : 1));
+	return encrypted;
 }
 
 static unsigned get_data_func_id(tvbuff_t *tvb, int offset)
@@ -1130,6 +1424,35 @@ static int get_ub8_custom(tvbuff_t *tvb, int offset, uint64_t *result)
 	return 1 + width;
 }
 
+/* Walk the chunks of a chunked (0xFE) value, starting after the 0xFE:
+ * (length, bytes) pairs until a zero length. A length is one byte up to
+ * field version 12.1 and a variable-length ub4 from 12.2 on. The data is
+ * appended to strbuf as UTF-8 when strbuf is not NULL. Returns the bytes
+ * consumed, the terminating zero included. */
+static int tns_chunks_len(tvbuff_t *tvb, packet_info *pinfo, int offset, wmem_strbuf_t *strbuf)
+{
+	bool ub4_lengths = tns_field_version(pinfo) >= TNS_FV_12_2;
+	int o = offset;
+
+	while ( tvb_reported_length_remaining(tvb, o) > 0 )
+	{
+		int chunk_len;
+		if ( ub4_lengths )
+			o += get_sb4_custom(tvb, o, &chunk_len);
+		else
+		{
+			chunk_len = tvb_get_uint8(tvb, o);
+			o += 1;
+		}
+		if ( chunk_len <= 0 )
+			break;
+		if ( strbuf )
+			wmem_strbuf_append(strbuf, (const char *)tvb_get_string_enc(pinfo->pool, tvb, o, chunk_len, ENC_UTF_8|ENC_NA));
+		o += chunk_len;
+	}
+	return o - offset;
+}
+
 /* Decode a DALC (Data-Length-And-Content) blob. The leading byte is a
  * length only in the middle of its range:
  *
@@ -1147,11 +1470,8 @@ static int get_ub8_custom(tvbuff_t *tvb, int offset, uint64_t *result)
  * every field after it, so they have to be spelled out rather than left
  * to the default.
  *
- * The chunk lengths in the 0xFE form are single bytes here, which is
- * the 11g shape this dissector decodes throughout; 12.2 and later
- * prefix each chunk with a variable-length ub4 instead. Telling the
- * two apart needs the field version negotiated during the handshake,
- * which is not threaded through yet.
+ * The chunk lengths in the 0xFE form are single bytes up to field version
+ * 12.1, and variable-length ub4s from 12.2 on.
  *
  * Returns the number of bytes consumed from the tvb and, when content
  * is non-empty, a UTF-8 string allocated from pinfo->pool. */
@@ -1177,21 +1497,26 @@ static int get_dalc_custom(tvbuff_t *tvb, packet_info *pinfo, int offset, const 
 		return 1 + first;
 	}
 
-	/* Chunked form: walk (len, bytes)+ until a zero-length chunk. */
+	/* Chunked form: (len, bytes)+ until a zero-length chunk. */
 	wmem_strbuf_t *strbuf = wmem_strbuf_new(pinfo->pool, "");
-	int o = offset + 1;
-	while ( tvb_reported_length_remaining(tvb, o) > 0 )
-	{
-		uint8_t chunk_len = tvb_get_uint8(tvb, o);
-		o += 1;
-		if ( chunk_len == 0 )
-			break;
-		wmem_strbuf_append(strbuf, (const char *)tvb_get_string_enc(pinfo->pool, tvb, o, chunk_len, ENC_UTF_8|ENC_NA));
-		o += chunk_len;
-	}
+	int used = 1 + tns_chunks_len(tvb, pinfo, offset + 1, strbuf);
 	if ( out_str )
 		*out_str = wmem_strbuf_get_str(strbuf);
-	return o - offset;
+	return used;
+}
+
+/* A server's message text carries a trailing newline; a client strips it
+ * before showing the error. Returns a pinfo->pool string, or NULL. */
+static const char *tns_trim_message(packet_info *pinfo, const char *msg)
+{
+	size_t len;
+
+	if ( !msg )
+		return NULL;
+	len = strlen(msg);
+	while ( len > 0 && (msg[len - 1] == '\n' || msg[len - 1] == '\r' || msg[len - 1] == ' ') )
+		len--;
+	return wmem_strndup(pinfo->pool, msg, len);
 }
 
 /* Decode a bytes_with_length / str_with_length field: a ub4 count, and
@@ -1538,12 +1863,17 @@ static void tns_add_call_status_flags(proto_item *ti, tvbuff_t *tvb, int start, 
 
 /* Decode an OAC (Oracle Access Column) descriptor — the type/format core
  * shared by describe columns and bind descriptors. Fields
- * use the Oracle variable-length form (get_sb4_custom).
+ * use the Oracle variable-length form (get_sb4_custom). From field version
+ * 12.2 the scale is a single signed byte, where 11g sends a variable-length
+ * sb4 (NUMBER's default -127 as 0x81 0x7f), and a ub4 oaccolid follows the
+ * max size.
  * When col is not NULL it receives the type and data length.
  * Returns the new offset. */
 static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, tns_column_t *col)
 {
 	int v = 0, start;
+	uint64_t u = 0;
+	bool fv_12_2 = tns_field_version(pinfo) >= TNS_FV_12_2;
 
 	if ( col )
 		col->type = tvb_get_uint8(tvb, offset);
@@ -1555,9 +1885,15 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
 	/* precision (sb1) */
 	proto_tree_add_item(tree, hf_tns_data_col_precision, tvb, offset, 1, ENC_BIG_ENDIAN);
 	offset += 1;
-	/* scale (ub4, may be negative — NUMBER default is -127) */
+	/* scale (may be negative — NUMBER default is -127) */
 	start = offset;
-	offset += get_sb4_custom(tvb, offset, &v);
+	if ( fv_12_2 )
+	{
+		v = (int8_t)tvb_get_uint8(tvb, offset);
+		offset += 1;
+	}
+	else
+		offset += get_sb4_custom(tvb, offset, &v);
 	proto_tree_add_int(tree, hf_tns_data_col_scale, tvb, start, offset - start, v);
 	/* max data length / buffer size (ub4) */
 	start = offset;
@@ -1567,8 +1903,8 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
 		col->data_len = (uint32_t)v;
 	/* max array elements (ub4, skip) */
 	offset += get_sb4_custom(tvb, offset, &v);
-	/* cont flags (ub4, skip) */
-	offset += get_sb4_custom(tvb, offset, &v);
+	/* cont flags (ub8, skip) */
+	offset += get_ub8_custom(tvb, offset, &u);
 	/* type OID (bytes_with_length, skip) */
 	offset += get_field_with_length(tvb, pinfo, offset, NULL);
 	/* version (ub4, skip) */
@@ -1586,6 +1922,9 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
 	start = offset;
 	offset += get_sb4_custom(tvb, offset, &v);
 	proto_tree_add_uint(tree, hf_tns_data_col_max_size, tvb, start, offset - start, v);
+	/* oaccolid (ub4, skip) */
+	if ( fv_12_2 )
+		offset += get_sb4_custom(tvb, offset, &v);
 
 	return offset;
 }
@@ -1596,6 +1935,8 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
  * Returns the new offset. */
 static int dissect_tns_dcb_column(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, int idx, tns_column_t *col)
 {
+	unsigned fv = tns_field_version(pinfo);
+	int start;
 	proto_tree *col_tree;
 	proto_item *col_item;
 	int col_start = offset, v = 0;
@@ -1622,8 +1963,59 @@ static int dissect_tns_dcb_column(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
 	offset += get_field_with_length(tvb, pinfo, offset, NULL);
 	/* column position (ub4, skip) */
 	offset += get_sb4_custom(tvb, offset, &v);
-	/* uds flags (ub4, skip) — 11g addition */
-	offset += get_sb4_custom(tvb, offset, &v);
+	/* uds flags (ub4) — an 11g addition; it marks a JSON column */
+	if ( !tns_before_11g(pinfo) )
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(col_tree, hf_tns_data_col_uds_flags, tvb, start, offset - start, v);
+	}
+	/* 23ai: the column's SQL domain, its annotations, and a vector
+	 * column's dimensions and format */
+	if ( fv >= TNS_FV_23_1 )
+	{
+		const char *str = NULL;
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &str);
+		if ( str )
+			proto_tree_add_string(col_tree, hf_tns_data_col_domain_schema, tvb, start, offset - start, str);
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &str);
+		if ( str )
+			proto_tree_add_string(col_tree, hf_tns_data_col_domain_name, tvb, start, offset - start, str);
+	}
+	if ( fv >= TNS_FV_23_1_EXT_3 )
+	{
+		int num = 0;
+		offset += get_sb4_custom(tvb, offset, &num);
+		if ( num > 0 )
+		{
+			offset += 1;
+			offset += get_sb4_custom(tvb, offset, &num);
+			offset += 1;
+			for ( int i = 0; i < num && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+			{
+				const char *key = NULL, *value = NULL;
+				start = offset;
+				offset += get_field_with_length(tvb, pinfo, offset, &key);
+				offset += get_field_with_length(tvb, pinfo, offset, &value);
+				proto_tree_add_string_format_value(col_tree, hf_tns_data_col_annotation, tvb,
+					start, offset - start, key ? key : "", "%s = %s",
+					key ? key : "", value ? value : "");
+				offset += get_sb4_custom(tvb, offset, &v); /* flags */
+			}
+			offset += get_sb4_custom(tvb, offset, &v);     /* flags */
+		}
+	}
+	if ( fv >= TNS_FV_23_4 )
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(col_tree, hf_tns_data_col_vector_dims, tvb, start, offset - start, v);
+		proto_tree_add_item(col_tree, hf_tns_data_col_vector_format, tvb, offset, 1, ENC_NA);
+		offset += 1;
+		offset += 1;                                         /* vector flags */
+	}
 
 	if ( name )
 		proto_item_append_text(col_item, ": %s (%s)", name,
@@ -1675,11 +2067,14 @@ static int dissect_tns_describe_body(tvbuff_t *tvb, packet_info *pinfo, proto_tr
 	}
 
 	/* Trailer: current date (bytes_with_length), four ub4 flags,
-	 * and the query-cache key (bytes_with_length) — all skipped. */
+	 * and the query-cache key (bytes_with_length) — all skipped. The key
+	 * came with the 11g result cache: a 10g describe ends after the
+	 * flags. */
 	offset += get_field_with_length(tvb, pinfo, offset, NULL);
 	for ( int i = 0; i < 4; i++ )
 		offset += get_sb4_custom(tvb, offset, &v);
-	offset += get_field_with_length(tvb, pinfo, offset, NULL);
+	if ( !tns_before_11g(pinfo) )
+		offset += get_field_with_length(tvb, pinfo, offset, NULL);
 	return offset;
 }
 
@@ -1838,18 +2233,8 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 				offset += 1;
 				is_null = 1;
 			}
-			else if ( first == 0xfe ) /* chunked: ub1 len chunks until 0 (11g) */
-			{
-				offset += 1;
-				while ( tvb_reported_length_remaining(tvb, offset) > 0 )
-				{
-					uint8_t chunk_len = tvb_get_uint8(tvb, offset);
-					offset += 1;
-					if ( chunk_len == 0 )
-						break;
-					offset += chunk_len;
-				}
-			}
+			else if ( first == 0xfe ) /* chunked */
+				offset += 1 + tns_chunks_len(tvb, pinfo, offset + 1, NULL);
 			else
 				offset += 1 + first;
 			offset += get_sb4_custom(tvb, offset, &v);
@@ -2244,6 +2629,112 @@ static int dissect_tns_return_params(tvbuff_t *tvb, packet_info *pinfo, proto_tr
 	return offset;
 }
 
+/* From field version 23.1 ext 1 a call or piggyback header carries a ub8
+ * token after its sequence number, which the reply echoes in a TOKEN
+ * message. Returns the new offset. */
+static int dissect_tns_call_token(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset)
+{
+	uint64_t token = 0;
+	int start = offset;
+
+	if ( tns_field_version(pinfo) < TNS_FV_23_1_EXT_1 )
+		return offset;
+	offset += get_ub8_custom(tvb, offset, &token);
+	proto_tree_add_uint64(tree, hf_tns_data_token, tvb, start, offset - start, token);
+	return offset;
+}
+
+/* Decode a two-phase commit call: a transaction switch (103) - start,
+ * detach - or a state change (104) - prepare, commit, abort, forget. The
+ * header gives an operation, the lengths of a transaction context and of
+ * the XID's parts, and for a switch the names; the context, the XID and
+ * the rest follow. The XID is padded to 128 bytes. Returns the new
+ * offset. */
+static int dissect_tns_tpc_call(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint32_t func)
+{
+	int v = 0, ctx_len = 0, gtrid_len = 0, bqual_len = 0, xid_len = 0;
+	int int_len = 0, ext_len = 0, start;
+	uint8_t ctx_ptr, xid_ptr, int_ptr = 0, ext_ptr = 0;
+
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(tree, func == TTI_TPC_TXN_SWITCH ? hf_tns_data_tpc_switch_op : hf_tns_data_tpc_change_op,
+		tvb, start, offset - start, v);
+	col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", val_to_str_const(v,
+		func == TTI_TPC_TXN_SWITCH ? tns_tpc_switch_ops : tns_tpc_change_ops, "unknown"));
+	ctx_ptr = tvb_get_uint8(tvb, offset);
+	offset += 1;
+	offset += get_sb4_custom(tvb, offset, &ctx_len);
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(tree, hf_tns_data_tpc_format_id, tvb, start, offset - start, v);
+	offset += get_sb4_custom(tvb, offset, &gtrid_len);
+	offset += get_sb4_custom(tvb, offset, &bqual_len);
+	xid_ptr = tvb_get_uint8(tvb, offset);
+	offset += 1;
+	offset += get_sb4_custom(tvb, offset, &xid_len);
+	if ( func == TTI_TPC_TXN_SWITCH )
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_flags, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_timeout, tvb, start, offset - start, v);
+		offset += 3; /* application value, return context and its length pointers */
+		int_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &int_len);
+		ext_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &ext_len);
+	}
+	else
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_timeout, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_state, tvb, start, offset - start, v);
+		offset += 1; /* out state pointer */
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_flags, tvb, start, offset - start, v);
+	}
+	if ( ctx_ptr && ctx_len > 0 )
+	{
+		proto_tree_add_item(tree, hf_tns_data_tpc_context, tvb, offset, ctx_len, ENC_NA);
+		offset += ctx_len;
+	}
+	if ( xid_ptr && xid_len > 0 )
+	{
+		if ( gtrid_len >= 0 && bqual_len >= 0 && gtrid_len + bqual_len <= xid_len )
+		{
+			proto_tree_add_item(tree, hf_tns_data_tpc_gtrid, tvb, offset, gtrid_len, ENC_NA);
+			proto_tree_add_item(tree, hf_tns_data_tpc_bqual, tvb, offset + gtrid_len, bqual_len, ENC_NA);
+		}
+		offset += xid_len;
+	}
+	if ( func == TTI_TPC_TXN_SWITCH )
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_tpc_app_value, tvb, start, offset - start, v);
+		if ( int_ptr && int_len > 0 )
+		{
+			proto_tree_add_item(tree, hf_tns_data_tpc_internal_name, tvb, offset, int_len, ENC_UTF_8);
+			offset += int_len;
+		}
+		if ( ext_ptr && ext_len > 0 )
+		{
+			proto_tree_add_item(tree, hf_tns_data_tpc_external_name, tvb, offset, ext_len, ENC_UTF_8);
+			offset += ext_len;
+		}
+	}
+	return offset;
+}
+
 /* Decode the body of a piggyback other than close-cursors. Layouts
  * follow python-oracledb's _write_*_piggyback. Sets *walk when the body
  * was understood, so the call behind it can be decoded. Returns the new
@@ -2478,12 +2969,14 @@ static bool tns_is_next_message(unsigned data_func_id, bool is_request)
 	switch ( data_func_id )
 	{
 		case SQLNET_RETURN_STATUS:
+		case SQLNET_FLUSH_BIND_DATA:
 		case SQLNET_FUNCCOMPLETE:
 		case SQLNET_WARNING:
 		case SQLNET_LOB_FILE_DF:
 		case SQLNET_BIT_VECTOR:
 		case SQLNET_SERVER_PIGGYBACK:
 		case SQLNET_IMPLICIT_RESULTS:
+		case SQLNET_TOKEN:
 		case SQLNET_END_OF_RESPONSE:
 		case SQLNET_ROW_TRANSF_HDR:
 		case SQLNET_ROW_TRANSF_DATA:
@@ -2511,6 +3004,9 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 		&hf_tns_data_flag_dic,
 		&hf_tns_data_flag_rts,
 		&hf_tns_data_flag_sntt,
+		&hf_tns_data_flag_end_of_request,
+		&hf_tns_data_flag_begin_pipeline,
+		&hf_tns_data_flag_end_of_response,
 		NULL
 	};
 
@@ -2520,6 +3016,23 @@ static void dissect_tns_data(tvbuff_t *tvb, int offset, packet_info *pinfo, prot
 	proto_tree_add_bitmask(data_tree, tvb, offset, hf_tns_data_flag, ett_tns_data_flag, flags, ENC_BIG_ENDIAN);
 	offset += 2;
 	data_func_id = get_data_func_id(tvb, offset);
+
+	/* Once native network encryption is on, a data packet is ciphertext
+	 * followed by a padding and a key-fold byte; nothing in it can be
+	 * decoded without the session key. */
+	if ( tns_is_encrypted(pinfo) && data_func_id != SQLNET_SNS )
+	{
+		col_append_str(pinfo->cinfo, COL_INFO, ", Encrypted Data");
+		proto_tree_add_expert(data_tree, pinfo, &ei_tns_data_encrypted, tvb, offset, tvb_reported_length_remaining(tvb, offset));
+		call_data_dissector(tvb_new_subset_remaining(tvb, offset), pinfo, data_tree);
+		return;
+	}
+
+	/* The field version the connection negotiated decides the shape of
+	 * several messages; show the one in force. */
+	unsigned fv = tns_field_version(pinfo);
+	if ( fv )
+		proto_item_set_generated(proto_tree_add_uint(data_tree, hf_tns_data_field_version, tvb, 0, 0, fv));
 
 	/* Do this only if the Data message have a body. Otherwise, there are only Data flags. */
 	int remaining = tvb_reported_length_remaining(tvb, offset);
@@ -2632,6 +3145,7 @@ static int dissect_tns_oci_message(tvbuff_t *tvb, int offset, packet_info *pinfo
 				const char *msg = NULL;
 				int msg_start = offset;
 				offset += get_dalc_custom(tvb, pinfo, offset, &msg);
+				msg = tns_trim_message(pinfo, msg);
 				if ( msg )
 				{
 					proto_tree_add_string(oer_tree, hf_tns_data_oer_message, tvb, msg_start, offset - msg_start, msg);
@@ -2736,6 +3250,44 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				proto_item_set_end(ti, tvb, offset);
 				proto_tree_add_item_ret_length(data_tree, hf_tns_data_setp_banner, tvb, offset, -1, ENC_ASCII|ENC_NA, &len);
 				offset += len;
+
+				/* After the banner: the server's charset (LE), flags, a
+				 * count of 5-byte elements (LE), the "fdo" block (a BE
+				 * length) whose tail names the national charset, and the
+				 * server's compile and runtime capabilities, each behind a
+				 * length byte. Capability 7 is the highest TTC field
+				 * version the server offers. */
+				if ( tvb_reported_length_remaining(tvb, offset) < 5 )
+					break;
+				proto_tree_add_item(data_tree, hf_tns_data_setp_charset, tvb, offset, 2, ENC_LITTLE_ENDIAN);
+				offset += 2;
+				proto_tree_add_item(data_tree, hf_tns_data_setp_flags, tvb, offset, 1, ENC_NA);
+				offset += 1;
+				unsigned num_elem = tvb_get_letohs(tvb, offset);
+				offset += 2 + 5 * num_elem;
+				unsigned fdo_len = tvb_get_ntohs(tvb, offset);
+				offset += 2;
+				if ( fdo_len >= 7 )
+				{
+					unsigned ix = 6 + tvb_get_uint8(tvb, offset + 5) + tvb_get_uint8(tvb, offset + 6);
+					if ( ix + 5 <= fdo_len )
+						proto_tree_add_item(data_tree, hf_tns_data_setp_ncharset, tvb, offset + ix + 3, 2, ENC_BIG_ENDIAN);
+				}
+				offset += fdo_len;
+				uint8_t caps_len = tvb_get_uint8(tvb, offset);
+				proto_tree_add_item(data_tree, hf_tns_data_setp_compile_caps, tvb, offset, 1 + caps_len, ENC_NA);
+				if ( caps_len > TNS_CCAP_FIELD_VERSION )
+				{
+					proto_tree_add_item(data_tree, hf_tns_data_setp_field_version, tvb,
+						offset + 1 + TNS_CCAP_FIELD_VERSION, 1, ENC_NA);
+					if ( !PINFO_FD_VISITED(pinfo) )
+						tns_get_conv_info(pinfo)->server_field_version =
+							tvb_get_uint8(tvb, offset + 1 + TNS_CCAP_FIELD_VERSION);
+				}
+				offset += 1 + caps_len;
+				caps_len = tvb_get_uint8(tvb, offset);
+				proto_tree_add_item(data_tree, hf_tns_data_setp_runtime_caps, tvb, offset, 1 + caps_len, ENC_NA);
+				offset += 1 + caps_len;
 			}
 			break;
 		}
@@ -2774,6 +3326,18 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			caphdr_tree = proto_item_add_subtree(caphdr_item, ett_tns_setdt_caphdr);
 			proto_tree_add_item(caphdr_tree, hf_tns_data_setdt_caphdr_version, tvb, offset, 3, ENC_BIG_ENDIAN);
 			proto_tree_add_item(caphdr_tree, hf_tns_data_setdt_caphdr_flags, tvb, offset + 3, 36, ENC_NA);
+			/* The header opens with the length of the client's compile
+			 * capabilities, and capability 7 is the TTC field version.
+			 * The client has already lowered it to the server's, so it
+			 * is the one the connection uses. */
+			if ( tvb_get_uint8(tvb, offset) > TNS_CCAP_FIELD_VERSION )
+			{
+				uint8_t fv = tvb_get_uint8(tvb, offset + 1 + TNS_CCAP_FIELD_VERSION);
+				proto_tree_add_item(caphdr_tree, hf_tns_data_setdt_field_version, tvb,
+					offset + 1 + TNS_CCAP_FIELD_VERSION, 1, ENC_NA);
+				if ( !PINFO_FD_VISITED(pinfo) )
+					tns_get_conv_info(pinfo)->field_version = fv;
+			}
 			offset += 39;
 
 			proto_tree_add_item(data_tree, hf_tns_data_setdt_tblhdr, tvb, offset, 8, ENC_NA);
@@ -2917,6 +3481,35 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				}
 			}
 
+			/* From 12.1 the block goes on with the error number and row
+			 * count at their full widths (a ub4 and a ub8), and from 20.1
+			 * with the SQL type and a server checksum. The extended error
+			 * number is the one that says whether a message follows.
+			 * The first pair follows the negotiated field version, the
+			 * second the server's own release: a 21c or later server
+			 * sends it even to a session that settled on 12.1 or 19c. */
+			unsigned fv = tns_field_version(pinfo);
+			unsigned server_fv = tns_server_field_version(pinfo);
+			if ( fv >= TNS_FV_12_1 )
+			{
+				uint64_t rows = 0;
+				int start = offset;
+				offset += get_sb4_custom(tvb, offset, &err_code);
+				proto_tree_add_uint(oer_tree, hf_tns_data_oer_err_num_ext, tvb, start, offset - start, err_code);
+				start = offset;
+				offset += get_ub8_custom(tvb, offset, &rows);
+				proto_tree_add_uint64(oer_tree, hf_tns_data_oer_rowcount_ext, tvb, start, offset - start, rows);
+			}
+			if ( fv >= TNS_FV_12_1 && (server_fv ? server_fv : fv) >= TNS_FV_20_1 )
+			{
+				int start = offset;
+				offset += get_sb4_custom(tvb, offset, &v);
+				proto_tree_add_uint(oer_tree, hf_tns_data_oer_sql_type, tvb, start, offset - start, v);
+				start = offset;
+				offset += get_sb4_custom(tvb, offset, &v);
+				proto_tree_add_uint(oer_tree, hf_tns_data_oer_checksum, tvb, start, offset - start, v);
+			}
+
 			/* Trailing message DALC — present (and meaningful) only when
 			 * err_code is non-zero. */
 			if ( err_code != 0 && tvb_reported_length_remaining(tvb, offset) > 0 )
@@ -2924,6 +3517,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				const char *msg = NULL;
 				int msg_start = offset;
 				offset += get_dalc_custom(tvb, pinfo, offset, &msg);
+				msg = tns_trim_message(pinfo, msg);
 				if ( msg )
 				{
 					proto_tree_add_string(oer_tree, hf_tns_data_oer_message, tvb, msg_start, offset - msg_start, msg);
@@ -2931,6 +3525,9 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				}
 			}
 			proto_item_set_len(oer_item, offset - oer_start);
+			/* With the field version known the block ends where it
+			 * should, so an end-of-response marker after it can be read. */
+			ctx->walk = fv != 0;
 			break;
 		}
 
@@ -3000,6 +3597,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				const char *msg = NULL;
 				start = offset;
 				offset += get_dalc_custom(tvb, pinfo, offset, &msg);
+				msg = tns_trim_message(pinfo, msg);
 				if ( msg )
 				{
 					proto_tree_add_string(data_tree, hf_tns_data_wrn_message, tvb, start, offset - start, msg);
@@ -3154,6 +3752,28 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			ctx->walk = true;
 			break;
 		}
+
+		case SQLNET_TOKEN:
+		{
+			/* the token of the call this answers */
+			uint64_t token = 0;
+			int start = offset;
+
+			if ( is_request )
+				break;
+			offset += get_ub8_custom(tvb, offset, &token);
+			proto_tree_add_uint64(data_tree, hf_tns_data_token, tvb, start, offset - start, token);
+			ctx->walk = true;
+			break;
+		}
+
+		case SQLNET_FLUSH_BIND_DATA:
+			/* Sent when a DML with a RETURNING clause fails: the client
+			 * drops the out-bind data it was collecting. There is no
+			 * body, and the error follows. */
+			if ( !is_request )
+				ctx->walk = true;
+			break;
 
 		case SQLNET_END_OF_RESPONSE:
 			/* Marks the end of a response for a client that negotiated
@@ -3468,6 +4088,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 		{
 			guint32 oci_id = 0;
 			tns_call_t *call;
+			int fun_start = offset - 1; /* the TTI_FUN byte */
 			proto_tree_add_item_ret_uint(data_tree, hf_tns_data_oci_id, tvb, offset, 1, ENC_BIG_ENDIAN, &oci_id);
 			offset += 1;
 			call = is_request ? tns_remember_call(pinfo, (uint8_t)oci_id) : NULL;
@@ -3477,11 +4098,64 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				val_to_str_ext_const(oci_id, &tns_data_oci_subfuncs_ext, "unknown"));
 			proto_tree_add_item(data_tree, hf_tns_data_tseq, tvb, offset, 1, ENC_BIG_ENDIAN);
 			offset += 1;
+			offset = dissect_tns_call_token(tvb, pinfo, data_tree, offset);
 			if((oci_id == 115) || (oci_id == 118)){
+				/* The two authentication calls: the session key request
+				 * (118) and the authentication itself (115). A pointer
+				 * and a ub4 user name length, the ub4 mode, a pointer, the
+				 * ub4 number of key/value pairs, two pointers, the user
+				 * name, and the pairs - each a key and a value with two
+				 * lengths and a ub4 flags word. The first call's pairs
+				 * carry the client's identity (program, machine, terminal,
+				 * process id, OS user), which is what the server records
+				 * for the session; the second's the proof, the driver name
+				 * and the session settings. */
+				int user_len = 0, mode = 0, num = 0, start;
 				proto_tree_add_item(data_tree, hf_tns_data_unused, tvb, offset, 1, ENC_NA);
 				offset += 1;
-				int user_len = 0;
 				offset += get_sb4_custom(tvb, offset, &user_len);
+				start = offset;
+				offset += get_sb4_custom(tvb, offset, &mode);
+				proto_tree_add_bitmask_value(data_tree, tvb, start, hf_tns_data_auth_mode,
+					ett_tns_auth_mode, tns_auth_modes, (uint64_t)(uint32_t)mode);
+				offset += 1; /* pointer */
+				start = offset;
+				offset += get_sb4_custom(tvb, offset, &num);
+				proto_tree_add_uint(data_tree, hf_tns_data_opi_num_of_params, tvb, start, offset - start, num);
+				offset += 2; /* pointers */
+				if ( user_len > 0 )
+				{
+					const char *user = NULL;
+					start = offset;
+					offset += get_dalc_custom(tvb, pinfo, offset, &user);
+					if ( user )
+					{
+						proto_tree_add_string(data_tree, hf_tns_data_auth_user, tvb, start, offset - start, user);
+						col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", user);
+					}
+				}
+				for ( int i = 0; i < num && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+				{
+					proto_tree *par_tree;
+					proto_item *par_ti;
+					const char *key = NULL, *value = NULL;
+					int v = 0, par_start = offset;
+
+					par_tree = proto_tree_add_subtree_format(data_tree, tvb, offset, -1,
+						ett_tns_opi_par, &par_ti, "Parameter %d", i + 1);
+					start = offset;
+					offset += get_field_with_length(tvb, pinfo, offset, &key);
+					if ( key )
+						proto_tree_add_string(par_tree, hf_tns_data_opi_param_name, tvb, start, offset - start, key);
+					start = offset;
+					offset += get_field_with_length(tvb, pinfo, offset, &value);
+					if ( value )
+						proto_tree_add_string(par_tree, hf_tns_data_opi_param_value, tvb, start, offset - start, value);
+					offset += get_sb4_custom(tvb, offset, &v); /* flags */
+					if ( key )
+						proto_item_append_text(par_ti, ": %s = %s", key, value ? value : "");
+					proto_item_set_len(par_ti, offset - par_start);
+				}
 			}
 			else if ( oci_id == TTI_FETCH )
 			{
@@ -3497,6 +4171,33 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				offset += get_sb4_custom(tvb, offset, &v);
 				proto_tree_add_uint(data_tree, hf_tns_data_fetch_rows, tvb, start, offset - start, v);
 			}
+			else if ( oci_id == TTI_PIPELINE_END )
+			{
+				/* ends a pipeline begun by the pipeline-begin piggyback: a
+				 * ub4 id, unused */
+				int v = 0;
+				offset += get_sb4_custom(tvb, offset, &v);
+			}
+			else if ( oci_id == TTI_SESSION_RELEASE )
+			{
+				/* DRCP: hand the session back to the pool - a tag name
+				 * (a pointer and a length byte) and the release mode */
+				int v = 0, start;
+				uint8_t tag_ptr = tvb_get_uint8(tvb, offset);
+				uint8_t tag_len = tvb_get_uint8(tvb, offset + 1);
+				offset += 2;
+				if ( tag_ptr && tag_len > 0 )
+				{
+					proto_tree_add_item(data_tree, hf_tns_data_release_tag, tvb, offset, tag_len, ENC_UTF_8);
+					offset += tag_len;
+				}
+				start = offset;
+				offset += get_sb4_custom(tvb, offset, &v);
+				proto_tree_add_bitmask_value(data_tree, tvb, start, hf_tns_data_release_mode,
+					ett_tns_release_mode, tns_release_modes, (uint64_t)(uint32_t)v);
+			}
+			else if ( oci_id == TTI_TPC_TXN_SWITCH || oci_id == TTI_TPC_TXN_CHANGE_STATE )
+				offset = dissect_tns_tpc_call(tvb, pinfo, data_tree, offset, oci_id);
 			else if ( oci_id == TTI_REEXECUTE || oci_id == TTI_REEXECUTE_AND_FETCH )
 			{
 				/* Re-execute of a cursor whose statement already ran and
@@ -3546,8 +4247,8 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 					call->binds = binds->cols;
 				}
 			}
-			else if ( oci_id == TTI_ALL8 && tvb_bytes_exist(tvb, offset + TNS_OCI_ALL8_IND - 3, 8)
-				&& tvb_get_ntoh64(tvb, offset + TNS_OCI_ALL8_IND - 3) == TNS_OCI_INDICATOR )
+			else if ( oci_id == TTI_ALL8 && tvb_bytes_exist(tvb, fun_start + TNS_OCI_ALL8_IND, 8)
+				&& tvb_get_ntoh64(tvb, fun_start + TNS_OCI_ALL8_IND) == TNS_OCI_INDICATOR )
 			{
 				/* An OCI client's execute (sqlplus and other thick
 				 * clients): a fixed preamble of 8-byte pointer indicators
@@ -3559,7 +4260,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				 * wide form and 23 in the narrow one, and the two cannot
 				 * both hold. The cursor id and SQL length precede every
 				 * slot and do not move; the bind count and the SQL do. */
-				int base = offset - 3, bind_count_off, sql_off;
+				int base = fun_start, bind_count_off, sql_off;
 				uint32_t cursor, sql_len, bind_count;
 				bool wide;
 
@@ -3674,10 +4375,53 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 						tvb, start, offset - start);
 					define_count = 0;
 				}
-				/* [0,0,1] marker (3 bytes) + server version slot (5 bytes) */
-				offset += 8;
-				/* SQL text — a flat run of query_len bytes on 11g */
-				if ( query_flag && query_len > 0 )
+				/* registration id (low half), the al8objlist / al8objlen /
+				 * al8blv pointers, al8blvl, the al8dnam pointer, al8dnaml
+				 * and the registration id's high half */
+				offset += get_sb4_custom(tvb, offset, &v);
+				offset += 3;
+				offset += get_sb4_custom(tvb, offset, &v);
+				offset += 1;
+				offset += get_sb4_custom(tvb, offset, &v);
+				offset += get_sb4_custom(tvb, offset, &v);
+				/* 12.1 adds the per-row DML count block (a pointer, the
+				 * execution count, a pointer), 12.2 the SQL signature and
+				 * SQL id fields, 12.2 ext 1 the chunk ids */
+				unsigned fv = tns_field_version(pinfo);
+				if ( fv >= TNS_FV_12_1 )
+				{
+					offset += 1;
+					offset += get_sb4_custom(tvb, offset, &v);
+					offset += 1;
+				}
+				if ( fv >= TNS_FV_12_2 )
+				{
+					offset += 1;
+					offset += get_sb4_custom(tvb, offset, &v);
+					offset += 1;
+					offset += get_sb4_custom(tvb, offset, &v);
+					offset += 1;
+				}
+				if ( fv >= TNS_FV_12_2_EXT1 )
+				{
+					offset += 1;
+					offset += get_sb4_custom(tvb, offset, &v);
+				}
+				/* SQL text: a flat run of query_len bytes on 11g, length
+				 * prefixed (and chunked when long) from 12.1 */
+				if ( query_flag && query_len > 0 && fv >= TNS_FV_12_1 )
+				{
+					const char *text = NULL;
+					start = offset;
+					offset += get_dalc_custom(tvb, pinfo, offset, &text);
+					if ( text )
+					{
+						sql = (const uint8_t *)text;
+						proto_tree_add_string(data_tree, hf_tns_data_all8_sql, tvb, start, offset - start, text);
+						col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", text);
+					}
+				}
+				else if ( query_flag && query_len > 0 )
 				{
 					proto_tree_add_item_ret_string(data_tree, hf_tns_data_all8_sql, tvb,
 						offset, query_len, ENC_UTF_8|ENC_NA, pinfo->pool, &sql);
@@ -3786,8 +4530,11 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 							ett_tns_bind, &bind_item, "Bind %d: %s", i + 1,
 							val_to_str_const(btype, tns_data_types, "unknown"));
 						offset = dissect_tns_oac(tvb, pinfo, bind_tree, offset, &bcols[i]);
-						/* A CLOB/BLOB bind OAC carries a trailing oaccolid byte. */
-						if ( btype == TNS_DATATYPE_CLOB || btype == TNS_DATATYPE_BLOB )
+						/* Below 12.2 a CLOB/BLOB bind OAC still carries a
+						 * trailing oaccolid byte; from 12.2 every OAC does,
+						 * and the OAC decoder reads it. */
+						if ( (btype == TNS_DATATYPE_CLOB || btype == TNS_DATATYPE_BLOB)
+							&& tns_field_version(pinfo) < TNS_FV_12_2 )
 							offset += 1;
 						proto_item_set_len(bind_item, offset - b_start);
 					}
@@ -4176,6 +4923,28 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 						(call->exec_flags & TNS_EXEC_FLAGS_DML_ROWCOUNTS) != 0);
 					ctx->walk = true;
 				}
+				else if ( call && call->func == TTI_TPC_TXN_SWITCH )
+				{
+					/* the application value and the transaction context
+					 * (a ub2 length and the bytes) */
+					int v = 0, len = 0, start = offset;
+					offset += get_sb4_custom(tvb, offset, &v);
+					proto_tree_add_uint(data_tree, hf_tns_data_tpc_app_value, tvb, start, offset - start, v);
+					offset += get_sb4_custom(tvb, offset, &len);
+					if ( len > 0 )
+					{
+						proto_tree_add_item(data_tree, hf_tns_data_tpc_context, tvb, offset, len, ENC_NA);
+						offset += len;
+					}
+					ctx->walk = true;
+				}
+				else if ( call && call->func == TTI_TPC_TXN_CHANGE_STATE )
+				{
+					int v = 0, start = offset;
+					offset += get_sb4_custom(tvb, offset, &v);
+					proto_tree_add_uint(data_tree, hf_tns_data_tpc_state, tvb, start, offset - start, v);
+					ctx->walk = true;
+				}
 				else if ( call && call->func == TTI_LOBOPS )
 				{
 					/* A LOB operation's reply: the locator as the server
@@ -4226,6 +4995,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			offset += 1;
 			proto_tree_add_item(data_tree, hf_tns_data_tseq, tvb, offset, 1, ENC_BIG_ENDIAN);
 			offset += 1;
+			offset = dissect_tns_call_token(tvb, pinfo, data_tree, offset);
 			/* Only the close-cursors piggyback carries a cursor list:
 			 * a pointer byte, a ub4 count, then that many ub4 cursor
 			 * ids. The other piggybacks have bodies of their own. */
@@ -4275,10 +5045,70 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			}
 			offset += 4;
 
+			uint16_t num_services = tvb_get_ntohs(tvb, offset);
 			proto_tree_add_item(data_tree, hf_tns_data_sns_srvcnt, tvb, offset, 2, ENC_BIG_ENDIAN);
+			/* With encryption picked, the client's next negotiation packet
+			 * - its Diffie-Hellman public key - is the last in the clear. */
+			if ( is_request && !PINFO_FD_VISITED(pinfo) )
+			{
+				tns_conv_info_t *tns_info = tns_get_conv_info(pinfo);
+				if ( tns_info->ano_encryption && !tns_info->ano_active_after )
+					tns_info->ano_active_after = pinfo->num;
+			}
+			offset += 2;
+			proto_tree_add_item(data_tree, hf_tns_data_sns_error, tvb, offset, 1, ENC_NA);
+			offset += 1;
 
-			/* move back, to include data_id into data_dissector */
-			offset -= 10;
+			/* Each service: a type, a sub-packet count and an error, then
+			 * the sub-packets, each a length, a type and that many bytes
+			 * of payload - all big-endian. A service opens with its
+			 * version; in the encryption and integrity services the
+			 * sub-packet after it lists the algorithms a client offers,
+			 * or holds the one the server picked. */
+			for ( unsigned i = 0; i < num_services && tvb_bytes_exist(tvb, offset, 8); i++ )
+			{
+				proto_tree *svc_tree;
+				proto_item *svc_item;
+				int svc_start = offset;
+				uint16_t svc_type = tvb_get_ntohs(tvb, offset);
+				uint16_t num_sub = tvb_get_ntohs(tvb, offset + 2);
+
+				svc_tree = proto_tree_add_subtree_format(data_tree, tvb, offset, -1, ett_tns_sns_service,
+					&svc_item, "Service: %s", val_to_str_const(svc_type, tns_sns_services, "unknown"));
+				proto_tree_add_item(svc_tree, hf_tns_data_sns_service, tvb, offset, 2, ENC_BIG_ENDIAN);
+				proto_tree_add_item(svc_tree, hf_tns_data_sns_subpackets, tvb, offset + 2, 2, ENC_BIG_ENDIAN);
+				proto_tree_add_item(svc_tree, hf_tns_data_sns_svc_error, tvb, offset + 4, 4, ENC_BIG_ENDIAN);
+				offset += 8;
+				for ( unsigned j = 0; j < num_sub && tvb_bytes_exist(tvb, offset, 4); j++ )
+				{
+					uint16_t len = tvb_get_ntohs(tvb, offset);
+					uint16_t sub_type = tvb_get_ntohs(tvb, offset + 2);
+					proto_tree *sub_tree = proto_tree_add_subtree_format(svc_tree, tvb, offset, 4 + len,
+						ett_tns_sns_subpacket, NULL, "Sub-packet %u: %s, %u bytes", j + 1,
+						val_to_str_const(sub_type, tns_sns_subpacket_types, "unknown"), len);
+					proto_tree_add_item(sub_tree, hf_tns_data_sns_sub_type, tvb, offset + 2, 2, ENC_BIG_ENDIAN);
+					offset += 4;
+					bool algs = j == 1 && (sub_type == TNS_ANO_SP_BYTES || sub_type == TNS_ANO_SP_UB1);
+					if ( sub_type == TNS_ANO_SP_VERSION && len == 4 )
+						proto_tree_add_item(sub_tree, hf_tns_data_sns_version, tvb, offset, 4, ENC_BIG_ENDIAN);
+					else if ( algs && svc_type == TNS_ANO_ENCRYPTION )
+					{
+						for ( unsigned k = 0; k < len; k++ )
+							proto_tree_add_item(sub_tree, hf_tns_data_sns_encryption, tvb, offset + k, 1, ENC_NA);
+						/* the server's pick: anything but none turns
+						 * encryption on once the client has answered */
+						if ( !is_request && !PINFO_FD_VISITED(pinfo) && len == 1 && tvb_get_uint8(tvb, offset) != 0 )
+							tns_get_conv_info(pinfo)->ano_encryption = true;
+					}
+					else if ( algs && svc_type == TNS_ANO_DATA_INTEGRITY )
+						for ( unsigned k = 0; k < len; k++ )
+							proto_tree_add_item(sub_tree, hf_tns_data_sns_integrity, tvb, offset + k, 1, ENC_NA);
+					else if ( len > 0 )
+						proto_tree_add_item(sub_tree, hf_tns_data_sns_sub_data, tvb, offset, len, ENC_NA);
+					offset += len;
+				}
+				proto_item_set_len(svc_item, offset - svc_start);
+			}
 			break;
 		}
 	}
@@ -4403,6 +5233,7 @@ static void dissect_tns_accept(tvbuff_t *tvb, int offset, packet_info *pinfo _U_
 {
 	proto_tree *accept_tree;
 	uint32_t accept_offset, accept_len;
+	uint16_t version;
 	int tns_offset = offset-8;
 
 	accept_tree = proto_tree_add_subtree(tns_tree, tvb, offset, -1,
@@ -4439,7 +5270,16 @@ static void dissect_tns_accept(tvbuff_t *tvb, int offset, packet_info *pinfo _U_
 	offset += 1;
 
 	proto_tree_add_bitmask(accept_tree, tvb, offset, hf_tns_connect_flags1, ett_tns_conn_flag, tns_connect_flags, ENC_BIG_ENDIAN);
-	/* offset += 1; */
+
+	/* From version 315 the session data unit is offered again as 32
+	 * bits, 24 bytes into the ACCEPT, and from 318 a flags2 word follows
+	 * at 33 - both ahead of any connect data. */
+	version = tvb_get_ntohs(tvb, tns_offset + 8);
+	if ( version >= 315 && accept_offset >= 8 + 24 + 4 && tvb_bytes_exist(tvb, tns_offset + 8 + 24, 4) )
+		proto_tree_add_item(accept_tree, hf_tns_accept_sdu, tvb, tns_offset + 8 + 24, 4, ENC_BIG_ENDIAN);
+	if ( version >= 318 && accept_offset >= 8 + 33 + 4 && tvb_bytes_exist(tvb, tns_offset + 8 + 33, 4) )
+		proto_tree_add_bitmask(accept_tree, tvb, tns_offset + 8 + 33, hf_tns_accept_flags2,
+			ett_tns_accept_flags2, tns_accept_flags2, ENC_BIG_ENDIAN);
 
 	if ( accept_len > 0)
 	{
@@ -4944,6 +5784,21 @@ void proto_register_tns(void)
 		{ &hf_tns_accept_data, {
 			"Accept Data", "tns.accept_data", FT_STRING, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_accept_sdu, {
+			"Session Data Unit Size (32-bit)", "tns.accept_sdu", FT_UINT32, BASE_DEC,
+			NULL, 0x0, "The session data unit a version 315 or later ACCEPT offers, past the 16-bit field's reach", HFILL }},
+		{ &hf_tns_accept_flags2, {
+			"Flags 2", "tns.accept_flags2", FT_UINT32, BASE_HEX,
+			NULL, 0x0, "What a version 318 or later server offers the client", HFILL }},
+		{ &hf_tns_accept_flags2_check_oob, {
+			"Check Out-of-Band", "tns.accept_flags2.check_oob", FT_BOOLEAN, 32,
+			NULL, 0x00000001, NULL, HFILL }},
+		{ &hf_tns_accept_flags2_end_of_response, {
+			"End of Response", "tns.accept_flags2.end_of_response", FT_BOOLEAN, 32,
+			NULL, 0x02000000, "Replies end with an end-of-response marker, so the client can pipeline calls", HFILL }},
+		{ &hf_tns_accept_flags2_fast_auth, {
+			"Fast Authentication", "tns.accept_flags2.fast_auth", FT_BOOLEAN, 32,
+			NULL, 0x10000000, "The client may send its protocol, data types and session key in one bundle", HFILL }},
 		{ &hf_tns_accept_data_offset, {
 			"Offset to Accept Data", "tns.accept_data_offset", FT_UINT16, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
@@ -5030,6 +5885,15 @@ void proto_register_tns(void)
 		{ &hf_tns_data_flag_sntt, {
 			"Send NT Trailer", "tns.data_flag.sntt", FT_BOOLEAN, 16,
 			NULL, 0x0200, NULL, HFILL }},
+		{ &hf_tns_data_flag_end_of_request, {
+			"End of Request", "tns.data_flag.end_of_request", FT_BOOLEAN, 16,
+			NULL, 0x0800, "The packet ends one of a pipeline's calls", HFILL }},
+		{ &hf_tns_data_flag_begin_pipeline, {
+			"Begin Pipeline", "tns.data_flag.begin_pipeline", FT_BOOLEAN, 16,
+			NULL, 0x1000, "The packet carries the first call of a pipeline", HFILL }},
+		{ &hf_tns_data_flag_end_of_response, {
+			"End of Response", "tns.data_flag.end_of_response", FT_BOOLEAN, 16,
+			NULL, 0x2000, "The packet ends a reply, which closes with an end-of-response marker", HFILL }},
 
 		{ &hf_tns_data_id, {
 			"Data ID", "tns.data_id", FT_UINT32, BASE_HEX,
@@ -5046,6 +5910,9 @@ void proto_register_tns(void)
 			"TSeq", "tns.data_tseq", FT_UINT8, BASE_HEX,
 			NULL, 0x00, NULL, HFILL }},
 
+		{ &hf_tns_data_token, {
+			"Token", "tns.data.token", FT_UINT64, BASE_DEC,
+			NULL, 0x0, "Call token (23ai); the reply echoes it", HFILL }},
 		{ &hf_tns_data_piggyback_id, {
 			/* Also Call ID.
 			   Piggyback is a message what calls a small subset of functions
@@ -5070,6 +5937,24 @@ void proto_register_tns(void)
 		{ &hf_tns_data_setp_version, {
 			"Version", "tns.data_setp_resp.version", FT_UINT8, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setp_charset, {
+			"Charset", "tns.data_setp_resp.charset", FT_UINT16, BASE_DEC,
+			VALS(tns_charsets), 0x0, "The database character set", HFILL }},
+		{ &hf_tns_data_setp_flags, {
+			"Server Flags", "tns.data_setp_resp.flags", FT_UINT8, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setp_ncharset, {
+			"National Charset", "tns.data_setp_resp.ncharset", FT_UINT16, BASE_DEC,
+			VALS(tns_charsets), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setp_compile_caps, {
+			"Compile Capabilities", "tns.data_setp_resp.compile_caps", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setp_runtime_caps, {
+			"Runtime Capabilities", "tns.data_setp_resp.runtime_caps", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setp_field_version, {
+			"Field Version", "tns.data_setp_resp.field_version", FT_UINT8, BASE_DEC,
+			VALS(tns_field_versions), 0x0, "The highest TTC field version the server offers", HFILL }},
 		{ &hf_tns_data_setp_banner, {
 			"Server Banner", "tns.data_setp_resp.banner", FT_STRINGZ, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
@@ -5083,6 +5968,33 @@ void proto_register_tns(void)
 		{ &hf_tns_data_sns_srvcnt, {
 			"Services", "tns.data_sns.srvcnt", FT_UINT16, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_error, {
+			"Error", "tns.data_sns.error", FT_UINT8, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_service, {
+			"Service", "tns.data_sns.service", FT_UINT16, BASE_DEC,
+			VALS(tns_sns_services), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_subpackets, {
+			"Sub-packets", "tns.data_sns.subpackets", FT_UINT16, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_svc_error, {
+			"Service Error", "tns.data_sns.service_error", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_sub_type, {
+			"Sub-packet Type", "tns.data_sns.sub_type", FT_UINT16, BASE_DEC,
+			VALS(tns_sns_subpacket_types), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_version, {
+			"Version", "tns.data_sns.version", FT_UINT32, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_sub_data, {
+			"Sub-packet Data", "tns.data_sns.sub_data", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_encryption, {
+			"Encryption Algorithm", "tns.data_sns.encryption", FT_UINT8, BASE_DEC,
+			VALS(tns_sns_encryption_algs), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_sns_integrity, {
+			"Integrity Algorithm", "tns.data_sns.integrity", FT_UINT8, BASE_DEC,
+			VALS(tns_sns_integrity_algs), 0x0, NULL, HFILL }},
 
 		{ &hf_tns_data_setdt_charset_in, {
 			"Charset In", "tns.data_setdt.charset_in", FT_UINT16, BASE_DEC,
@@ -5102,6 +6014,12 @@ void proto_register_tns(void)
 		{ &hf_tns_data_setdt_caphdr_flags, {
 			"Flags", "tns.data_setdt.caphdr.flags", FT_BYTES, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_field_version, {
+			"Field Version", "tns.data.field_version", FT_UINT8, BASE_DEC,
+			VALS(tns_field_versions), 0x0, "TTC field version in force on the connection", HFILL }},
+		{ &hf_tns_data_setdt_field_version, {
+			"Field Version", "tns.data_setdt.field_version", FT_UINT8, BASE_DEC,
+			VALS(tns_field_versions), 0x0, "TTC field version the connection uses", HFILL }},
 		{ &hf_tns_data_setdt_tblhdr, {
 			"Table Header", "tns.data_setdt.tblhdr", FT_BYTES, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
@@ -5202,6 +6120,27 @@ void proto_register_tns(void)
 		{ &hf_tns_data_oci_oer_call_seq, {
 			"Call Sequence", "tns.data_oer.call_seq", FT_UINT16, BASE_DEC,
 			NULL, 0x0, "Sequence number of the call this status answers", HFILL }},
+		{ &hf_tns_data_auth_mode, {
+			"Authentication Mode", "tns.data_auth.mode", FT_UINT32, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_auth_mode_logon, {
+			"Logon", "tns.data_auth.mode.logon", FT_BOOLEAN, 32,
+			NULL, 0x00000001, NULL, HFILL }},
+		{ &hf_tns_data_auth_mode_change_password, {
+			"Change Password", "tns.data_auth.mode.change_password", FT_BOOLEAN, 32,
+			NULL, 0x00000002, NULL, HFILL }},
+		{ &hf_tns_data_auth_mode_sysdba, {
+			"SYSDBA", "tns.data_auth.mode.sysdba", FT_BOOLEAN, 32,
+			NULL, 0x00000020, NULL, HFILL }},
+		{ &hf_tns_data_auth_mode_sysoper, {
+			"SYSOPER", "tns.data_auth.mode.sysoper", FT_BOOLEAN, 32,
+			NULL, 0x00000040, NULL, HFILL }},
+		{ &hf_tns_data_auth_mode_with_password, {
+			"With Password", "tns.data_auth.mode.with_password", FT_BOOLEAN, 32,
+			NULL, 0x00000100, NULL, HFILL }},
+		{ &hf_tns_data_auth_user, {
+			"User", "tns.data_auth.user", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_sta_call_status, {
 			"Call Status", "tns.data_sta.call_status", FT_UINT32, BASE_HEX,
 			NULL, 0x0, NULL, HFILL }},
@@ -5234,6 +6173,18 @@ void proto_register_tns(void)
 			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_oer_n_batch_messages, {
 			"Batch Error Messages", "tns.data_oer.n_batch_messages", FT_INT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_oer_err_num_ext, {
+			"Error Number", "tns.data_oer.err_num", FT_UINT32, BASE_DEC,
+			NULL, 0x0, "The error code at its full width (12.1 and later)", HFILL }},
+		{ &hf_tns_data_oer_rowcount_ext, {
+			"Row Count (64 bit)", "tns.data_oer.rowcount64", FT_UINT64, BASE_DEC,
+			NULL, 0x0, "The row count at its full width (12.1 and later)", HFILL }},
+		{ &hf_tns_data_oer_sql_type, {
+			"SQL Type", "tns.data_oer.sql_type", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_oer_checksum, {
+			"Server Checksum", "tns.data_oer.checksum", FT_UINT32, BASE_HEX,
 			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_oer_message, {
 			"Message", "tns.data_oer.message", FT_STRING, BASE_NONE,
@@ -5303,6 +6254,24 @@ void proto_register_tns(void)
 			"Column Name", "tns.data_col.name", FT_STRING, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
 
+		{ &hf_tns_data_col_uds_flags, {
+			"UDS Flags", "tns.data_col.uds_flags", FT_UINT32, BASE_HEX,
+			NULL, 0x0, "Marks a JSON column", HFILL }},
+		{ &hf_tns_data_col_domain_schema, {
+			"Domain Schema", "tns.data_col.domain_schema", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_col_domain_name, {
+			"Domain Name", "tns.data_col.domain_name", FT_STRING, BASE_NONE,
+			NULL, 0x0, "The column's SQL domain", HFILL }},
+		{ &hf_tns_data_col_annotation, {
+			"Annotation", "tns.data_col.annotation", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_col_vector_dims, {
+			"Vector Dimensions", "tns.data_col.vector_dims", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_col_vector_format, {
+			"Vector Format", "tns.data_col.vector_format", FT_UINT8, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_rxh_num_requests, {
 			"Number of Requests", "tns.data_rxh.num_requests", FT_UINT32, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
@@ -5475,6 +6444,51 @@ void proto_register_tns(void)
 		{ &hf_tns_data_pgy_sec_value, {
 			"Security Context Value", "tns.data_piggyback.sec_value", FT_BYTES, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_release_tag, {
+			"Tag", "tns.data_release.tag", FT_STRING, BASE_NONE,
+			NULL, 0x0, "Session tag for the pool", HFILL }},
+		{ &hf_tns_data_release_mode, {
+			"Release Mode", "tns.data_release.mode", FT_UINT32, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_release_mode_deauth, {
+			"Deauthenticate", "tns.data_release.mode.deauthenticate", FT_BOOLEAN, 32,
+			NULL, 0x00000002, "The session is being closed, not just returned", HFILL }},
+		{ &hf_tns_data_tpc_switch_op, {
+			"Operation", "tns.data_tpc.switch_op", FT_UINT32, BASE_HEX,
+			VALS(tns_tpc_switch_ops), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_change_op, {
+			"Operation", "tns.data_tpc.change_op", FT_UINT32, BASE_HEX,
+			VALS(tns_tpc_change_ops), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_format_id, {
+			"XID Format Id", "tns.data_tpc.format_id", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_gtrid, {
+			"Global Transaction Id", "tns.data_tpc.gtrid", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_bqual, {
+			"Branch Qualifier", "tns.data_tpc.bqual", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_flags, {
+			"Flags", "tns.data_tpc.flags", FT_UINT32, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_timeout, {
+			"Timeout", "tns.data_tpc.timeout", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_state, {
+			"State", "tns.data_tpc.state", FT_UINT32, BASE_DEC,
+			VALS(tns_tpc_states), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_context, {
+			"Transaction Context", "tns.data_tpc.context", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_app_value, {
+			"Application Value", "tns.data_tpc.app_value", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_internal_name, {
+			"Internal Name", "tns.data_tpc.internal_name", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_tpc_external_name, {
+			"External Name", "tns.data_tpc.external_name", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_lob_flag, {
 			"Result", "tns.data_lob.flag", FT_BOOLEAN, BASE_NONE,
 			NULL, 0x0, "Whether the LOB is open, or the file exists", HFILL }},
@@ -5537,12 +6551,17 @@ void proto_register_tns(void)
 		&ett_tns_sopt_flag,
 		&ett_tns_ntp_flag,
 		&ett_tns_conn_flag,
+		&ett_tns_accept_flags2,
 		&ett_tns_rows,
 		&ett_tns_setdt_caphdr,
 		&ett_tns_setdt_overrides,
 		&ett_tns_setdt_override,
 		&ett_tns_oer,
 		&ett_tns_call_status,
+		&ett_tns_auth_mode,
+		&ett_tns_sns_service,
+		&ett_tns_sns_subpacket,
+		&ett_tns_release_mode,
 		&ett_tns_rpa,
 		&ett_tns_kv,
 		&ett_tns_iov,
@@ -5567,6 +6586,7 @@ void proto_register_tns(void)
 		{ &ei_tns_data_descriptor_size_mismatch, { "tns.data_descriptor.size_mismatch", PI_PROTOCOL, PI_WARN, "Data size from summing row sizes differs from size in descriptor", EXPFILL }},
 		{ &ei_tns_data_piggyback_cursors, { "tns.data.piggyback.cursors.invalid", PI_MALFORMED, PI_ERROR, "Cursor count is larger than the data left in the packet", EXPFILL }},
 		{ &ei_tns_data_count_too_large, { "tns.data.count.invalid", PI_MALFORMED, PI_ERROR, "Count is larger than the data left in the packet", EXPFILL }},
+		{ &ei_tns_data_encrypted, { "tns.data.encrypted", PI_DECRYPTION, PI_NOTE, "Encrypted by native network encryption", EXPFILL }},
 	};
 
 	module_t *tns_module;
