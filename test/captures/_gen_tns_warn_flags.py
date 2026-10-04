@@ -5,19 +5,18 @@
 # Copyright 1998 Gerald Combs
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Generate test/captures/tns_oer_12c.pcap: error blocks on 12c and later
-connections, which carry extended fields.
+"""Generate test/captures/tns_warn_flags.pcap: a CREATE PROCEDURE that
+succeeded although the object does not compile.
 
-    Frame 1 - the client's TTI_DTY, negotiating field version 24 (23.4)
-    Frame 2 - a TTI_OER for ORA-00942 with the extended error number 942
-              and row count 0, the SQL type and checksum, then the message,
-              then the END_OF_RESPONSE marker
-    Frame 3 - a successful TTI_OER for a DML of 70000 rows: the 11g row
-              count field holds the low bits, the ub8 one the whole count
-    Frame 4 - a TTI_OER for an array insert that raised ORA-00001 on its
-              third row: the row count says the two rows before it went in
+    Frame 1 - "CREATE OR REPLACE PROCEDURE P AS BEGIN X; END;"
+    Frame 2 - its reply: a successful TTI_OER - error code 0 - whose
+              warning flags byte is 0x21, the 0x20 saying the object was
+              created with compilation errors
+    Frame 3 - the same statement compiled clean
+    Frame 4 - its reply, with the warning flags 0x00
 
-Bytes are built by hand.
+The two replies differ in that one byte. Bytes are built by hand in the
+Oracle 11g wire shape.
 """
 import os
 import struct
@@ -70,13 +69,13 @@ def bwl(s: bytes) -> bytes:
 
 
 def oac(data_type, max_length, charset=0, csform=0, max_size=0,
-        precision=0, scale=0, fv=0):
+        precision=0, scale=0, fv=0, flag=0, max_elements=0):
     """A column / bind descriptor. From field version 12.2 (8) the scale is
     one signed byte and an oaccolid follows the max size."""
     return (
-        bytes([data_type]) + b"\x00" + bytes([precision])
+        bytes([data_type, flag, precision])
         + (bytes([scale & 0xFF]) if fv >= 8 else sb4(scale))
-        + ub4(max_length) + ub4(0) + ub4(0) + bwl(b"") + ub4(0)
+        + ub4(max_length) + ub4(max_elements) + ub4(0) + bwl(b"") + ub4(0)
         + ub4(charset) + bytes([csform]) + ub4(max_size)
         + (ub4(0) if fv >= 8 else b"")
     )
@@ -118,12 +117,14 @@ def dcb(columns, fv=0) -> bytes:
 
 
 def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
-         defines=()) -> bytes:
-    """An 11g-shape TTI_ALL8 execute. `binds` and `defines` are OAC blobs,
-    `rows` are the already-encoded value rows (each gets a leading
-    TTI_RXD)."""
+         defines=(), fv=0) -> bytes:
+    """A TTI_ALL8 execute, in the 11g shape unless a field version is given.
+    `binds` and `defines` are OAC blobs, `rows` are the already-encoded
+    value rows (each gets a leading TTI_RXD)."""
     al8 = al8 if al8 is not None else [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     b = bytes([TTI_FUN, TTI_ALL8, seq])
+    if fv >= 18:
+        b += ub4(0)              # ub8 call token
     b += ub4(options) + ub4(cursor)
     b += bytes([1 if sql else 0]) + ub4(len(sql))
     b += bytes([1]) + ub4(len(al8))
@@ -132,7 +133,13 @@ def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
     b += bytes([0, 0, 0, 0, 0])
     b += bytes([1 if defines else 0]) + ub4(len(defines))
     b += bytes([0, 0, 1]) + bytes([0, 0, 0, 0, 0])
-    b += sql
+    if fv >= 7:
+        b += bytes([0, 0, 0])    # al8pidmlrc pointer, length, pointer
+    if fv >= 8:
+        b += bytes([0, 0, 0, 0, 0])  # SQL signature and SQL id fields
+    if fv >= 9:
+        b += bytes([0, 0])       # chunk ids pointer, count
+    b += (dalc(sql) if sql else b"") if fv >= 7 else sql
     for elem in al8:
         b += ub4(elem)
     for o in list(binds) + list(defines):
@@ -172,20 +179,29 @@ def oer(err_code=0, cursor=0, rowcount=0, call_status=0, msg=b"", fv=0) -> bytes
         b += dalc(msg)
     return b
 
-TTI_EOR = 29
-MSG = b"ORA-00942: table or view does not exist\n"
-DUP = b"ORA-00001: unique constraint (HR.T_PK) violated\n"
+def oer_warn(warn_flags: int) -> bytes:
+    """An 11g-shape TTI_OER whose warning flags byte carries warn_flags."""
+    b = bytes([TTI_OER])
+    b += ub4(0) + ub4(0) + ub4(0) + ub4(0)
+    b += ub4(0) + ub4(0) + ub4(5) + ub4(0)
+    b += bytes([0, 0, 0, 0, 0, warn_flags])
+    b += ub4(0) + ub4(0) + b"\x00" + ub4(0) + ub4(0)
+    b += ub4(0) + bytes(2) + ub4(0) + ub4(0)
+    b += bwl(b"")
+    b += ub4(0) + ub4(0) + ub4(0)
+    return b
 
+
+SQL = b"CREATE OR REPLACE PROCEDURE P AS BEGIN X; END;"
 frames = [
-    (True, dty(24)),
-    (False, oer(err_code=942, cursor=3, msg=MSG, fv=24) + bytes([TTI_EOR])),
-    (False, oer(rowcount=70000, cursor=4, fv=24) + bytes([TTI_EOR])),
-    (False, oer(err_code=1, cursor=5, rowcount=2, msg=DUP, fv=24)
-            + bytes([TTI_EOR])),
+    (True, all8(1, SQL, 0x8021)),
+    (False, oer_warn(0x21)),
+    (True, all8(2, SQL, 0x8021)),
+    (False, oer_warn(0x00)),
 ]
 
 
-OUT_NAME = "tns_oer_12c.pcap"
+OUT_NAME = "tns_warn_flags.pcap"
 
 
 def ipv4_checksum(h: bytes) -> int:

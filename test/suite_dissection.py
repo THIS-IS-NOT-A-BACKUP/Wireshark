@@ -1831,6 +1831,9 @@ class TestDissectTns:
             ['True', 'False', 'True', 'False'],
             ['True', 'False', 'False', 'False'],
             ['True', 'True', 'False', 'True'],
+            ['False', 'False', 'False', 'False'],
+            ['False', 'False', 'False', 'False'],
+            ['False', 'False', 'False', 'False'],
         ], rows
 
     def test_tns_all8_al8i4(self, cmd_tshark, capture_file, test_env):
@@ -2098,6 +2101,20 @@ class TestDissectTns:
         assert 'Column 1 (NUMBER): 2' in stdout, stdout
         assert 'Column 2 (REFCURSOR): cursor 13' in stdout, stdout
         assert 'Column 1: X (VARCHAR)' in stdout, stdout
+        assert 'Malformed' not in stdout, stdout
+
+    def test_tns_cursor_fetch(self, cmd_tshark, capture_file, test_env):
+        '''Before 23ai, a nested cursor in the rows of a TTI_FETCH reply is
+        cut short to its length byte and cursor id, with no describe; the
+        row after it decodes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_cursor_fetch.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Column 2 (REFCURSOR): cursor 3' in stdout, stdout
+        assert 'Column 1 (NUMBER): 2' in stdout, stdout
+        assert 'Column 2 (REFCURSOR): cursor 5' in stdout, stdout
         assert 'Malformed' not in stdout, stdout
 
     def test_tns_implicit_results(self, cmd_tshark, capture_file, test_env):
@@ -2386,7 +2403,9 @@ class TestDissectTns:
     def test_tns_oer_extended(self, cmd_tshark, capture_file, test_env):
         '''From field version 12.1 the error block carries the error number
         and row count at full width, and from 20.1 the SQL type and a
-        checksum; the message and the end-of-response marker follow.'''
+        checksum; the message and the end-of-response marker follow. The
+        row count is read on an error too: it is what the call managed
+        before it raised.'''
         stdout = subprocess.check_output((cmd_tshark,
             '-r', capture_file('tns_oer_12c.pcap'),
             '-d', 'tcp.port==1521,tns',
@@ -2402,6 +2421,9 @@ class TestDissectTns:
         assert rows[0][2].startswith('ORA-00942'), rows[0]
         assert rows[0][3].endswith('End of Response'), rows[0]
         assert rows[1][:3] == ['0', '70000', ''], rows[1]
+        # a batch that raised on its third row still applied two
+        assert rows[2][:2] == ['1', '2'], rows[2]
+        assert '[2 rows applied]' in rows[2][3], rows[2]
 
     def test_tns_all8_field_version(self, cmd_tshark, capture_file, test_env):
         '''A 12.2 execute has more header fields than an 11g one and a
@@ -2650,6 +2672,111 @@ class TestDissectTns:
             ['False', 'True', 'False', ''],
             ['False', 'False', 'True', ''],
         ], rows
+
+    def test_tns_vector_render(self, cmd_tshark, capture_file, test_env):
+        '''A VECTOR image is rendered by its storage format: FLOAT32 and
+        FLOAT64 from their order-preserving encoding, INT8, BINARY as packed
+        bytes, and a sparse vector as index: value pairs.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_vector.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert '(VECTOR): FLOAT32[3]: [1.5, 2.5, 3.5]' in stdout, stdout
+        assert '(VECTOR): INT8[4]: [1, -2, 3, -4]' in stdout, stdout
+        assert '(VECTOR): BINARY[16]: [170, 1]' in stdout, stdout
+        assert '(VECTOR): FLOAT64[1]: [0.25]' in stdout, stdout
+        assert '(VECTOR): sparse FLOAT32 of 300 dimensions: {299: 1.5}' in stdout, stdout
+
+    def test_tns_oson_render(self, cmd_tshark, capture_file, test_env):
+        '''An OSON image is rendered as JSON text: relative offsets and a
+        shared field-id object of a compressed column, a version 3 image
+        with a field name over 255 bytes, and nested containers.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oson.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert '(JSON): [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]' in stdout, stdout
+        # the label is cut short; the full text is past its length
+        assert '(JSON): {"' + 'A' * 100 in stdout, stdout
+        assert '(JSON): {"k": [true, null, "s"]}' in stdout, stdout
+
+    def test_tns_clob_text(self, cmd_tshark, capture_file, test_env):
+        '''The content a READ returns is text when the locator it named is a
+        CLOB's, encoded as the locator's flags say: UTF-16BE with the
+        variable-length charset bit, UTF-8 without; a BLOB's is not text.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_clob_text.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_lob.data',
+            '-T', 'fields',
+            '-e', 'tns.data_lob.text',
+        ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['abc', '', 'héllo'], stdout
+
+    def test_tns_warn_flags(self, cmd_tshark, capture_file, test_env):
+        '''The warning flags of a successful status say whether the PL/SQL
+        object the statement created compiles.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_warn_flags.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_oer.warn_flags',
+            '-T', 'fields',
+            '-e', 'tns.data_oer.err_code',
+            '-e', 'tns.data_oer.warn_flags',
+            '-e', 'tns.data_oer.warn_flags.compilation_error',
+            '-e', '_ws.expert.message',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows[0][:3] == ['0', '0x21', 'True'], rows[0]
+        assert 'compiled with errors' in rows[0][3], rows[0]
+        assert rows[1][:4] == ['0', '0x00', 'False', ''], rows[1]
+
+    def test_tns_parse_only(self, cmd_tshark, capture_file, test_env):
+        '''An execute that asks for no work - no EXECUTE, DEFINE or FETCH -
+        is a parse, whether or not it sets the PARSE bit: a parse of a
+        cached statement sets none. A define round trip and a scroll
+        re-execute ask for no run either but are not parses.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_parse.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_all8.options',
+            '-e', 'tns.data_all8.parse_only',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['0x00020001', 'True'],
+            ['0x00000001', 'True'],
+            ['0x00080129', ''],
+            ['0x00000000', 'True'],
+            ['0x00008010', ''],
+            ['0x00008040', ''],
+        ], rows
+
+    def test_tns_bfile(self, cmd_tshark, capture_file, test_env):
+        '''A BFILE's locator names its directory and file, found whether
+        the locator comes whole, as in a fetched column, or without its
+        leading length, as a LOB operation sends it.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_bfile.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert "Column 1 (BFILE): BFILENAME('DATA_DIR', 'report.txt')" in stdout, stdout
+        assert 'Column 1 (BFILE): NULL' in stdout, stdout
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_bfile.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_lob.op',
+            '-T', 'fields',
+            '-e', 'tns.data_lob.directory',
+            '-e', 'tns.data_lob.file_name',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [['DATA_DIR', 'report.txt', '']] * 2, rows
 
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):

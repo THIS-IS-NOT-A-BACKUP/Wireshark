@@ -5,18 +5,19 @@
 # Copyright 1998 Gerald Combs
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Generate test/captures/tns_oer_12c.pcap: error blocks on 12c and later
-connections, which carry extended fields.
+"""Generate test/captures/tns_oson.pcap: JSON column values, whose OSON
+images are rendered as JSON text.
 
-    Frame 1 - the client's TTI_DTY, negotiating field version 24 (23.4)
-    Frame 2 - a TTI_OER for ORA-00942 with the extended error number 942
-              and row count 0, the SQL type and checksum, then the message,
-              then the END_OF_RESPONSE marker
-    Frame 3 - a successful TTI_OER for a DML of 70000 rows: the 11g row
-              count field holds the low bits, the ub8 one the whole count
-    Frame 4 - a TTI_OER for an array insert that raised ORA-00001 on its
-              third row: the row count says the two rows before it went in
+    Frame 1 - TTI_DCB of a JSON "J"
+    Frame 2 - three rows, each image prefetched in the row:
+                [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}] from a compressed
+                column: header flags 0x2107 - relative offsets - and a
+                second object that shares the first one's field ids
+                {"AAA...A": 6700}, a field name of 256 bytes: an image of
+                version 3, whose long names have a segment of their own
+                {"k": [true, null, "s"]}
 
+The trees are those a live 23ai server produced for these documents.
 Bytes are built by hand.
 """
 import os
@@ -118,12 +119,14 @@ def dcb(columns, fv=0) -> bytes:
 
 
 def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
-         defines=()) -> bytes:
-    """An 11g-shape TTI_ALL8 execute. `binds` and `defines` are OAC blobs,
-    `rows` are the already-encoded value rows (each gets a leading
-    TTI_RXD)."""
+         defines=(), fv=0) -> bytes:
+    """A TTI_ALL8 execute, in the 11g shape unless a field version is given.
+    `binds` and `defines` are OAC blobs, `rows` are the already-encoded
+    value rows (each gets a leading TTI_RXD)."""
     al8 = al8 if al8 is not None else [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     b = bytes([TTI_FUN, TTI_ALL8, seq])
+    if fv >= 18:
+        b += ub4(0)              # ub8 call token
     b += ub4(options) + ub4(cursor)
     b += bytes([1 if sql else 0]) + ub4(len(sql))
     b += bytes([1]) + ub4(len(al8))
@@ -132,7 +135,13 @@ def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
     b += bytes([0, 0, 0, 0, 0])
     b += bytes([1 if defines else 0]) + ub4(len(defines))
     b += bytes([0, 0, 1]) + bytes([0, 0, 0, 0, 0])
-    b += sql
+    if fv >= 7:
+        b += bytes([0, 0, 0])    # al8pidmlrc pointer, length, pointer
+    if fv >= 8:
+        b += bytes([0, 0, 0, 0, 0])  # SQL signature and SQL id fields
+    if fv >= 9:
+        b += bytes([0, 0])       # chunk ids pointer, count
+    b += (dalc(sql) if sql else b"") if fv >= 7 else sql
     for elem in al8:
         b += ub4(elem)
     for o in list(binds) + list(defines):
@@ -172,20 +181,73 @@ def oer(err_code=0, cursor=0, rowcount=0, call_status=0, msg=b"", fv=0) -> bytes
         b += dalc(msg)
     return b
 
-TTI_EOR = 29
-MSG = b"ORA-00942: table or view does not exist\n"
-DUP = b"ORA-00001: unique constraint (HR.T_PK) violated\n"
+import struct as _s
+
+TYPE_JSON = 119
+locator = bytes([0x00, 0x26]) + bytes(range(38))
+
+
+def fnv1a(name: bytes) -> int:
+    h = 0x811C9DC5
+    for c in name:
+        h = ((h ^ c) * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def oson_v1(flags, names, tree):
+    """A version 1 image: short field names only."""
+    seg, offsets = b"", b""
+    for n in names:
+        offsets += _s.pack(">H", len(seg))
+        seg += bytes([len(n)]) + n
+    hashes = bytes(fnv1a(n) & 0xFF for n in names)
+    return (b"\xff\x4a\x5a\x01" + _s.pack(">HBHHH", flags, len(names), len(seg), len(tree), 0)
+            + hashes + offsets + seg + tree)
+
+
+def chunked(data: bytes) -> bytes:
+    """A long DALC: 0xFE, 64-byte chunks with single-byte lengths, 0."""
+    out = b"\xfe"
+    for i in range(0, len(data), 64):
+        out += bytes([len(data[i:i + 64])]) + data[i:i + 64]
+    return out + b"\x00"
+
+
+def prefetched(img):
+    image = dalc(img) if len(img) <= 252 else chunked(img)
+    return ub4(len(locator)) + ub4(len(img)) + ub4(32600) + image + dalc(locator)
+
+
+# [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]: relative offsets, and a
+# second object sharing the first one's field ids
+compressed = oson_v1(0x2107, [b"a", b"b"], bytes.fromhex(
+    "c0020006 0013"
+    "86020102 0008000b"
+    "21c102"
+    "0178"
+    "9c000600 07000a"
+    "21c103"
+    "0179".replace(" ", "")))
+# {"A" x 256: 6700}: version 3, the long name in its own segment
+long_name = b"A" * 256
+version3 = (b"\xff\x4a\x5a\x03" + _s.pack(">HBHHIIHH", 0x2006, 0, 0, 0x0100, 1,
+                                           2 + len(long_name), 8, 0)
+            + _s.pack(">HH", fnv1a(long_name) & 0xFFFF, 0)
+            + _s.pack(">H", len(long_name)) + long_name
+            + bytes.fromhex("840101000521c244"))
+# {"k": [true, null, "s"]}
+nested = oson_v1(0x0100, [b"k"], bytes.fromhex(
+    "8401010005 c003000d000e000f 31 30 0173".replace(" ", "")))
 
 frames = [
-    (True, dty(24)),
-    (False, oer(err_code=942, cursor=3, msg=MSG, fv=24) + bytes([TTI_EOR])),
-    (False, oer(rowcount=70000, cursor=4, fv=24) + bytes([TTI_EOR])),
-    (False, oer(err_code=1, cursor=5, rowcount=2, msg=DUP, fv=24)
-            + bytes([TTI_EOR])),
+    (False, dcb([dcb_column(TYPE_JSON, 8200, b"J")])),
+    (False, bytes([TTI_RXD]) + prefetched(compressed)
+     + bytes([TTI_RXD]) + prefetched(version3)
+     + bytes([TTI_RXD]) + prefetched(nested)),
 ]
 
 
-OUT_NAME = "tns_oer_12c.pcap"
+OUT_NAME = "tns_oson.pcap"
 
 
 def ipv4_checksum(h: bytes) -> int:

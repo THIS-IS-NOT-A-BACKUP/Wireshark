@@ -5,19 +5,22 @@
 # Copyright 1998 Gerald Combs
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Generate test/captures/tns_oer_12c.pcap: error blocks on 12c and later
-connections, which carry extended fields.
+"""Generate test/captures/tns_clob_text.pcap: LOB reads whose content is
+decoded as the locator says.
 
-    Frame 1 - the client's TTI_DTY, negotiating field version 24 (23.4)
-    Frame 2 - a TTI_OER for ORA-00942 with the extended error number 942
-              and row count 0, the SQL type and checksum, then the message,
-              then the END_OF_RESPONSE marker
-    Frame 3 - a successful TTI_OER for a DML of 70000 rows: the 11g row
-              count field holds the low bits, the ub8 one the whole count
-    Frame 4 - a TTI_OER for an array insert that raised ORA-00001 on its
-              third row: the row count says the two rows before it went in
+    Frame 1 - a READ of a temporary CLOB whose locator flags are
+              82 08 80 03: a CLOB in a variable-length character set,
+              not little-endian
+    Frame 2 - its reply: "abc" as UTF-16BE, 00 61 00 62 00 63
+    Frame 3 - a READ of a BLOB (flags 81 08 00 03)
+    Frame 4 - its reply: raw bytes 61 62 63, not text
+    Frame 5 - a READ of a CLOB in a single-byte character set (flags
+              82 08 00 03)
+    Frame 6 - its reply: "héllo" as UTF-8
 
-Bytes are built by hand.
+The flag bytes sit at offsets 4 to 7 of the 40-byte locator, whose first
+two bytes are its own length. Bytes are built by hand in the Oracle 11g
+wire shape.
 """
 import os
 import struct
@@ -118,12 +121,14 @@ def dcb(columns, fv=0) -> bytes:
 
 
 def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
-         defines=()) -> bytes:
-    """An 11g-shape TTI_ALL8 execute. `binds` and `defines` are OAC blobs,
-    `rows` are the already-encoded value rows (each gets a leading
-    TTI_RXD)."""
+         defines=(), fv=0) -> bytes:
+    """A TTI_ALL8 execute, in the 11g shape unless a field version is given.
+    `binds` and `defines` are OAC blobs, `rows` are the already-encoded
+    value rows (each gets a leading TTI_RXD)."""
     al8 = al8 if al8 is not None else [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     b = bytes([TTI_FUN, TTI_ALL8, seq])
+    if fv >= 18:
+        b += ub4(0)              # ub8 call token
     b += ub4(options) + ub4(cursor)
     b += bytes([1 if sql else 0]) + ub4(len(sql))
     b += bytes([1]) + ub4(len(al8))
@@ -132,7 +137,13 @@ def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
     b += bytes([0, 0, 0, 0, 0])
     b += bytes([1 if defines else 0]) + ub4(len(defines))
     b += bytes([0, 0, 1]) + bytes([0, 0, 0, 0, 0])
-    b += sql
+    if fv >= 7:
+        b += bytes([0, 0, 0])    # al8pidmlrc pointer, length, pointer
+    if fv >= 8:
+        b += bytes([0, 0, 0, 0, 0])  # SQL signature and SQL id fields
+    if fv >= 9:
+        b += bytes([0, 0])       # chunk ids pointer, count
+    b += (dalc(sql) if sql else b"") if fv >= 7 else sql
     for elem in al8:
         b += ub4(elem)
     for o in list(binds) + list(defines):
@@ -172,20 +183,41 @@ def oer(err_code=0, cursor=0, rowcount=0, call_status=0, msg=b"", fv=0) -> bytes
         b += dalc(msg)
     return b
 
-TTI_EOR = 29
-MSG = b"ORA-00942: table or view does not exist\n"
-DUP = b"ORA-00001: unique constraint (HR.T_PK) violated\n"
+TTI_LOBOPS = 96
+TTI_LOB_DATA = 14
+OP_READ = 0x0002
 
+
+def locator(flags: bytes) -> bytes:
+    return b"\x00\x26\x00\x01" + flags + bytes(range(8, 40))
+
+
+def lob_read(seq, loc, amount) -> bytes:
+    b = bytes([TTI_FUN, TTI_LOBOPS, seq])
+    b += b"\x01" + ub4(len(loc)) + b"\x00" + ub4(0) + ub4(0) + ub4(0)
+    b += b"\x00\x00\x00" + ub4(OP_READ) + b"\x00\x00" + ub4(1) + ub4(0)
+    b += b"\x01" + bytes(6) + loc + ub4(amount)
+    return b
+
+
+def reply(loc, data, amount) -> bytes:
+    return bytes([TTI_LOB_DATA]) + dalc(data) + bytes([TTI_RPA]) + loc + ub4(amount) + oer()
+
+
+clob16 = locator(bytes.fromhex("82088003"))
+blob = locator(bytes.fromhex("81080003"))
+clob8 = locator(bytes.fromhex("82080003"))
 frames = [
-    (True, dty(24)),
-    (False, oer(err_code=942, cursor=3, msg=MSG, fv=24) + bytes([TTI_EOR])),
-    (False, oer(rowcount=70000, cursor=4, fv=24) + bytes([TTI_EOR])),
-    (False, oer(err_code=1, cursor=5, rowcount=2, msg=DUP, fv=24)
-            + bytes([TTI_EOR])),
+    (True, lob_read(1, clob16, 3)),
+    (False, reply(clob16, "abc".encode("utf-16-be"), 3)),
+    (True, lob_read(2, blob, 3)),
+    (False, reply(blob, b"abc", 3)),
+    (True, lob_read(3, clob8, 5)),
+    (False, reply(clob8, "héllo".encode("utf-8"), 5)),
 ]
 
 
-OUT_NAME = "tns_oer_12c.pcap"
+OUT_NAME = "tns_clob_text.pcap"
 
 
 def ipv4_checksum(h: bytes) -> int:

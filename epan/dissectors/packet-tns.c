@@ -20,6 +20,7 @@
 #include <epan/conversation.h>
 #include <epan/proto_data.h>
 #include <epan/unit_strings.h>
+#include <epan/charsets.h>
 
 #include <wsutil/array.h>
 
@@ -354,6 +355,8 @@ static int hf_tns_data_oer_n_batch_errcodes;
 static int hf_tns_data_oer_n_batch_offsets;
 static int hf_tns_data_oer_n_batch_messages;
 static int hf_tns_data_oer_message;
+static int hf_tns_data_oer_warn_flags;
+static int hf_tns_data_oer_warn_compile;
 static int hf_tns_data_oer_err_num_ext;
 static int hf_tns_data_oer_rowcount_ext;
 static int hf_tns_data_oer_sql_type;
@@ -431,6 +434,7 @@ static int hf_tns_data_all8_opt_commit;
 static int hf_tns_data_all8_opt_plsql;
 static int hf_tns_data_all8_opt_fetch;
 static int hf_tns_data_all8_opt_not_plsql;
+static int hf_tns_data_all8_parse_only;
 static int hf_tns_data_all8_opt_describe;
 static int hf_tns_data_all8_opt_batch_errors;
 static int hf_tns_data_all8_iterations;
@@ -456,6 +460,8 @@ static int hf_tns_data_reexec_opt2_commit;
 static int hf_tns_data_lob_op;
 static int hf_tns_data_lob_offset;
 static int hf_tns_data_lob_locator;
+static int hf_tns_data_lob_directory;
+static int hf_tns_data_lob_file_name;
 static int hf_tns_data_lob_charset;
 static int hf_tns_data_lob_data;
 static int hf_tns_data_lob_amount;
@@ -475,6 +481,7 @@ static int hf_tns_data_tpc_context;
 static int hf_tns_data_tpc_app_value;
 static int hf_tns_data_tpc_internal_name;
 static int hf_tns_data_tpc_external_name;
+static int hf_tns_data_lob_text;
 static int hf_tns_data_lob_total_size;
 static int hf_tns_data_pgy_schema;
 static int hf_tns_data_pgy_session_state;
@@ -525,6 +532,7 @@ static int ett_tns_setdt_overrides;
 static int ett_tns_setdt_override;
 static int ett_tns_oer;
 static int ett_tns_call_status;
+static int ett_tns_warn_flags;
 static int ett_tns_auth_mode;
 static int ett_tns_sns_service;
 static int ett_tns_sns_subpacket;
@@ -552,6 +560,7 @@ static expert_field ei_tns_data_descriptor_size_mismatch;
 static expert_field ei_tns_data_piggyback_cursors;
 static expert_field ei_tns_data_count_too_large;
 static expert_field ei_tns_data_encrypted;
+static expert_field ei_tns_data_compilation_error;
 
 #define TCP_PORT_TNS			1521 /* Not IANA registered */
 
@@ -918,6 +927,20 @@ static const value_string tns_charsets[] = {
 	{0, NULL}
 };
 
+/* A LOB locator's flag bytes, at these offsets in the locator as a
+ * client holds and sends it (python-oracledb's TNS_LOB_LOC_*). Flag 1
+ * says what kind of LOB it is; flags 3 and 4 how a CLOB's characters are
+ * encoded: UTF-16 with the variable-length charset bit, little-endian
+ * with the little-endian bit too, UTF-8 without. An NCLOB is UTF-16. */
+#define TNS_LOB_LOC_FLAG_1                0x04
+#define TNS_LOB_LOC_FLAG_3                0x06
+#define TNS_LOB_LOC_FLAG_4                0x07
+#define TNS_LOB_LOC_FLAGS_BLOB            0x01
+#define TNS_LOB_LOC_FLAGS_CLOB            0x02
+#define TNS_LOB_LOC_FLAGS_NCLOB           0x04
+#define TNS_LOB_LOC_FLAGS_VAR_LENGTH_CHARSET 0x80
+#define TNS_LOB_LOC_FLAGS_LITTLE_ENDIAN   0x40
+
 /* TTI_LOBOPS operation opcodes. */
 #define TNS_LOB_OP_FILE_ISOPEN   0x00400
 #define TNS_LOB_OP_FILE_EXISTS   0x00800
@@ -1188,6 +1211,8 @@ typedef struct _tns_call_t {
 	uint32_t lob_op;        /* TTI_LOBOPS operation */
 	uint32_t lob_locator_len; /* ... its source locator length */
 	bool lob_amount;        /* ... whether it sent an amount */
+	uint8_t lob_flags[4];   /* ... its locator's flag bytes 1 to 4 */
+	bool lob_flags_known;
 } tns_call_t;
 
 typedef struct _tns_conv_info_t {
@@ -1231,6 +1256,12 @@ typedef struct _tns_conv_info_t {
 #define TNS_PROTO_DATA_ENCRYPTED 6
 /* p_add_proto_data key for the field version the server offered. */
 #define TNS_PROTO_DATA_SERVER_FV 7
+
+/* The execute options that ask the server to do something: run the
+ * statement, take a set of defines, or return rows. */
+#define TNS_EXEC_OPTION_DEFINE    0x0010
+#define TNS_EXEC_OPTION_EXECUTE   0x0020
+#define TNS_EXEC_OPTION_FETCH     0x0040
 
 /* Execute flag asking for the rows each array DML iteration affected. */
 #define TNS_EXEC_FLAGS_DML_ROWCOUNTS 0x4000
@@ -1451,6 +1482,48 @@ static int tns_chunks_len(tvbuff_t *tvb, packet_info *pinfo, int offset, wmem_st
 		o += chunk_len;
 	}
 	return o - offset;
+}
+
+/* The data of a DALC value at offset, chunks joined, in pinfo->pool;
+ * *len receives its length. NULL for an empty, NULL or absent value. */
+static const uint8_t *tns_dalc_bytes(tvbuff_t *tvb, packet_info *pinfo, int offset, int *len)
+{
+	uint8_t first = tvb_get_uint8(tvb, offset);
+	bool ub4_lengths = tns_field_version(pinfo) >= TNS_FV_12_2;
+	wmem_array_t *out;
+	int o;
+
+	*len = 0;
+	if ( first == 0 || first >= TNS_DALC_ABSENT )
+	{
+		if ( first != 0xfe )
+			return NULL;
+	}
+	else
+	{
+		*len = first;
+		return tvb_memdup(pinfo->pool, tvb, offset + 1, first);
+	}
+
+	out = wmem_array_new(pinfo->pool, 1);
+	o = offset + 1;
+	while ( tvb_reported_length_remaining(tvb, o) > 0 )
+	{
+		int chunk_len;
+		if ( ub4_lengths )
+			o += get_sb4_custom(tvb, o, &chunk_len);
+		else
+		{
+			chunk_len = tvb_get_uint8(tvb, o);
+			o += 1;
+		}
+		if ( chunk_len <= 0 )
+			break;
+		wmem_array_append(out, tvb_get_ptr(tvb, o, chunk_len), chunk_len);
+		o += chunk_len;
+	}
+	*len = (int)wmem_array_get_count(out);
+	return (const uint8_t *)wmem_array_get_raw(out);
 }
 
 /* Decode a DALC (Data-Length-And-Content) blob. The leading byte is a
@@ -1833,6 +1906,457 @@ static const char *tns_format_urowid(packet_info *pinfo, const uint8_t *data, in
 	return wmem_strbuf_get_str(buf);
 }
 
+/* Render a VECTOR image:
+ *   0xDB | version (ub1) | flags (be16) | format (ub1) | elements (be32) |
+ *   [norm, 8 bytes, with flag 0x02 or 0x10] |
+ *   [sparse (flag 0x20): count (be16), count x be32 index] | values
+ * FLOAT32 / FLOAT64 values use the order-preserving BINARY_FLOAT /
+ * BINARY_DOUBLE encoding, INT8 plain bytes, BINARY bits packed eight to a
+ * byte (the element count is then a bit count). The first few values are
+ * shown. Returns a pinfo->pool string, or NULL. */
+static const char *tns_format_vector(packet_info *pinfo, const uint8_t *data, int len)
+{
+	static const char *formats[] = { NULL, NULL, "FLOAT32", "FLOAT64", "INT8", "BINARY" };
+	const int shown = 16;
+	uint16_t flags;
+	uint8_t format;
+	uint32_t count, dims;
+	int pos = 9, size;
+	const uint8_t *indices = NULL;
+	wmem_strbuf_t *buf;
+
+	if ( len < 9 || data[0] != 0xdb )
+		return NULL;
+	flags = (uint16_t)((data[2] << 8) | data[3]);
+	format = data[4];
+	dims = count = ((uint32_t)data[5] << 24) | ((uint32_t)data[6] << 16) | ((uint32_t)data[7] << 8) | data[8];
+	if ( format < 2 || format > 5 )
+		return NULL;
+	if ( flags & 0x0012 )
+		pos += 8;
+	if ( flags & 0x0020 )
+	{
+		if ( pos + 2 > len )
+			return NULL;
+		count = (uint32_t)((data[pos] << 8) | data[pos + 1]);
+		pos += 2;
+		indices = data + pos;
+		if ( (uint64_t)count * 4 > (uint64_t)(len - pos) )
+			return NULL;
+		pos += count * 4;
+	}
+	else if ( format == 5 )
+		count = (count + 7) / 8;
+	size = format == 2 ? 4 : format == 3 ? 8 : 1;
+	if ( (uint64_t)count * size > (uint64_t)(len - pos) )
+		return NULL;
+
+	buf = wmem_strbuf_new(pinfo->pool, "");
+	if ( indices )
+		wmem_strbuf_append_printf(buf, "sparse %s of %u dimensions: {", formats[format], dims);
+	else
+		wmem_strbuf_append_printf(buf, "%s[%u]: [", formats[format], dims);
+	for ( uint32_t i = 0; i < count && i < (uint32_t)shown; i++ )
+	{
+		const uint8_t *e = data + pos + i * size;
+		if ( i )
+			wmem_strbuf_append(buf, ", ");
+		if ( indices )
+			wmem_strbuf_append_printf(buf, "%u: ", ((uint32_t)indices[4 * i] << 24)
+				| ((uint32_t)indices[4 * i + 1] << 16) | ((uint32_t)indices[4 * i + 2] << 8) | indices[4 * i + 3]);
+		if ( size > 1 )
+			wmem_strbuf_append(buf, tns_format_binary_float(pinfo, e, size));
+		else if ( format == 4 )
+			wmem_strbuf_append_printf(buf, "%d", (int8_t)e[0]);
+		else
+			wmem_strbuf_append_printf(buf, "%u", e[0]);
+	}
+	if ( count > (uint32_t)shown )
+		wmem_strbuf_append(buf, ", ...");
+	wmem_strbuf_append_c(buf, indices ? '}' : ']');
+	return wmem_strbuf_get_str(buf);
+}
+
+#define TNS_OSON_MAX_DEPTH   32
+#define TNS_OSON_MAX_NODES   4096
+#define TNS_OSON_MAX_TEXT    2048
+
+/* A reader over an OSON image; every access is bounds checked, and a
+ * failed one marks the reader bad instead of throwing. */
+typedef struct _tns_oson_t {
+	const uint8_t *data;
+	uint32_t len;
+	bool bad;
+	uint32_t tree;          /* start of the tree segment */
+	uint8_t field_id_len;   /* 1, 2 or 4 */
+	bool relative;          /* container children count from the container */
+	uint32_t num_names;
+	const uint8_t **names;
+	uint32_t *name_lens;
+} tns_oson_t;
+
+typedef struct _tns_oson_frame_t {
+	bool is_object;
+	uint8_t node_type;
+	uint32_t count, next;
+	uint32_t ids_pos, offsets_pos, container;
+} tns_oson_frame_t;
+
+static uint32_t tns_oson_uint(tns_oson_t *o, uint32_t pos, int width)
+{
+	uint32_t v = 0;
+
+	if ( o->bad || pos > o->len || (uint32_t)width > o->len - pos )
+	{
+		o->bad = true;
+		return 0;
+	}
+	for ( int i = 0; i < width; i++ )
+		v = (v << 8) | o->data[pos + i];
+	return v;
+}
+
+/* Read the field names of one segment: a hash array (hash_size bytes a
+ * name), an offsets array, then the names, each behind a length of
+ * len_size bytes. */
+static uint32_t tns_oson_names(tns_oson_t *o, uint32_t pos, uint32_t first, uint32_t num,
+	int hash_size, int off_size, uint32_t seg_size, int len_size)
+{
+	uint32_t offsets = pos + num * hash_size;
+	uint32_t seg = offsets + num * off_size;
+
+	for ( uint32_t i = 0; i < num && !o->bad; i++ )
+	{
+		uint32_t at = tns_oson_uint(o, offsets + i * off_size, off_size);
+		uint32_t n = tns_oson_uint(o, seg + at, len_size);
+		if ( at + len_size + n > seg_size || seg + at + len_size + n > o->len )
+			o->bad = true;
+		else
+		{
+			o->names[first + i] = o->data + seg + at + len_size;
+			o->name_lens[first + i] = n;
+		}
+	}
+	return seg + seg_size;
+}
+
+static void tns_oson_append_string(wmem_strbuf_t *buf, const uint8_t *s, uint32_t len)
+{
+	wmem_strbuf_append_c(buf, '"');
+	for ( uint32_t i = 0; i < len; i++ )
+	{
+		if ( s[i] == '"' || s[i] == '\\' )
+			wmem_strbuf_append_printf(buf, "\\%c", s[i]);
+		else if ( s[i] < 0x20 )
+			wmem_strbuf_append_printf(buf, "\\u%04x", s[i]);
+		else
+			wmem_strbuf_append_c(buf, s[i]);
+	}
+	wmem_strbuf_append_c(buf, '"');
+}
+
+/* How an OSON scalar's payload is rendered. */
+typedef enum {
+	TNS_OSON_STRING,
+	TNS_OSON_NUMBER,
+	TNS_OSON_DATETIME,
+	TNS_OSON_FLOAT,
+	TNS_OSON_INTERVAL,
+	TNS_OSON_BYTES
+} tns_oson_kind_t;
+
+/* Render the scalar node at pos; returns false on a malformed or unknown
+ * node. The tag selects the type and says where its length is: in a byte,
+ * a be16 or a be32 after the tag, fixed by the type, or in the tag's low
+ * bits. */
+static bool tns_oson_scalar(packet_info *pinfo, tns_oson_t *o, uint32_t pos, wmem_strbuf_t *buf)
+{
+	uint8_t t = (uint8_t)tns_oson_uint(o, pos, 1);
+	uint32_t n = 0, at = pos + 1;
+	tns_oson_kind_t kind;
+	const char *text = NULL;
+
+	if ( o->bad )
+		return false;
+	switch ( t )
+	{
+		case 0x30: wmem_strbuf_append(buf, "null"); return true;
+		case 0x31: wmem_strbuf_append(buf, "true"); return true;
+		case 0x32: wmem_strbuf_append(buf, "false"); return true;
+		case 0x33: kind = TNS_OSON_STRING; n = tns_oson_uint(o, at, 1); at += 1; break;
+		case 0x37: kind = TNS_OSON_STRING; n = tns_oson_uint(o, at, 2); at += 2; break;
+		case 0x38: kind = TNS_OSON_STRING; n = tns_oson_uint(o, at, 4); at += 4; break;
+		case 0x34: kind = TNS_OSON_NUMBER; n = tns_oson_uint(o, at, 1); at += 1; break;
+		case 0x3c: case 0x7d: kind = TNS_OSON_DATETIME; n = 7; break;
+		case 0x39: kind = TNS_OSON_DATETIME; n = 11; break;
+		case 0x7c: kind = TNS_OSON_DATETIME; n = 13; break;
+		case 0x7f: kind = TNS_OSON_FLOAT; n = 4; break;
+		case 0x36: kind = TNS_OSON_FLOAT; n = 8; break;
+		case 0x3d: kind = TNS_OSON_INTERVAL; n = 5; break;
+		case 0x3e: kind = TNS_OSON_INTERVAL; n = 11; break;
+		case 0x7e: kind = TNS_OSON_BYTES; n = tns_oson_uint(o, at, 1); at += 1; break;
+		case 0x3a: kind = TNS_OSON_BYTES; n = tns_oson_uint(o, at, 2); at += 2; break;
+		case 0x3b: kind = TNS_OSON_BYTES; n = tns_oson_uint(o, at, 4); at += 4; break;
+		case 0x7b:
+			/* extended type: a vector, with a be32 image length */
+			if ( tns_oson_uint(o, at, 1) != 0x01 )
+				return false;
+			n = tns_oson_uint(o, at + 1, 4);
+			at += 5;
+			if ( o->bad || n > o->len - at )
+				return false;
+			text = tns_format_vector(pinfo, o->data + at, n);
+			if ( !text )
+				return false;
+			tns_oson_append_string(buf, (const uint8_t *)text, (uint32_t)strlen(text));
+			return true;
+		default:
+			if ( (t & 0xf0) == 0x20 || (t & 0xf0) == 0x60 )
+			{
+				kind = TNS_OSON_NUMBER;
+				n = (t & 0x0f) + 1u;
+			}
+			else if ( (t & 0xf0) == 0x40 || (t & 0xf0) == 0x50 )
+			{
+				kind = TNS_OSON_NUMBER;
+				n = t & 0x0f;
+			}
+			else if ( (t & 0xe0) == 0 )
+			{
+				kind = TNS_OSON_STRING;
+				n = t;
+			}
+			else
+				return false;
+			break;
+	}
+	if ( o->bad || n > o->len - at )
+		return false;
+
+	switch ( kind )
+	{
+		case TNS_OSON_STRING:
+			tns_oson_append_string(buf, o->data + at, n);
+			return true;
+		case TNS_OSON_BYTES:
+			wmem_strbuf_append_c(buf, '"');
+			for ( uint32_t i = 0; i < n; i++ )
+				wmem_strbuf_append_printf(buf, "%02x", o->data[at + i]);
+			wmem_strbuf_append_c(buf, '"');
+			return true;
+		case TNS_OSON_NUMBER:
+			text = n ? tns_format_number(pinfo, o->data + at, (int)n) : "0";
+			break;
+		case TNS_OSON_FLOAT:
+			text = tns_format_binary_float(pinfo, o->data + at, (int)n);
+			break;
+		case TNS_OSON_DATETIME:
+			text = t == 0x7c ? tns_format_timestamp_tz(pinfo, o->data + at, (int)n)
+				: tns_format_date(pinfo, o->data + at, (int)n);
+			break;
+		case TNS_OSON_INTERVAL:
+			text = tns_format_interval(pinfo, t == 0x3d ? TNS_DATATYPE_INTERVAL_YM : TNS_DATATYPE_INTERVAL_DS,
+				o->data + at, (int)n);
+			break;
+	}
+	if ( !text )
+		return false;
+	/* numbers stand bare; dates and intervals are strings in JSON */
+	if ( kind == TNS_OSON_NUMBER || kind == TNS_OSON_FLOAT )
+		wmem_strbuf_append(buf, text);
+	else
+		tns_oson_append_string(buf, (const uint8_t *)text, (uint32_t)strlen(text));
+	return true;
+}
+
+/* Open the container node at pos into frame f. A container's tag says
+ * whether it is an object or an array (0x40), how wide its child count is
+ * (bits 0x18: one, two or four bytes), and how wide its offsets are
+ * (0x20). With both count bits set, an object shares another object's
+ * field ids: the donor's offset - absolute even in relative mode - takes
+ * the count's place, and the donor supplies the count and ids. */
+static bool tns_oson_open(tns_oson_t *o, uint32_t pos, tns_oson_frame_t *f)
+{
+	uint8_t t = (uint8_t)tns_oson_uint(o, pos, 1);
+	int off_size = (t & 0x20) ? 4 : 2;
+	uint32_t at = pos + 1;
+
+	f->node_type = t;
+	f->is_object = (t & 0x40) == 0;
+	f->next = 0;
+	f->container = pos - o->tree;
+	switch ( t & 0x18 )
+	{
+		case 0x00: f->count = tns_oson_uint(o, at, 1); at += 1; break;
+		case 0x08: f->count = tns_oson_uint(o, at, 2); at += 2; break;
+		case 0x10: f->count = tns_oson_uint(o, at, 4); at += 4; break;
+		default:
+		{
+			uint32_t donor = o->tree + tns_oson_uint(o, at, off_size);
+			uint8_t dt = (uint8_t)tns_oson_uint(o, donor, 1);
+			at += off_size;
+			f->offsets_pos = at;
+			switch ( dt & 0x18 )
+			{
+				case 0x00: f->count = tns_oson_uint(o, donor + 1, 1); f->ids_pos = donor + 2; break;
+				case 0x08: f->count = tns_oson_uint(o, donor + 1, 2); f->ids_pos = donor + 3; break;
+				case 0x10: f->count = tns_oson_uint(o, donor + 1, 4); f->ids_pos = donor + 5; break;
+				default: return false;
+			}
+			return !o->bad;
+		}
+	}
+	if ( f->is_object )
+	{
+		f->ids_pos = at;
+		f->offsets_pos = at + o->field_id_len * f->count;
+	}
+	else
+		f->offsets_pos = at;
+	return !o->bad;
+}
+
+/* Render an OSON image as JSON text, or NULL when it is not one this
+ * decoder understands. Containers are walked with an explicit stack, not
+ * recursion, and the depth, the nodes visited and the text are bounded:
+ * the offsets come off the wire and may point anywhere. */
+static const char *tns_format_oson(packet_info *pinfo, const uint8_t *data, int len)
+{
+	tns_oson_t o = { data, (uint32_t)len, false, 0, 1, false, 0, NULL, NULL };
+	tns_oson_frame_t stack[TNS_OSON_MAX_DEPTH];
+	int depth = 0, nodes = 0;
+	wmem_strbuf_t *buf;
+	uint32_t pos, num_short, short_seg, num_long = 0, long_seg = 0;
+	int short_off = 2, long_off = 4;
+	uint16_t flags;
+	uint8_t version;
+
+	if ( len < 6 || data[0] != 0xff || data[1] != 0x4a || data[2] != 0x5a )
+		return NULL;
+	version = data[3];
+	if ( version != 1 && version != 3 )
+		return NULL;
+	flags = (uint16_t)tns_oson_uint(&o, 4, 2);
+	o.relative = (flags & 0x01) != 0;
+	pos = 6;
+	buf = wmem_strbuf_new(pinfo->pool, "");
+
+	if ( flags & 0x10 )
+	{
+		/* a scalar document: the tree segment size, then the value */
+		pos += (flags & 0x1000) ? 4 : 2;
+		return tns_oson_scalar(pinfo, &o, pos, buf) ? wmem_strbuf_get_str(buf) : NULL;
+	}
+
+	if ( flags & 0x08 )
+	{
+		num_short = tns_oson_uint(&o, pos, 4);
+		pos += 4;
+		o.field_id_len = 4;
+	}
+	else if ( flags & 0x0400 )
+	{
+		num_short = tns_oson_uint(&o, pos, 2);
+		pos += 2;
+		o.field_id_len = 2;
+	}
+	else
+	{
+		num_short = tns_oson_uint(&o, pos, 1);
+		pos += 1;
+	}
+	if ( flags & 0x0800 )
+	{
+		short_off = 4;
+		short_seg = tns_oson_uint(&o, pos, 4);
+		pos += 4;
+	}
+	else
+	{
+		short_seg = tns_oson_uint(&o, pos, 2);
+		pos += 2;
+	}
+	/* version 3 adds a segment of field names over 255 bytes */
+	if ( version == 3 )
+	{
+		if ( tns_oson_uint(&o, pos, 2) & 0x0100 )
+			long_off = 2;
+		num_long = tns_oson_uint(&o, pos + 2, 4);
+		long_seg = tns_oson_uint(&o, pos + 6, 4);
+		pos += 10;
+	}
+	pos += (flags & 0x1000) ? 4 : 2;   /* tree segment size */
+	pos += 2;                          /* number of tiny nodes */
+	if ( o.bad || num_short > o.len || num_long > o.len )
+		return NULL;
+
+	o.num_names = num_short + num_long;
+	o.names = wmem_alloc0_array(pinfo->pool, const uint8_t *, o.num_names + 1);
+	o.name_lens = wmem_alloc0_array(pinfo->pool, uint32_t, o.num_names + 1);
+	if ( num_short )
+		pos = tns_oson_names(&o, pos, 0, num_short, 1, short_off, short_seg, 1);
+	if ( num_long )
+		pos = tns_oson_names(&o, pos, num_short, num_long, 2, long_off, long_seg, 2);
+	if ( o.bad )
+		return NULL;
+	o.tree = pos;
+
+	/* the root node */
+	if ( !(tns_oson_uint(&o, pos, 1) & 0x80) )
+		return tns_oson_scalar(pinfo, &o, pos, buf) ? wmem_strbuf_get_str(buf) : NULL;
+	if ( !tns_oson_open(&o, pos, &stack[0]) )
+		return NULL;
+	wmem_strbuf_append_c(buf, stack[0].is_object ? '{' : '[');
+	depth = 1;
+
+	while ( depth > 0 )
+	{
+		tns_oson_frame_t *f = &stack[depth - 1];
+		uint32_t child, off;
+
+		if ( f->next == f->count )
+		{
+			wmem_strbuf_append_c(buf, f->is_object ? '}' : ']');
+			depth--;
+			continue;
+		}
+		if ( ++nodes > TNS_OSON_MAX_NODES || wmem_strbuf_get_len(buf) > TNS_OSON_MAX_TEXT )
+		{
+			wmem_strbuf_append(buf, "...");
+			return wmem_strbuf_get_str(buf);
+		}
+		if ( f->next > 0 )
+			wmem_strbuf_append(buf, ", ");
+		if ( f->is_object )
+		{
+			uint32_t id = tns_oson_uint(&o, f->ids_pos + f->next * o.field_id_len, o.field_id_len);
+			if ( o.bad || id == 0 || id > o.num_names )
+				return NULL;
+			tns_oson_append_string(buf, o.names[id - 1], o.name_lens[id - 1]);
+			wmem_strbuf_append(buf, ": ");
+		}
+		off = tns_oson_uint(&o, f->offsets_pos + f->next * ((f->node_type & 0x20) ? 4 : 2),
+			(f->node_type & 0x20) ? 4 : 2);
+		if ( o.relative )
+			off += f->container;
+		child = o.tree + off;
+		f->next++;
+		if ( o.bad )
+			return NULL;
+
+		if ( tns_oson_uint(&o, child, 1) & 0x80 )
+		{
+			if ( depth == TNS_OSON_MAX_DEPTH || !tns_oson_open(&o, child, &stack[depth]) )
+				return NULL;
+			wmem_strbuf_append_c(buf, stack[depth].is_object ? '{' : '[');
+			depth++;
+		}
+		else if ( !tns_oson_scalar(pinfo, &o, child, buf) )
+			return NULL;
+	}
+	return wmem_strbuf_get_str(buf);
+}
+
 static void vsnum_to_vstext_basecustom(char *result, uint32_t vsnum)
 {
 	/*
@@ -1847,9 +2371,28 @@ static void vsnum_to_vstext_basecustom(char *result, uint32_t vsnum)
 		 vsnum & 0xff);
 }
 
+/* The warning-flags byte of an error block: a PL/SQL object was created
+ * with compilation errors, though the call itself succeeded. */
+#define TNS_WARN_COMPILATION_ERROR  0x20
+
 /* End-of-call status flags, carried by both TTI_OER and TTI_STA. */
 #define TNS_CALL_STATUS_TXN_IN_PROGRESS  0x00000002
 #define TNS_CALL_STATUS_SESS_RELEASE     0x00008000
+
+/* Show the warning flags of an error block, and say so when the
+ * compilation-warning bit is set. */
+static void tns_add_warn_flags(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset)
+{
+	proto_item *ti = proto_tree_add_item(tree, hf_tns_data_oer_warn_flags, tvb, offset, 1, ENC_NA);
+	proto_tree *wt = proto_item_add_subtree(ti, ett_tns_warn_flags);
+
+	proto_tree_add_item(wt, hf_tns_data_oer_warn_compile, tvb, offset, 1, ENC_NA);
+	if ( tvb_get_uint8(tvb, offset) & TNS_WARN_COMPILATION_ERROR )
+	{
+		expert_add_info(pinfo, ti, &ei_tns_data_compilation_error);
+		col_append_str(pinfo->cinfo, COL_INFO, " [created with compilation errors]");
+	}
+}
 
 /* Break out the flag bits of a call status item. A client reads the
  * transaction bit to decide whether closing or releasing the connection
@@ -2078,6 +2621,43 @@ static int dissect_tns_describe_body(tvbuff_t *tvb, packet_info *pinfo, proto_tr
 	return offset;
 }
 
+static tns_call_t *tns_answered_call(packet_info *pinfo);
+
+/* A BFILE's locator names its file: a big-endian ub2 length and the
+ * directory object's name, then a ub2 length and the file name, which end
+ * the locator. They start 16 bytes into the locator as a value carries it,
+ * behind its own ub2 length, and 14 bytes in in a LOB operation, which
+ * sends it without that length. Finds the names in the len bytes at
+ * offset, or returns false. */
+static bool tns_bfile_names(tvbuff_t *tvb, int offset, int len,
+		int *dir_off, int *dir_len, int *file_off, int *file_len)
+{
+	static const int bases[] = { 16, 14 };
+
+	for ( unsigned i = 0; i < array_length(bases); i++ )
+	{
+		int b = bases[i], dl, fl;
+
+		if ( len < b + 4 )
+			continue;
+		dl = tvb_get_ntohs(tvb, offset + b);
+		if ( dl == 0 || b + 2 + dl + 2 > len )
+			continue;
+		fl = tvb_get_ntohs(tvb, offset + b + 2 + dl);
+		if ( fl == 0 || b + 2 + dl + 2 + fl != len )
+			continue;
+		if ( !tvb_utf_8_isprint(tvb, offset + b + 2, dl)
+			|| !tvb_utf_8_isprint(tvb, offset + b + 2 + dl + 2, fl) )
+			continue;
+		*dir_off = offset + b + 2;
+		*dir_len = dl;
+		*file_off = offset + b + 2 + dl + 2;
+		*file_len = fl;
+		return true;
+	}
+	return false;
+}
+
 /* Decode one row/bind value by its data type, and add it as a
  * "<prefix> N (TYPE)" item under `hf`. Ordinary values are a
  * DALC blob; ROWID / UROWID / LONG / LOB / JSON / VECTOR / object carry
@@ -2108,6 +2688,24 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 			proto_item *ci;
 			proto_tree *ct;
 			int end, cursor = 0, start;
+			const tns_call_t *call = tns_answered_call(pinfo);
+
+			/* Rows a TTI_FETCH returns carry a cursor cut short before
+			 * 23ai: the length byte and the id, with no describe. An
+			 * execute's reply, and a fetch-only execute's, carry it
+			 * whole. */
+			if ( call && call->func == TTI_FETCH && tns_field_version(pinfo) < TNS_FV_23_1 )
+			{
+				start = offset;
+				end = offset + 1;
+				end += get_sb4_custom(tvb, end, &cursor);
+				ci = proto_tree_add_bytes_format(tree, hf, tvb, start, end - start, NULL,
+					"%s %d (%s): cursor %d", prefix, idx,
+					val_to_str_const(dtype, tns_data_types, "unknown"), cursor);
+				ct = proto_item_add_subtree(ci, ett_tns_value);
+				proto_tree_add_uint(ct, hf_tns_cursor, tvb, offset + 1, end - offset - 1, cursor);
+				return end;
+			}
 
 			end = dissect_tns_describe_body(tvb, pinfo, NULL, offset + 1, NULL);
 			end += get_sb4_custom(tvb, end, &cursor);
@@ -2187,8 +2785,17 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 			offset += get_dalc_custom(tvb, pinfo, offset, NULL);
 			image_len = offset - image_start;
 			offset += get_dalc_custom(tvb, pinfo, offset, NULL);
-			rendered = wmem_strdup_printf(pinfo->pool, "%s image, %" PRIu64 " bytes",
-				dtype == TNS_DATATYPE_JSON ? "OSON" : "vector", lob_size);
+			if ( image_len > 1 )
+			{
+				int img_len = 0;
+				const uint8_t *img = tns_dalc_bytes(tvb, pinfo, image_start, &img_len);
+				if ( img )
+					rendered = dtype == TNS_DATATYPE_VECTOR ? tns_format_vector(pinfo, img, img_len)
+						: tns_format_oson(pinfo, img, img_len);
+			}
+			if ( !rendered )
+				rendered = wmem_strdup_printf(pinfo->pool, "%s image, %" PRIu64 " bytes",
+					dtype == TNS_DATATYPE_JSON ? "OSON" : "vector", lob_size);
 			break;
 
 		case TNS_DATATYPE_ROWID:
@@ -2277,7 +2884,14 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 						rendered = wmem_strdup_printf(pinfo->pool, "locator, size %" PRIu64, lob_size);
 					}
 				}
+				int loc_start = offset, dir_off, dir_len, file_off, file_len;
+				uint8_t loc_len = tvb_get_uint8(tvb, offset);
 				offset += get_dalc_custom(tvb, pinfo, offset, NULL);
+				if ( dtype == TNS_DATATYPE_BFILE && loc_len <= 0xfc
+					&& tns_bfile_names(tvb, loc_start + 1, loc_len, &dir_off, &dir_len, &file_off, &file_len) )
+					rendered = wmem_strdup_printf(pinfo->pool, "BFILENAME('%s', '%s')",
+						tvb_get_string_enc(pinfo->pool, tvb, dir_off, dir_len, ENC_UTF_8),
+						tvb_get_string_enc(pinfo->pool, tvb, file_off, file_len, ENC_UTF_8));
 			}
 			break;
 
@@ -3404,10 +4018,13 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				tvb, oer_start, offset - oer_start, (uint32_t)v);
 			/* end-to-end seq# (skipped) */
 			offset += get_sb4_custom(tvb, offset, &v);
-			/* rowcount (DML affected rows on 11g) */
+			/* rowcount: the rows the call applied, whether it went on
+			 * to fail or not */
 			int rc_start = offset;
+			uint64_t rows_done;
 			offset += get_sb4_custom(tvb, offset, &v);
 			proto_tree_add_int(oer_tree, hf_tns_data_oer_rowcount, tvb, rc_start, offset - rc_start, v);
+			rows_done = (uint64_t)(uint32_t)v;
 			/* err_code (ORA-NNNNN, 0 on success) */
 			int ec_start = offset;
 			int err_code = 0;
@@ -3433,8 +4050,16 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			}
 			/* error position (skipped) */
 			offset += get_sb4_custom(tvb, offset, &v);
-			/* 6 single-byte fields: sql_type, fatal, flags, user_cursor_opts, upi_param, warn_flags */
-			offset += 6;
+			/* 6 single-byte fields: sql_type, fatal, flags,
+			 * user_cursor_opts, upi_param, warn_flags. Five are
+			 * diagnostic; the last is not. Its bit 0x20 says the
+			 * statement created a PL/SQL object that compiled with
+			 * errors - the call succeeded, the error code is 0 and the
+			 * reply is otherwise indistinguishable from a clean one, so
+			 * this bit is the only sign the object is invalid. */
+			offset += 5;
+			tns_add_warn_flags(tvb, pinfo, oer_tree, offset);
+			offset += 1;
 			/* rowid: ub4 rba, ub2 part_id, 1 byte reserved, ub4 block, ub2 slot */
 			offset += get_sb4_custom(tvb, offset, &v);
 			offset += get_sb4_custom(tvb, offset, &v);
@@ -3499,6 +4124,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				start = offset;
 				offset += get_ub8_custom(tvb, offset, &rows);
 				proto_tree_add_uint64(oer_tree, hf_tns_data_oer_rowcount_ext, tvb, start, offset - start, rows);
+				rows_done = rows;
 			}
 			if ( fv >= TNS_FV_12_1 && (server_fv ? server_fv : fv) >= TNS_FV_20_1 )
 			{
@@ -3524,6 +4150,11 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 					col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", msg);
 				}
 			}
+			/* A call that failed part-way through - an array DML whose
+			 * later iteration raised - still applied the rows before the
+			 * one that raised, and this is where it says how many. */
+			if ( err_code != 0 && rows_done != 0 )
+				col_append_fstr(pinfo->cinfo, COL_INFO, " [%" PRIu64 " rows applied]", rows_done);
 			proto_item_set_len(oer_item, offset - oer_start);
 			/* With the field version known the block ends where it
 			 * should, so an end-of-response marker after it can be read. */
@@ -3568,6 +4199,28 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				proto_tree_add_item(data_tree, hf_tns_data_lob_data, tvb, start, offset - start, ENC_NA);
 			else if ( offset - start > 1 )
 				proto_tree_add_item(data_tree, hf_tns_data_lob_data, tvb, start + 1, offset - start - 1, ENC_NA);
+
+			/* A CLOB's content is text; the locator the read named says
+			 * how it is encoded. */
+			const tns_call_t *call = tns_answered_call(pinfo);
+			if ( call && call->func == TTI_LOBOPS && call->lob_flags_known
+				&& (call->lob_flags[0] & (TNS_LOB_LOC_FLAGS_CLOB | TNS_LOB_LOC_FLAGS_NCLOB)) )
+			{
+				int len = 0;
+				const uint8_t *data = tns_dalc_bytes(tvb, pinfo, start, &len);
+				const uint8_t *text = NULL;
+
+				if ( data && (call->lob_flags[0] & TNS_LOB_LOC_FLAGS_NCLOB) )
+					text = get_utf_16_string(pinfo->pool, data, len, ENC_BIG_ENDIAN);
+				else if ( data && (call->lob_flags[2] & TNS_LOB_LOC_FLAGS_VAR_LENGTH_CHARSET) )
+					text = get_utf_16_string(pinfo->pool, data, len,
+						(call->lob_flags[3] & TNS_LOB_LOC_FLAGS_LITTLE_ENDIAN) ? ENC_LITTLE_ENDIAN : ENC_BIG_ENDIAN);
+				else if ( data )
+					text = get_utf_8_string(pinfo->pool, data, len);
+				if ( text )
+					proto_item_set_generated(proto_tree_add_string(data_tree, hf_tns_data_lob_text, tvb,
+						start, offset - start, (const char *)text));
+			}
 			ctx->walk = true;
 			break;
 		}
@@ -4321,6 +4974,18 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				offset += get_sb4_custom(tvb, offset, &options);
 				proto_tree_add_bitmask_value(data_tree, tvb, start, hf_tns_data_all8_options,
 					ett_tns_all8_options, tns_all8_options, (uint64_t)(uint32_t)options);
+				/* An execute that asks for no work is a parse: the client
+				 * wants the statement checked, not run. The PARSE bit does
+				 * not say so - it rides along with EXECUTE on the first
+				 * execute of any statement, and a parse of a statement the
+				 * client already has cached sets no bit at all. */
+				if ( !(options & (TNS_EXEC_OPTION_EXECUTE | TNS_EXEC_OPTION_DEFINE
+					| TNS_EXEC_OPTION_FETCH)) )
+				{
+					proto_item_set_generated(proto_tree_add_boolean(data_tree,
+						hf_tns_data_all8_parse_only, tvb, start, offset - start, true));
+					col_append_str(pinfo->cinfo, COL_INFO, " [parse only]");
+				}
 				/* cursor id (ub4) */
 				start = offset;
 				offset += get_sb4_custom(tvb, offset, &cursor);
@@ -4672,9 +5337,21 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				amount_ptr = tvb_get_uint8(tvb, offset);
 				offset += 1;                              /* amount pointer flag */
 				offset += 6;                              /* array-LOB slots */
+				int locator_start = offset;
 				if ( src_ptr && loc_len > 0 )
 				{
+					int dir_off, dir_len, file_off, file_len;
+
 					proto_tree_add_item(data_tree, hf_tns_data_lob_locator, tvb, offset, loc_len, ENC_NA);
+					if ( tns_bfile_names(tvb, offset, loc_len, &dir_off, &dir_len, &file_off, &file_len) )
+					{
+						const char *dir, *file;
+						proto_tree_add_item_ret_string(data_tree, hf_tns_data_lob_directory, tvb,
+							dir_off, dir_len, ENC_UTF_8, pinfo->pool, (const uint8_t **)&dir);
+						proto_tree_add_item_ret_string(data_tree, hf_tns_data_lob_file_name, tvb,
+							file_off, file_len, ENC_UTF_8, pinfo->pool, (const uint8_t **)&file);
+						col_append_fstr(pinfo->cinfo, COL_INFO, " [BFILENAME('%s', '%s')]", dir, file);
+					}
 					offset += loc_len;
 				}
 				if ( charset_ptr )
@@ -4706,6 +5383,11 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 					call->lob_op = (uint32_t)op;
 					call->lob_locator_len = src_ptr ? (uint32_t)loc_len : 0;
 					call->lob_amount = amount_ptr != 0;
+					if ( src_ptr && loc_len >= TNS_LOB_LOC_FLAG_4 + 1 )
+					{
+						tvb_memcpy(tvb, call->lob_flags, locator_start + TNS_LOB_LOC_FLAG_1, 4);
+						call->lob_flags_known = true;
+					}
 				}
 			}
 			break;
@@ -6158,7 +6840,7 @@ void proto_register_tns(void)
 			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_oer_rowcount, {
 			"Row Count", "tns.data_oer.rowcount", FT_INT32, BASE_DEC,
-			NULL, 0x0, "DML affected rows (11g)", HFILL }},
+			NULL, 0x0, "The rows the call applied - on an error, the rows it managed before failing (11g)", HFILL }},
 		{ &hf_tns_data_oer_err_code, {
 			"Error Code", "tns.data_oer.err_code", FT_INT32, BASE_DEC,
 			NULL, 0x0, "ORA-NNNNN (0 = success)", HFILL }},
@@ -6179,13 +6861,19 @@ void proto_register_tns(void)
 			NULL, 0x0, "The error code at its full width (12.1 and later)", HFILL }},
 		{ &hf_tns_data_oer_rowcount_ext, {
 			"Row Count (64 bit)", "tns.data_oer.rowcount64", FT_UINT64, BASE_DEC,
-			NULL, 0x0, "The row count at its full width (12.1 and later)", HFILL }},
+			NULL, 0x0, "The rows the call applied, at full width (12.1 and later)", HFILL }},
 		{ &hf_tns_data_oer_sql_type, {
 			"SQL Type", "tns.data_oer.sql_type", FT_UINT32, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_oer_checksum, {
 			"Server Checksum", "tns.data_oer.checksum", FT_UINT32, BASE_HEX,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_oer_warn_flags, {
+			"Warning Flags", "tns.data_oer.warn_flags", FT_UINT8, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_oer_warn_compile, {
+			"Compiled with errors", "tns.data_oer.warn_flags.compilation_error", FT_BOOLEAN, 8,
+			NULL, TNS_WARN_COMPILATION_ERROR, "A PL/SQL object was created in an invalid state", HFILL }},
 		{ &hf_tns_data_oer_message, {
 			"Message", "tns.data_oer.message", FT_STRING, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
@@ -6318,6 +7006,9 @@ void proto_register_tns(void)
 		{ &hf_tns_data_all8_opt_not_plsql, {
 			"Not PL/SQL", "tns.data_all8.options.not_plsql", FT_BOOLEAN, 32,
 			NULL, 0x00008000, NULL, HFILL }},
+		{ &hf_tns_data_all8_parse_only, {
+			"Parse Only", "tns.data_all8.parse_only", FT_BOOLEAN, BASE_NONE,
+			NULL, 0x0, "The execute asks for no work: nothing to run, nothing to fetch", HFILL }},
 		{ &hf_tns_data_all8_opt_describe, {
 			"Describe", "tns.data_all8.options.describe", FT_BOOLEAN, 32,
 			NULL, 0x00020000, NULL, HFILL }},
@@ -6393,6 +7084,12 @@ void proto_register_tns(void)
 		{ &hf_tns_data_lob_locator, {
 			"Locator", "tns.data_lob.locator", FT_BYTES, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_lob_directory, {
+			"Directory", "tns.data_lob.directory", FT_STRING, BASE_NONE,
+			NULL, 0x0, "The directory object a BFILE's locator names", HFILL }},
+		{ &hf_tns_data_lob_file_name, {
+			"File Name", "tns.data_lob.file_name", FT_STRING, BASE_NONE,
+			NULL, 0x0, "The file a BFILE's locator names", HFILL }},
 		{ &hf_tns_data_lob_charset, {
 			"Charset", "tns.data_lob.charset", FT_UINT32, BASE_DEC,
 			VALS(tns_charsets), 0x0, NULL, HFILL }},
@@ -6444,6 +7141,9 @@ void proto_register_tns(void)
 		{ &hf_tns_data_pgy_sec_value, {
 			"Security Context Value", "tns.data_piggyback.sec_value", FT_BYTES, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_lob_text, {
+			"Text", "tns.data_lob.text", FT_STRING, BASE_NONE,
+			NULL, 0x0, "A CLOB's content, decoded as its locator says", HFILL }},
 		{ &hf_tns_data_release_tag, {
 			"Tag", "tns.data_release.tag", FT_STRING, BASE_NONE,
 			NULL, 0x0, "Session tag for the pool", HFILL }},
@@ -6558,6 +7258,7 @@ void proto_register_tns(void)
 		&ett_tns_setdt_override,
 		&ett_tns_oer,
 		&ett_tns_call_status,
+		&ett_tns_warn_flags,
 		&ett_tns_auth_mode,
 		&ett_tns_sns_service,
 		&ett_tns_sns_subpacket,
@@ -6586,6 +7287,7 @@ void proto_register_tns(void)
 		{ &ei_tns_data_descriptor_size_mismatch, { "tns.data_descriptor.size_mismatch", PI_PROTOCOL, PI_WARN, "Data size from summing row sizes differs from size in descriptor", EXPFILL }},
 		{ &ei_tns_data_piggyback_cursors, { "tns.data.piggyback.cursors.invalid", PI_MALFORMED, PI_ERROR, "Cursor count is larger than the data left in the packet", EXPFILL }},
 		{ &ei_tns_data_count_too_large, { "tns.data.count.invalid", PI_MALFORMED, PI_ERROR, "Count is larger than the data left in the packet", EXPFILL }},
+		{ &ei_tns_data_compilation_error, { "tns.data_oer.compilation_error", PI_RESPONSE_CODE, PI_NOTE, "The statement created a PL/SQL object that compiled with errors", EXPFILL }},
 		{ &ei_tns_data_encrypted, { "tns.data.encrypted", PI_DECRYPTION, PI_NOTE, "Encrypted by native network encryption", EXPFILL }},
 	};
 

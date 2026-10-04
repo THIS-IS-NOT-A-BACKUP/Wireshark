@@ -5,17 +5,19 @@
 # Copyright 1998 Gerald Combs
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Generate test/captures/tns_oer_12c.pcap: error blocks on 12c and later
-connections, which carry extended fields.
+"""Generate test/captures/tns_vector.pcap: VECTOR column values whose images
+are rendered.
 
-    Frame 1 - the client's TTI_DTY, negotiating field version 24 (23.4)
-    Frame 2 - a TTI_OER for ORA-00942 with the extended error number 942
-              and row count 0, the SQL type and checksum, then the message,
-              then the END_OF_RESPONSE marker
-    Frame 3 - a successful TTI_OER for a DML of 70000 rows: the 11g row
-              count field holds the low bits, the ub8 one the whole count
-    Frame 4 - a TTI_OER for an array insert that raised ORA-00001 on its
-              third row: the row count says the two rows before it went in
+    Frame 1 - TTI_DCB of a VECTOR "V"
+    Frame 2 - five rows, each the image prefetched in the row:
+                [1.5, 2.5, 3.5] as FLOAT32
+                [1, -2, 3, -4] as INT8, as a live 23ai sent it:
+                  db 00 0012 04 00000004 c015e8add236a58f 01 fe 03 fc
+                [170, 1] as a 16-bit BINARY vector, as a live 23ai sent it:
+                  db 01 0010 05 00000010 8000000000000000 aa 01
+                [0.25] as FLOAT64
+                a sparse FLOAT32 vector of 300 dimensions holding 1.5 at
+                index 299
 
 Bytes are built by hand.
 """
@@ -118,12 +120,14 @@ def dcb(columns, fv=0) -> bytes:
 
 
 def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
-         defines=()) -> bytes:
-    """An 11g-shape TTI_ALL8 execute. `binds` and `defines` are OAC blobs,
-    `rows` are the already-encoded value rows (each gets a leading
-    TTI_RXD)."""
+         defines=(), fv=0) -> bytes:
+    """A TTI_ALL8 execute, in the 11g shape unless a field version is given.
+    `binds` and `defines` are OAC blobs, `rows` are the already-encoded
+    value rows (each gets a leading TTI_RXD)."""
     al8 = al8 if al8 is not None else [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     b = bytes([TTI_FUN, TTI_ALL8, seq])
+    if fv >= 18:
+        b += ub4(0)              # ub8 call token
     b += ub4(options) + ub4(cursor)
     b += bytes([1 if sql else 0]) + ub4(len(sql))
     b += bytes([1]) + ub4(len(al8))
@@ -132,7 +136,13 @@ def all8(seq, sql, options, binds=(), rows=(), cursor=0, al8=None,
     b += bytes([0, 0, 0, 0, 0])
     b += bytes([1 if defines else 0]) + ub4(len(defines))
     b += bytes([0, 0, 1]) + bytes([0, 0, 0, 0, 0])
-    b += sql
+    if fv >= 7:
+        b += bytes([0, 0, 0])    # al8pidmlrc pointer, length, pointer
+    if fv >= 8:
+        b += bytes([0, 0, 0, 0, 0])  # SQL signature and SQL id fields
+    if fv >= 9:
+        b += bytes([0, 0])       # chunk ids pointer, count
+    b += (dalc(sql) if sql else b"") if fv >= 7 else sql
     for elem in al8:
         b += ub4(elem)
     for o in list(binds) + list(defines):
@@ -172,20 +182,42 @@ def oer(err_code=0, cursor=0, rowcount=0, call_status=0, msg=b"", fv=0) -> bytes
         b += dalc(msg)
     return b
 
-TTI_EOR = 29
-MSG = b"ORA-00942: table or view does not exist\n"
-DUP = b"ORA-00001: unique constraint (HR.T_PK) violated\n"
+import struct as _s
 
+TYPE_VECTOR = 127
+NORM = bytes.fromhex("c015e8add236a58f")
+locator = bytes([0x00, 0x26]) + bytes(range(38))
+
+
+def sortable(fmt, v):
+    raw = int.from_bytes(_s.pack(">" + fmt, v), "big")
+    bits = 32 if fmt == "f" else 64
+    raw = raw | (1 << (bits - 1)) if v >= 0 else ~raw & ((1 << bits) - 1)
+    return raw.to_bytes(bits // 8, "big")
+
+
+def image(version, flags, fmt, n, body):
+    return bytes([0xDB, version]) + _s.pack(">HBI", flags, fmt, n) + NORM + body
+
+
+def prefetched(img):
+    return ub4(len(locator)) + ub4(len(img)) + ub4(32600) + dalc(img) + dalc(locator)
+
+
+images = [
+    image(0, 0x12, 2, 3, b"".join(sortable("f", v) for v in (1.5, 2.5, 3.5))),
+    bytes.fromhex("db00001204000000 04c015e8add236a58f01fe03fc".replace(" ", "")),
+    bytes.fromhex("db01001005000000 108000000000000000aa01".replace(" ", "")),
+    image(0, 0x12, 3, 1, sortable("d", 0.25)),
+    image(2, 0x32, 2, 300, _s.pack(">HI", 1, 299) + sortable("f", 1.5)),
+]
 frames = [
-    (True, dty(24)),
-    (False, oer(err_code=942, cursor=3, msg=MSG, fv=24) + bytes([TTI_EOR])),
-    (False, oer(rowcount=70000, cursor=4, fv=24) + bytes([TTI_EOR])),
-    (False, oer(err_code=1, cursor=5, rowcount=2, msg=DUP, fv=24)
-            + bytes([TTI_EOR])),
+    (False, dcb([dcb_column(TYPE_VECTOR, 8200, b"V")])),
+    (False, b"".join(bytes([TTI_RXD]) + prefetched(i) for i in images)),
 ]
 
 
-OUT_NAME = "tns_oer_12c.pcap"
+OUT_NAME = "tns_vector.pcap"
 
 
 def ipv4_checksum(h: bytes) -> int:
