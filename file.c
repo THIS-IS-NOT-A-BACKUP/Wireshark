@@ -4814,10 +4814,11 @@ cf_goto_frame(capture_file *cf, unsigned fnumber, bool exact)
         }
         if (fdata->prev_dis_num == 0) {
             /* There is no previous displayed frame, so this frame is
-             * before the first displayed frame. Go to the first line,
-             * which is the closest frame.
+             * before the first displayed frame, which is the closest frame.
+             * (This isn't necessarily the first row, if the packet list is
+             * sorted.)
              */
-            fdata = NULL; /* This will select the first row. */
+            fdata = frame_data_sequence_find(cf->provider.frames, cf->first_displayed);
             statusbar_push_temporary_msg("Packet number %u isn't displayed, going to the first displayed packet, %u.", fnumber, cf->first_displayed);
         } else {
             uint32_t delta = fnumber - fdata->prev_dis_num;
@@ -5628,6 +5629,9 @@ cf_save_records(capture_file *cf, const char *fname, unsigned save_format,
     addr_lists = get_addrinfo_list();
 
     if (save_format == cf->cd_t && compression_type == cf->compression_type
+            /* The input frame does not record its Zstandard level. Rewrite
+             * to honor the configured level rather than copying raw bytes. */
+            && compression_type != WS_FILE_ZSTD_COMPRESSED
             && !discard_comments && !cf->unsaved_changes
             && (wtap_addrinfo_list_empty(addr_lists) || wtap_file_type_subtype_supports_block(save_format, WTAP_BLOCK_NAME_RESOLUTION) == BLOCK_NOT_SUPPORTED)) {
         /* We're saving in the format it's already in, and we're not discarding
@@ -5723,6 +5727,7 @@ cf_save_records(capture_file *cf, const char *fname, unsigned save_format,
 
         /* Use the snaplen from cf (XXX - does wtap_dump_params_init handle that?) */
         params.snaplen = cf->snap;
+        params.zstd_compression_level = prefs.capture_zstd_compression_level;
 
         if (file_exists(fname)) {
             /* We're overwriting an existing file; write out to a new file,
@@ -5979,6 +5984,7 @@ cf_export_specified_packets(capture_file *cf, const char *fname,
 
     /* Use the snaplen from cf (XXX - does wtap_dump_params_init handle that?) */
     params.snaplen = cf->snap;
+    params.zstd_compression_level = prefs.capture_zstd_compression_level;
 
     if (file_exists(fname)) {
         /* We're overwriting an existing file; write out to a new file,
