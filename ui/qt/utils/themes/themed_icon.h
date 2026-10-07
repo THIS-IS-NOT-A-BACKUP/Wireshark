@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#ifndef THEMED_ICON_H
-#define THEMED_ICON_H
+#pragma once
 
 #include <ui/qt/utils/theme_manager.h>
 
@@ -42,13 +41,34 @@ class ThemedIcon : public QIcon
 public:
     /**
      * @param svg_resource_path Qt resource path of the SVG, e.g.
-     *        ":/svg_icons/x-filter-clear.svg".
+     *        ":/svg_icons/filter-clear.svg".
      * @param token Theme colour token the glyph is tinted to.
      * @param size  Nominal render size used when a caller requests a null size.
      */
     explicit ThemedIcon(const QString &svg_resource_path,
                         ThemeManager::ThemeToken token,
                         QSize size = QSize(14, 14));
+
+    /**
+     * @brief Convenience constructor for creating a themed icon from a stock name.
+     *
+     * @param name The base name of the SVG icon resource without a path or .svg extension.
+     */
+    explicit ThemedIcon(const char *name) :
+        ThemedIcon(QString::fromUtf8(name))
+    {
+    }
+
+    /**
+     * @brief Convenience constructor for creating a themed icon from a stock name.
+     *
+     * @param name The base name of the SVG icon resource without a path or .svg extension.
+     */
+    explicit ThemedIcon(const QString &name)
+    {
+        *this = ThemedIcon(QStringLiteral(":/svg_icons/") + name + QStringLiteral(".svg"),
+                           ThemeManager::PaletteText);
+    }
 
     /**
      * @brief Stateful variant: distinct colours per interaction mode.
@@ -67,5 +87,3 @@ public:
                         ThemeManager::ThemeToken selected_token = ThemeManager::NoRole,
                         QSize size = QSize(14, 14));
 };
-
-#endif // THEMED_ICON_H

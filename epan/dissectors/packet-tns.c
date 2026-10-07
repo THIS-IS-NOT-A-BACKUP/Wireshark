@@ -172,6 +172,9 @@ void proto_register_tns(void);
 #define TTI_KOD                 92
 #define TTI_ALL8                94
 #define TTI_LOBOPS              96
+#define TTI_AQ_ENQUEUE          121
+#define TTI_AQ_DEQUEUE          122
+#define TTI_AQ_ARRAY            145
 #define TTI_TPC_TXN_SWITCH      103
 #define TTI_TPC_TXN_CHANGE_STATE 104
 #define TTI_CLOSE_CURSORS       105
@@ -422,6 +425,8 @@ static int hf_tns_data_col_max_length;
 static int hf_tns_data_col_charset;
 static int hf_tns_data_col_csform;
 static int hf_tns_data_col_max_size;
+static int hf_tns_data_col_max_elements;
+static int hf_tns_data_bind_num_elements;
 static int hf_tns_data_col_nulls_ok;
 static int hf_tns_data_col_name;
 static int hf_tns_data_col_uds_flags;
@@ -490,6 +495,28 @@ static int hf_tns_data_lob_data;
 static int hf_tns_data_lob_amount;
 static int hf_tns_data_lob_flag;
 static int hf_tns_data_tpc_switch_op;
+static int hf_tns_data_aq_queue;
+static int hf_tns_data_aq_consumer;
+static int hf_tns_data_aq_correlation;
+static int hf_tns_data_aq_exception_queue;
+static int hf_tns_data_aq_condition;
+static int hf_tns_data_aq_msgid;
+static int hf_tns_data_aq_toid;
+static int hf_tns_data_aq_payload;
+static int hf_tns_data_aq_priority;
+static int hf_tns_data_aq_delay;
+static int hf_tns_data_aq_expiration;
+static int hf_tns_data_aq_attempts;
+static int hf_tns_data_aq_state;
+static int hf_tns_data_aq_enq_time;
+static int hf_tns_data_aq_visibility;
+static int hf_tns_data_aq_deq_mode;
+static int hf_tns_data_aq_navigation;
+static int hf_tns_data_aq_wait;
+static int hf_tns_data_aq_flags;
+static int hf_tns_data_aq_delivery_flags;
+static int hf_tns_data_aq_array_op;
+static int hf_tns_data_aq_num_messages;
 static int hf_tns_data_release_tag;
 static int hf_tns_data_release_mode;
 static int hf_tns_data_release_mode_deauth;
@@ -560,6 +587,7 @@ static int ett_tns_auth_mode;
 static int ett_tns_sns_service;
 static int ett_tns_sns_subpacket;
 static int ett_tns_release_mode;
+static int ett_tns_aq_props;
 static int ett_tns_rpa;
 static int ett_tns_kv;
 static int ett_tns_iov;
@@ -801,6 +829,42 @@ static const value_string tns_field_versions[] = {
 	{0, NULL}
 };
 
+/* Advanced Queuing (python-oracledb's TNS_AQ_*). */
+static const value_string tns_aq_states[] = {
+	{0, "Ready"},
+	{1, "Waiting"},
+	{2, "Processed"},
+	{3, "Expired"},
+	{0, NULL}
+};
+
+static const value_string tns_aq_visibility[] = {
+	{1, "Immediate"},
+	{2, "On commit"},
+	{0, NULL}
+};
+
+static const value_string tns_aq_deq_modes[] = {
+	{1, "Browse"},
+	{2, "Locked"},
+	{3, "Remove"},
+	{4, "Remove, no data"},
+	{0, NULL}
+};
+
+static const value_string tns_aq_navigation[] = {
+	{1, "First message"},
+	{2, "Next transaction"},
+	{3, "Next message"},
+	{0, NULL}
+};
+
+static const value_string tns_aq_array_ops[] = {
+	{1, "Enqueue"},
+	{2, "Dequeue"},
+	{0, NULL}
+};
+
 /* Two-phase commit operations (python-oracledb's TNS_TPC_*). */
 static const value_string tns_tpc_switch_ops[] = {
 	{0x01, "Start"},
@@ -1002,6 +1066,15 @@ static const value_string tns_csform_vals[] = {
 /* Bind directions reported per bind in a TTI_IOV vector (TNS_BIND_DIR_*),
  * cross-referenced with python-oracledb's constants. */
 #define TNS_BIND_DIR_INPUT 32
+
+/* The length of an Advanced Queuing message id. */
+#define TNS_AQ_MSGID_LEN   16
+#define TNS_AQ_TOID_LEN    16
+#define TNS_AQ_ARRAY_ENQ   1
+
+/* An OAC flag marking a PL/SQL associative-array bind: in the flag byte
+ * from 12.2, in the continuation flags before. */
+#define TNS_BIND_ARRAY     0x40
 static const value_string tns_iov_bind_dirs[] = {
 	{16, "OUT"},
 	{32, "IN"},
@@ -1237,6 +1310,7 @@ static const value_string tns_control_cmds[] = {
 typedef struct _tns_column_t {
 	uint8_t type;
 	uint8_t csform;         /* character set form: 2 = national */
+	bool is_array;          /* a PL/SQL associative-array bind */
 	uint32_t data_len;
 } tns_column_t;
 
@@ -1252,6 +1326,7 @@ typedef struct _tns_describe_t {
 typedef struct _tns_binds_t {
 	uint32_t count;
 	uint32_t num_return;    /* the last num_return are RETURNING ... INTO binds */
+	bool plsql;             /* bound to a PL/SQL block */
 	tns_column_t *cols;
 } tns_binds_t;
 
@@ -1315,6 +1390,9 @@ typedef struct _tns_conv_info_t {
 #define TNS_PROTO_DATA_SERVER_FV 7
 /* p_add_proto_data key for whether an OCI session is at the 12c band. */
 #define TNS_PROTO_DATA_OCI_12C  8
+
+/* Execute option set on every SQL statement, clear on a PL/SQL block. */
+#define TNS_EXEC_OPTION_NOT_PLSQL 0x8000
 
 /* The execute options that ask the server to do something: run the
  * statement, take a set of defines, or return rows. */
@@ -2482,7 +2560,9 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
 	/* type (ub1) */
 	proto_tree_add_item(tree, hf_tns_data_col_type, tvb, offset, 1, ENC_BIG_ENDIAN);
 	offset += 1;
-	/* flag (ub1, skip) */
+	/* flag (ub1); from 12.2 it marks an array bind */
+	if ( col && fv_12_2 )
+		col->is_array = (tvb_get_uint8(tvb, offset) & TNS_BIND_ARRAY) != 0;
 	offset += 1;
 	/* precision (sb1) */
 	proto_tree_add_item(tree, hf_tns_data_col_precision, tvb, offset, 1, ENC_BIG_ENDIAN);
@@ -2503,10 +2583,15 @@ static int dissect_tns_oac(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, 
 	proto_tree_add_uint(tree, hf_tns_data_col_max_length, tvb, start, offset - start, v);
 	if ( col )
 		col->data_len = (uint32_t)v;
-	/* max array elements (ub4, skip) */
+	/* max array elements (ub4) */
+	start = offset;
 	offset += get_sb4_custom(tvb, offset, &v);
-	/* cont flags (ub8, skip) */
+	if ( v > 0 )
+		proto_tree_add_uint(tree, hf_tns_data_col_max_elements, tvb, start, offset - start, v);
+	/* cont flags (ub8); below 12.2 they mark an array bind */
 	offset += get_ub8_custom(tvb, offset, &u);
+	if ( col && !fv_12_2 )
+		col->is_array = (u & TNS_BIND_ARRAY) != 0;
 	/* type OID (bytes_with_length, skip) */
 	offset += get_field_with_length(tvb, pinfo, offset, NULL);
 	/* version (ub4, skip) */
@@ -2720,8 +2805,10 @@ static bool tns_bfile_names(tvbuff_t *tvb, int offset, int len,
 /* Decode one row/bind value by its data type, and add it as a
  * "<prefix> N (TYPE)" item under `hf`. Ordinary values are a
  * DALC blob; ROWID / UROWID / LONG / LOB / JSON / VECTOR / object carry
- * their own framings. Returns the new offset. */
-static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint8_t dtype, uint8_t csform, int idx, int hf, const char *prefix)
+ * their own framings - though out of a fetch (fetch false: a bind or OUT
+ * value) a ROWID or UROWID is its string and a LONG has no trailing
+ * indicators. Returns the new offset. */
+static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint8_t dtype, uint8_t csform, bool fetch, int idx, int hf, const char *prefix)
 {
 	int v_start = offset, disp_start = offset, v = 0;
 	int is_null = 0, is_absent = 0;
@@ -2733,8 +2820,15 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 	int lob_chunk = 0, size_start = 0, size_len = 0, lchunk_start = 0, lchunk_len = 0;
 	int image_start = 0, image_len = 0, obj_toid_start = 0, obj_toid_len = 0;
 	proto_item *ti;
+	uint8_t frame = dtype;
 
-	switch ( dtype )
+	if ( !fetch && (dtype == TNS_DATATYPE_ROWID || dtype == TNS_DATATYPE_UROWID
+		|| dtype == TNS_DATATYPE_LONG) )
+		frame = TNS_DATATYPE_VARCHAR;
+	else if ( !fetch && dtype == TNS_DATATYPE_LONG_RAW )
+		frame = TNS_DATATYPE_RAW;
+
+	switch ( frame )
 	{
 		case TNS_DATATYPE_REFCURSOR:
 		{
@@ -2985,7 +3079,7 @@ static int dissect_tns_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree
 						rendered = vb[0] == 1 ? "TRUE" : "FALSE";
 					else if ( dtype == TNS_DATATYPE_BINARY_FLOAT || dtype == TNS_DATATYPE_BINARY_DOUBLE )
 						rendered = tns_format_binary_float(pinfo, vb, vlen);
-					else if ( dtype == TNS_DATATYPE_VARCHAR || dtype == TNS_DATATYPE_STRING || dtype == TNS_DATATYPE_CHAR )
+					else if ( frame == TNS_DATATYPE_VARCHAR || dtype == TNS_DATATYPE_STRING || dtype == TNS_DATATYPE_CHAR )
 						/* VARCHAR / STRING / CHAR: character data, in the
 						 * session charset (ordinarily UTF-8), or UTF-16BE
 						 * for the national charset form (NCHAR,
@@ -3147,11 +3241,47 @@ static tns_binds_t *tns_lookup_cursor_binds(packet_info *pinfo, uint32_t cursor)
 	return binds;
 }
 
+/* Whether a bind is LONG-class: a LONG or LONG RAW whose buffer exceeds
+ * the longest string a server takes in place. */
+static bool tns_is_long_bind(const tns_column_t *col)
+{
+	return (col->type == TNS_DATATYPE_LONG || col->type == TNS_DATATYPE_LONG_RAW)
+		&& col->data_len > 4000;
+}
+
+/* Decode one bind's value in a bind row or an OUT reply, framed as out of
+ * a fetch. An array bind's value is a ub4 element count and that many
+ * elements. In an OUT reply each value - each element of an array - is
+ * followed by its sb4 return code. Returns the new offset. */
+static int dissect_tns_bind_value(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, const tns_column_t *col, int idx, bool out)
+{
+	int num = 1, rc = 0, start;
+
+	if ( col->is_array )
+	{
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &num);
+		proto_tree_add_uint(tree, hf_tns_data_bind_num_elements, tvb, start, offset - start, num);
+	}
+	for ( int i = 0; i < num && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+	{
+		offset = dissect_tns_value(tvb, pinfo, tree, offset, col->type, col->csform, false, idx,
+			hf_tns_data_bind_value, "Bind");
+		if ( out )
+		{
+			start = offset;
+			offset += get_sb4_custom(tvb, offset, &rc);
+			proto_tree_add_int(tree, hf_tns_data_bind_retcode, tvb, start, offset - start, rc);
+		}
+	}
+	return offset;
+}
+
 /* Decode the TTI_RXD value rows of a bind section - one row per
  * execution - with each value typed by cols[]. A CLOB / BLOB bind
  * carries a temp-LOB locator form not unpacked here, so rows with one are
  * left alone. Returns the new offset. */
-static int dissect_tns_bind_rows(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, const tns_column_t *cols, uint32_t count)
+static int dissect_tns_bind_rows(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, const tns_column_t *cols, uint32_t count, bool plsql)
 {
 	int rownum = 0;
 
@@ -3169,10 +3299,17 @@ static int dissect_tns_bind_rows(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 		offset += 1; /* TTI_RXD token */
 		row_tree = proto_tree_add_subtree_format(tree, tvb, offset, -1,
 			ett_tns_bind_row, &row_item, "Row %d", ++rownum);
-		for ( uint32_t i = 0; i < count
-			&& tvb_reported_length_remaining(tvb, offset) > 0; i++ )
-			offset = dissect_tns_value(tvb, pinfo, row_tree, offset,
-				cols[i].type, cols[i].csform, i + 1, hf_tns_data_bind_value, "Bind");
+		/* In a SQL statement a LONG-class value - one too long for a
+		 * string, sent as LONG or LONG RAW - rides after all the others;
+		 * a PL/SQL block takes its values in bind order. */
+		for ( int pass = 0; pass < 2; pass++ )
+			for ( uint32_t i = 0; i < count
+				&& tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+			{
+				bool late = !plsql && tns_is_long_bind(&cols[i]);
+				if ( late == (pass == 1) )
+					offset = dissect_tns_bind_value(tvb, pinfo, row_tree, offset, &cols[i], i + 1, false);
+			}
 		proto_item_set_len(row_item, offset - r_start);
 	}
 	return offset;
@@ -3314,6 +3451,353 @@ static int dissect_tns_call_token(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
 		return offset;
 	offset += get_ub8_custom(tvb, offset, &token);
 	proto_tree_add_uint64(tree, hf_tns_data_token, tvb, start, offset - start, token);
+	return offset;
+}
+
+/* The message properties of an Advanced Queuing message, as the enqueue
+ * request writes them and a dequeue reply returns them: the priority,
+ * delay and expiration, the correlation, the number of delivery
+ * attempts, the exception queue, the state, the enqueue time and
+ * transaction id, extensions as key/value pairs, and flags.
+ * Returns the new offset. */
+static int dissect_tns_aq_msg_props(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, bool reply)
+{
+	proto_tree *props_tree;
+	proto_item *props_item;
+	const char *text = NULL;
+	int start, props_start = offset, v = 0, num = 0;
+
+	props_tree = proto_tree_add_subtree(tree, tvb, offset, -1, ett_tns_aq_props, &props_item,
+		"Message Properties");
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(props_tree, hf_tns_data_aq_priority, tvb, start, offset - start, v);
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(props_tree, hf_tns_data_aq_delay, tvb, start, offset - start, v);
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_int(props_tree, hf_tns_data_aq_expiration, tvb, start, offset - start, v);
+	start = offset;
+	offset += get_field_with_length(tvb, pinfo, offset, &text);
+	if ( text )
+		proto_tree_add_string(props_tree, hf_tns_data_aq_correlation, tvb, start, offset - start, text);
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(props_tree, hf_tns_data_aq_attempts, tvb, start, offset - start, v);
+	start = offset;
+	offset += get_field_with_length(tvb, pinfo, offset, &text);
+	if ( text )
+		proto_tree_add_string(props_tree, hf_tns_data_aq_exception_queue, tvb, start, offset - start, text);
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(props_tree, hf_tns_data_aq_state, tvb, start, offset - start, v);
+	/* the enqueue time: a length and, in a reply, a date */
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	if ( reply && v > 0 )
+	{
+		int date_start = offset;
+		offset += get_dalc_custom(tvb, pinfo, offset, NULL);
+		if ( offset - date_start > 1 )
+		{
+			const uint8_t *d = tvb_get_ptr(tvb, date_start + 1, offset - date_start - 1);
+			const char *when = tns_format_date(pinfo, d, offset - date_start - 1);
+			if ( when )
+				proto_tree_add_string(props_tree, hf_tns_data_aq_enq_time, tvb, start, offset - start, when);
+		}
+	}
+	offset += get_field_with_length(tvb, pinfo, offset, NULL);   /* transaction id */
+	offset += get_sb4_custom(tvb, offset, &num);                 /* extensions */
+	if ( num > 0 )
+	{
+		offset += 1;
+		offset = dissect_tns_kv_pairs(tvb, pinfo, props_tree, offset, num);
+	}
+	offset += get_sb4_custom(tvb, offset, &v);                   /* user properties */
+	offset += get_sb4_custom(tvb, offset, &v);                   /* change SCN */
+	offset += get_sb4_custom(tvb, offset, &v);                   /* dependency SCN */
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &v);
+	proto_tree_add_uint(props_tree, hf_tns_data_aq_delivery_flags, tvb, start, offset - start, v);
+	if ( tns_field_version(pinfo) >= TNS_FV_21_1 )
+		offset += get_sb4_custom(tvb, offset, &v);               /* shard */
+	proto_item_set_len(props_item, offset - props_start);
+	return offset;
+}
+
+/* Decode an Advanced Queuing enqueue (121) or dequeue (122) call. Each
+ * opens with a header of pointers and lengths - the queue name, the
+ * options, the payload type's OID and, for an enqueue, the message
+ * properties - and ends with the values those lengths describe.
+ * Returns the new offset. */
+static int dissect_tns_aq_call(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, uint32_t func)
+{
+	const char *text = NULL;
+	int start, v = 0, qname_len = 0, consumer_len = 0, correlation_len = 0;
+	int condition_len = 0, toid_len = 0, raw_len = 0, num_recipients = 0;
+	uint8_t msgid_ptr = 0, toid_ptr, raw_ptr = 0;
+	unsigned fv = tns_field_version(pinfo);
+
+	offset += 1;                                        /* queue name pointer */
+	offset += get_sb4_custom(tvb, offset, &qname_len);
+	if ( func == TTI_AQ_ENQUEUE )
+	{
+		offset = dissect_tns_aq_msg_props(tvb, pinfo, tree, offset, false);
+		offset += 1;                                    /* recipients pointer */
+		offset += get_sb4_custom(tvb, offset, &num_recipients);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_visibility, tvb, start, offset - start, v);
+		offset += 1;                                    /* relative message id */
+		offset += get_sb4_custom(tvb, offset, &v);
+		offset += get_sb4_custom(tvb, offset, &v);      /* sequence deviation */
+		toid_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &toid_len);
+		offset += get_sb4_custom(tvb, offset, &v);      /* message version */
+		offset += 1;                                    /* payload pointer */
+		raw_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &raw_len);
+		offset += 1;                                    /* return message id */
+		offset += get_sb4_custom(tvb, offset, &v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_flags, tvb, start, offset - start, v);
+		for ( int i = 0; i < 2; i++ )                   /* two extension lists */
+		{
+			offset += 1;
+			offset += get_sb4_custom(tvb, offset, &v);
+		}
+		for ( int i = 0; i < 2; i++ )                   /* sequence numbers */
+		{
+			offset += 1;
+			offset += get_sb4_custom(tvb, offset, &v);
+		}
+		offset += 1;                                    /* output ack length */
+		for ( int i = 0; i < 3; i++ )                   /* correlation, sender name and address */
+		{
+			offset += 1;
+			offset += get_sb4_custom(tvb, offset, &v);
+		}
+		offset += 2;                                    /* sender charsets */
+		if ( fv >= TNS_FV_20_1 )
+			offset += 1;                                /* JSON payload pointer */
+	}
+	else
+	{
+		offset += 4;                                    /* message properties and
+								 * recipient list pointers */
+		offset += 1;                                    /* consumer name pointer */
+		offset += get_sb4_custom(tvb, offset, &consumer_len);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_deq_mode, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_navigation, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_visibility, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_int(tree, hf_tns_data_aq_wait, tvb, start, offset - start, v);
+		msgid_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &v);
+		offset += 1;                                    /* correlation pointer */
+		offset += get_sb4_custom(tvb, offset, &correlation_len);
+		toid_ptr = tvb_get_uint8(tvb, offset);
+		offset += 1;
+		offset += get_sb4_custom(tvb, offset, &toid_len);
+		offset += get_sb4_custom(tvb, offset, &v);      /* message version */
+		offset += 2;                                    /* payload, message id */
+		offset += get_sb4_custom(tvb, offset, &v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_flags, tvb, start, offset - start, v);
+		offset += 1;                                    /* condition pointer */
+		offset += get_sb4_custom(tvb, offset, &condition_len);
+		offset += 1;                                    /* extensions pointer */
+		offset += get_sb4_custom(tvb, offset, &v);
+		if ( fv >= TNS_FV_20_1 )
+			offset += 1;                                /* JSON payload pointer */
+		if ( fv >= TNS_FV_21_1 )
+			offset += get_sb4_custom(tvb, offset, &v);  /* shard id */
+	}
+
+	/* the values the header's lengths describe */
+	if ( qname_len > 0 )
+	{
+		start = offset;
+		offset += get_dalc_custom(tvb, pinfo, offset, &text);
+		if ( text )
+		{
+			proto_tree_add_string(tree, hf_tns_data_aq_queue, tvb, start, offset - start, text);
+			col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", text);
+		}
+	}
+	if ( func == TTI_AQ_ENQUEUE && num_recipients > 0 )
+		offset = dissect_tns_kv_pairs(tvb, pinfo, tree, offset, num_recipients);
+	if ( consumer_len > 0 )
+	{
+		start = offset;
+		offset += get_dalc_custom(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_consumer, tvb, start, offset - start, text);
+	}
+	if ( msgid_ptr )
+	{
+		proto_tree_add_item(tree, hf_tns_data_aq_msgid, tvb, offset, TNS_AQ_MSGID_LEN, ENC_NA);
+		offset += TNS_AQ_MSGID_LEN;
+	}
+	if ( correlation_len > 0 )
+	{
+		start = offset;
+		offset += get_dalc_custom(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_correlation, tvb, start, offset - start, text);
+	}
+	if ( toid_ptr && toid_len > 0 )
+	{
+		proto_tree_add_item(tree, hf_tns_data_aq_toid, tvb, offset, toid_len, ENC_NA);
+		offset += toid_len;
+	}
+	if ( condition_len > 0 )
+	{
+		start = offset;
+		offset += get_dalc_custom(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_condition, tvb, start, offset - start, text);
+	}
+	if ( func == TTI_AQ_ENQUEUE )
+	{
+		/* the payload: raw bytes of the length the header gave, else an
+		 * object or a JSON image in the object framing */
+		if ( raw_ptr && raw_len > 0 )
+		{
+			proto_tree_add_item(tree, hf_tns_data_aq_payload, tvb, offset, raw_len, ENC_NA);
+			offset += raw_len;
+		}
+		else if ( tvb_reported_length_remaining(tvb, offset) > 0 )
+			offset = dissect_tns_value(tvb, pinfo, tree, offset, TNS_DATATYPE_ADT, 0, false, 1,
+				hf_tns_data_aq_payload, "Payload");
+	}
+	return offset;
+}
+
+/* Decode an array Advanced Queuing call (145), which enqueues or
+ * dequeues several messages at once. Its header says which operation and
+ * how many messages; an array enqueue then carries a row header with the
+ * queue name, the payload type's OID and the flags, and one row per
+ * message, closing with a status byte, while an array dequeue repeats
+ * the queue name and the dequeue options for each message it asks for.
+ * Returns the new offset. */
+static int dissect_tns_aq_array_call(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset)
+{
+	const char *text = NULL;
+	int start, v = 0, op = 0, num_iters = 0;
+	bool enqueue;
+
+	offset += 1;                                        /* input parameters */
+	offset += get_sb4_custom(tvb, offset, &num_iters);
+	offset += get_sb4_custom(tvb, offset, &v);          /* array flags */
+	offset += 2;                                        /* output parameters */
+	start = offset;
+	offset += get_sb4_custom(tvb, offset, &op);
+	proto_tree_add_uint(tree, hf_tns_data_aq_array_op, tvb, start, offset - start, op);
+	enqueue = op == TNS_AQ_ARRAY_ENQ;
+	offset += 1;                                        /* iterations pointer */
+	if ( tns_field_version(pinfo) >= TNS_FV_21_1 )
+		offset += get_sb4_custom(tvb, offset, &v);      /* shard id */
+	if ( enqueue )
+		offset += get_sb4_custom(tvb, offset, &num_iters);
+	proto_tree_add_uint(tree, hf_tns_data_aq_num_messages, tvb, offset, 0, num_iters);
+
+	if ( enqueue )
+	{
+		offset += get_sb4_custom(tvb, offset, &v);      /* relative message id */
+		offset += 1;                                    /* row header */
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &text);
+		if ( text )
+		{
+			proto_tree_add_string(tree, hf_tns_data_aq_queue, tvb, start, offset - start, text);
+			col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", text);
+		}
+		proto_tree_add_item(tree, hf_tns_data_aq_toid, tvb, offset, TNS_AQ_TOID_LEN, ENC_NA);
+		offset += TNS_AQ_TOID_LEN;
+		offset += get_sb4_custom(tvb, offset, &v);      /* message version */
+		offset += get_sb4_custom(tvb, offset, &v);      /* flags */
+		for ( int i = 0; i < num_iters && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+		{
+			int num_recipients = 0, payload_len = 0;
+			offset += 1;                                /* row data */
+			offset += get_sb4_custom(tvb, offset, &v);  /* flags */
+			offset = dissect_tns_aq_msg_props(tvb, pinfo, tree, offset, false);
+			offset += get_sb4_custom(tvb, offset, &num_recipients);
+			if ( num_recipients > 0 )
+				offset = dissect_tns_kv_pairs(tvb, pinfo, tree, offset, num_recipients);
+			offset += get_sb4_custom(tvb, offset, &v);  /* visibility */
+			offset += get_sb4_custom(tvb, offset, &v);  /* relative message id */
+			offset += get_sb4_custom(tvb, offset, &v);  /* sequence deviation */
+			offset += get_sb4_custom(tvb, offset, &payload_len);
+			if ( payload_len > 0 )
+			{
+				proto_tree_add_item(tree, hf_tns_data_aq_payload, tvb, offset, payload_len, ENC_NA);
+				offset += payload_len;
+			}
+		}
+		offset += 1;                                    /* the closing status */
+		return offset;
+	}
+
+	for ( int i = 0; i < num_iters && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+	{
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &text);
+		if ( text && i == 0 )
+		{
+			proto_tree_add_string(tree, hf_tns_data_aq_queue, tvb, start, offset - start, text);
+			col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", text);
+		}
+		offset = dissect_tns_aq_msg_props(tvb, pinfo, tree, offset, false);
+		offset += get_sb4_custom(tvb, offset, &v);      /* recipients */
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_consumer, tvb, start, offset - start, text);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_deq_mode, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_navigation, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_uint(tree, hf_tns_data_aq_visibility, tvb, start, offset - start, v);
+		start = offset;
+		offset += get_sb4_custom(tvb, offset, &v);
+		proto_tree_add_int(tree, hf_tns_data_aq_wait, tvb, start, offset - start, v);
+		offset += get_field_with_length(tvb, pinfo, offset, NULL);  /* message id */
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_correlation, tvb, start, offset - start, text);
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, &text);
+		if ( text )
+			proto_tree_add_string(tree, hf_tns_data_aq_condition, tvb, start, offset - start, text);
+		offset += get_sb4_custom(tvb, offset, &v);      /* extensions */
+		offset += get_sb4_custom(tvb, offset, &v);      /* relative message id */
+		offset += get_sb4_custom(tvb, offset, &v);      /* sequence deviation */
+		start = offset;
+		offset += get_field_with_length(tvb, pinfo, offset, NULL);
+		if ( offset - start > 2 )
+			proto_tree_add_item(tree, hf_tns_data_aq_toid, tvb, offset - TNS_AQ_TOID_LEN,
+				TNS_AQ_TOID_LEN, ENC_NA);
+	}
 	return offset;
 }
 
@@ -4944,27 +5428,17 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				 * no trailing indicators. */
 				proto_tree *ob_tree;
 				proto_item *ob_item;
-				int ob_start = offset, rc = 0, start;
+				int ob_start = offset;
 
 				ob_tree = proto_tree_add_subtree(data_tree, tvb, offset, -1,
 					ett_tns_out_binds, &ob_item, "Out Binds");
 				for ( uint32_t i = 0; i < ctx->out_call->num_binds
 					&& tvb_reported_length_remaining(tvb, offset) > 0; i++ )
 				{
-					uint8_t btype = ctx->out_call->binds[i].type;
 					if ( ctx->bind_dirs[i] == TNS_BIND_DIR_INPUT )
 						continue;
-					if ( btype == TNS_DATATYPE_ROWID || btype == TNS_DATATYPE_UROWID
-						|| btype == TNS_DATATYPE_LONG )
-						btype = TNS_DATATYPE_VARCHAR;
-					else if ( btype == TNS_DATATYPE_LONG_RAW )
-						btype = TNS_DATATYPE_RAW;
-					offset = dissect_tns_value(tvb, pinfo, ob_tree, offset, btype,
-						ctx->out_call->binds[i].csform, i + 1,
-						hf_tns_data_bind_value, "Bind");
-					start = offset;
-					offset += get_sb4_custom(tvb, offset, &rc);
-					proto_tree_add_int(ob_tree, hf_tns_data_bind_retcode, tvb, start, offset - start, rc);
+					offset = dissect_tns_bind_value(tvb, pinfo, ob_tree, offset,
+						&ctx->out_call->binds[i], i + 1, true);
 				}
 				proto_item_set_len(ob_item, offset - ob_start);
 				ctx->bind_dirs = NULL;
@@ -4993,7 +5467,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 					for ( int j = 0; j < rows && tvb_reported_length_remaining(tvb, offset) > 0; j++ )
 					{
 						offset = dissect_tns_value(tvb, pinfo, rv_tree, offset, rcall->binds[i].type,
-							rcall->binds[i].csform, i + 1, hf_tns_data_bind_value, "Bind");
+							rcall->binds[i].csform, false, i + 1, hf_tns_data_bind_value, "Bind");
 						start = offset;
 						offset += get_sb4_custom(tvb, offset, &rc);
 						proto_tree_add_int(rv_tree, hf_tns_data_bind_retcode, tvb, start, offset - start, rc);
@@ -5053,7 +5527,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 							continue;
 						}
 						offset = dissect_tns_value(tvb, pinfo, row_tree, offset,
-							col->type, col->csform, c + 1, hf_tns_data_col_value, "Column");
+							col->type, col->csform, true, c + 1, hf_tns_data_col_value, "Column");
 					}
 					proto_item_set_len(row_item, offset - r_start);
 					/* A bit vector covers one row only. */
@@ -5211,6 +5685,10 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				proto_tree_add_bitmask_value(data_tree, tvb, start, hf_tns_data_release_mode,
 					ett_tns_release_mode, tns_release_modes, (uint64_t)(uint32_t)v);
 			}
+			else if ( oci_id == TTI_AQ_ARRAY )
+				offset = dissect_tns_aq_array_call(tvb, pinfo, data_tree, offset);
+			else if ( oci_id == TTI_AQ_ENQUEUE || oci_id == TTI_AQ_DEQUEUE )
+				offset = dissect_tns_aq_call(tvb, pinfo, data_tree, offset, oci_id);
 			else if ( oci_id == TTI_TPC_TXN_SWITCH || oci_id == TTI_TPC_TXN_CHANGE_STATE )
 				offset = dissect_tns_tpc_call(tvb, pinfo, data_tree, offset, oci_id);
 			else if ( oci_id == TTI_REEXECUTE || oci_id == TTI_REEXECUTE_AND_FETCH )
@@ -5252,7 +5730,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 						ett_tns_binds, &binds_item, "Binds");
 					/* RETURNING ... INTO binds send no value */
 					offset = dissect_tns_bind_rows(tvb, pinfo, binds_tree, offset, binds->cols,
-						binds->count - binds->num_return);
+						binds->count - binds->num_return, binds->plsql);
 					proto_item_set_len(binds_item, offset - binds_start);
 				}
 				if ( call && binds )
@@ -5551,7 +6029,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 						binds_tree = proto_tree_add_subtree(data_tree, tvb, offset, -1,
 							ett_tns_binds, &binds_item, "Binds");
 						offset = dissect_tns_bind_rows(tvb, pinfo, binds_tree, offset, binds->cols,
-							binds->count - binds->num_return);
+							binds->count - binds->num_return, binds->plsql);
 						proto_item_set_len(binds_item, offset - binds_start);
 					}
 				}
@@ -5603,6 +6081,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 						tns_binds_t *binds = wmem_new0(wmem_file_scope(), tns_binds_t);
 						binds->count = bind_count;
 						binds->num_return = num_return;
+						binds->plsql = !(options & TNS_EXEC_OPTION_NOT_PLSQL);
 						binds->cols = bcols;
 						if ( cursor != 0 )
 							wmem_map_insert(tns_info->cursor_binds, GUINT_TO_POINTER(cursor), binds);
@@ -5613,7 +6092,8 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 					/* Value rows: a TTI_RXD token then one DALC value per bind
 					 * column (an ordinary execute sends one row, executemany
 					 * sends N), decoded and rendered by the bind's type. */
-					offset = dissect_tns_bind_rows(tvb, pinfo, binds_tree, offset, bcols, bind_count - num_return);
+					offset = dissect_tns_bind_rows(tvb, pinfo, binds_tree, offset, bcols, bind_count - num_return,
+						!(options & TNS_EXEC_OPTION_NOT_PLSQL));
 					proto_item_set_len(binds_item, offset - binds_start);
 				}
 
@@ -5982,6 +6462,70 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 				{
 					offset = dissect_tns_return_params(tvb, pinfo, data_tree, offset,
 						(call->exec_flags & TNS_EXEC_FLAGS_DML_ROWCOUNTS) != 0);
+					ctx->walk = true;
+				}
+				else if ( call && call->func == TTI_AQ_ENQUEUE )
+				{
+					/* the id the queue gave the message */
+					int ext_len = 0;
+					proto_tree_add_item(data_tree, hf_tns_data_aq_msgid, tvb, offset, TNS_AQ_MSGID_LEN, ENC_NA);
+					offset += TNS_AQ_MSGID_LEN;
+					offset += get_sb4_custom(tvb, offset, &ext_len); /* extensions */
+					ctx->walk = true;
+				}
+				else if ( call && call->func == TTI_AQ_ARRAY )
+				{
+					/* one message per iteration: its properties when the
+					 * length before them is not zero, the recipients, the
+					 * payload, the message ids and the extensions */
+					int num_iters = 0, len = 0, v = 0, msg_start;
+
+					offset += get_sb4_custom(tvb, offset, &num_iters);
+					for ( int i = 0; i < num_iters && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+					{
+						offset += get_sb4_custom(tvb, offset, &len);
+						if ( len > 0 )
+						{
+							offset += 1;
+							offset = dissect_tns_aq_msg_props(tvb, pinfo, data_tree, offset, true);
+						}
+						offset += get_sb4_custom(tvb, offset, &v);      /* recipients */
+						offset += get_sb4_custom(tvb, offset, &len);
+						if ( len > 0 )
+							offset = dissect_tns_value(tvb, pinfo, data_tree, offset, TNS_DATATYPE_ADT,
+								0, false, i + 1, hf_tns_data_aq_payload, "Payload");
+						/* the ids of this iteration's messages, one after
+						 * another */
+						offset += get_sb4_custom(tvb, offset, &len);
+						if ( len > 0 )
+						{
+							msg_start = offset;
+							offset += get_dalc_custom(tvb, pinfo, offset, NULL);
+							if ( offset - msg_start > 1 )
+								proto_tree_add_item(data_tree, hf_tns_data_aq_msgid, tvb,
+									msg_start + 1, offset - msg_start - 1, ENC_NA);
+						}
+						offset += get_sb4_custom(tvb, offset, &v);      /* extensions */
+						offset += get_sb4_custom(tvb, offset, &v);      /* output ack */
+					}
+					ctx->walk = true;
+				}
+				else if ( call && call->func == TTI_AQ_DEQUEUE )
+				{
+					/* a length, and when it is not zero the message: its
+					 * properties, recipients, payload and id */
+					int len = 0;
+					offset += get_sb4_custom(tvb, offset, &len);
+					if ( len > 0 )
+					{
+						int v = 0;
+						offset = dissect_tns_aq_msg_props(tvb, pinfo, data_tree, offset, true);
+						offset += get_sb4_custom(tvb, offset, &v);  /* recipients */
+						offset = dissect_tns_value(tvb, pinfo, data_tree, offset, TNS_DATATYPE_ADT, 0,
+							false, 1, hf_tns_data_aq_payload, "Payload");
+						proto_tree_add_item(data_tree, hf_tns_data_aq_msgid, tvb, offset, TNS_AQ_MSGID_LEN, ENC_NA);
+						offset += TNS_AQ_MSGID_LEN;
+					}
 					ctx->walk = true;
 				}
 				else if ( call && call->func == TTI_TPC_TXN_SWITCH )
@@ -7311,6 +7855,12 @@ void proto_register_tns(void)
 		{ &hf_tns_data_col_csform, {
 			"Charset Form", "tns.data_col.csform", FT_UINT8, BASE_DEC,
 			VALS(tns_csform_vals), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_col_max_elements, {
+			"Max Array Elements", "tns.data_col.max_elements", FT_UINT32, BASE_DEC,
+			NULL, 0x0, "Capacity of an array bind", HFILL }},
+		{ &hf_tns_data_bind_num_elements, {
+			"Array Elements", "tns.data_bind.num_elements", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_col_max_size, {
 			"Max Size", "tns.data_col.max_size", FT_UINT32, BASE_DEC,
 			NULL, 0x0, NULL, HFILL }},
@@ -7562,6 +8112,72 @@ void proto_register_tns(void)
 		{ &hf_tns_data_release_mode_deauth, {
 			"Deauthenticate", "tns.data_release.mode.deauthenticate", FT_BOOLEAN, 32,
 			NULL, 0x00000002, "The session is being closed, not just returned", HFILL }},
+		{ &hf_tns_data_aq_queue, {
+			"Queue", "tns.data_aq.queue", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_consumer, {
+			"Consumer", "tns.data_aq.consumer", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_correlation, {
+			"Correlation", "tns.data_aq.correlation", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_exception_queue, {
+			"Exception Queue", "tns.data_aq.exception_queue", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_condition, {
+			"Condition", "tns.data_aq.condition", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_msgid, {
+			"Message Id", "tns.data_aq.msgid", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_toid, {
+			"Payload Type OID", "tns.data_aq.toid", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_payload, {
+			"Payload", "tns.data_aq.payload", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_priority, {
+			"Priority", "tns.data_aq.priority", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_delay, {
+			"Delay", "tns.data_aq.delay", FT_UINT32, BASE_DEC,
+			NULL, 0x0, "Seconds before the message becomes available", HFILL }},
+		{ &hf_tns_data_aq_expiration, {
+			"Expiration", "tns.data_aq.expiration", FT_INT32, BASE_DEC,
+			NULL, 0x0, "Seconds the message stays available, -1 for ever", HFILL }},
+		{ &hf_tns_data_aq_attempts, {
+			"Attempts", "tns.data_aq.attempts", FT_UINT32, BASE_DEC,
+			NULL, 0x0, "Delivery attempts so far", HFILL }},
+		{ &hf_tns_data_aq_state, {
+			"State", "tns.data_aq.state", FT_UINT32, BASE_DEC,
+			VALS(tns_aq_states), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_enq_time, {
+			"Enqueue Time", "tns.data_aq.enq_time", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_visibility, {
+			"Visibility", "tns.data_aq.visibility", FT_UINT32, BASE_DEC,
+			VALS(tns_aq_visibility), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_deq_mode, {
+			"Dequeue Mode", "tns.data_aq.deq_mode", FT_UINT32, BASE_DEC,
+			VALS(tns_aq_deq_modes), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_navigation, {
+			"Navigation", "tns.data_aq.navigation", FT_UINT32, BASE_DEC,
+			VALS(tns_aq_navigation), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_wait, {
+			"Wait", "tns.data_aq.wait", FT_INT32, BASE_DEC,
+			NULL, 0x0, "Seconds to wait for a message; -1 waits for ever", HFILL }},
+		{ &hf_tns_data_aq_flags, {
+			"Flags", "tns.data_aq.flags", FT_UINT32, BASE_HEX,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_delivery_flags, {
+			"Delivery Flags", "tns.data_aq.delivery_flags", FT_UINT32, BASE_HEX,
+			NULL, 0x0, "0x02 marks a buffered message", HFILL }},
+		{ &hf_tns_data_aq_array_op, {
+			"Array Operation", "tns.data_aq.array_op", FT_UINT32, BASE_DEC,
+			VALS(tns_aq_array_ops), 0x0, NULL, HFILL }},
+		{ &hf_tns_data_aq_num_messages, {
+			"Messages", "tns.data_aq.num_messages", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
 		{ &hf_tns_data_tpc_switch_op, {
 			"Operation", "tns.data_tpc.switch_op", FT_UINT32, BASE_HEX,
 			VALS(tns_tpc_switch_ops), 0x0, NULL, HFILL }},
@@ -7673,6 +8289,7 @@ void proto_register_tns(void)
 		&ett_tns_sns_service,
 		&ett_tns_sns_subpacket,
 		&ett_tns_release_mode,
+		&ett_tns_aq_props,
 		&ett_tns_rpa,
 		&ett_tns_kv,
 		&ett_tns_iov,

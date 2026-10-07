@@ -2895,6 +2895,100 @@ class TestDissectTns:
         rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
         assert rows == [['2', '15', '']], rows
 
+    def test_tns_array_binds(self, cmd_tshark, capture_file, test_env):
+        '''An associative-array bind's value is an element count and the
+        elements, in the request and in the OUT reply alike.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_array_binds.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_bind.num_elements',
+            '-T', 'fields',
+            '-e', 'tns.data_col.max_elements',
+            '-e', 'tns.data_bind.num_elements',
+            '-e', 'tns.data_bind.value',
+            '-e', 'tns.data_oer.err_code',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['10', '3', 'c102,c103,c104', '', ''],
+            ['', '3', 'c103,c105,c107', '0', ''],
+        ], rows
+
+    def test_tns_bind_framing(self, cmd_tshark, capture_file, test_env):
+        '''A bind value is framed as a client sends it, not as a fetched
+        column: a LONG has no trailing indicators and a ROWID is a string.
+        The NUMBER after each decodes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_bind_framing.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Bind 2 (NUMBER): 8' in stdout, stdout
+        assert 'Bind 1 (RID): AAAK6JAAEAAACGPAAA' in stdout, stdout
+        assert 'Bind 2 (NUMBER): 9' in stdout, stdout
+        assert 'Malformed' not in stdout, stdout
+
+    def test_tns_long_bind_order(self, cmd_tshark, capture_file, test_env):
+        '''In a SQL statement a LONG-class bind value comes after all the
+        others; a PL/SQL block takes its values in bind order.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_long_bind.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Bind 2 (NUMBER): 7' in stdout, stdout
+        assert 'Bind 2 (NUMBER): 8' in stdout, stdout
+        assert 'Malformed' not in stdout, stdout
+
+    def test_tns_aq(self, cmd_tshark, capture_file, test_env):
+        '''Advanced Queuing: an enqueue names its queue, correlation and
+        payload, and is answered with the message id; a dequeue names its
+        consumer, mode and condition, and is answered with the message.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_aq.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_aq.queue || tns.data_aq.msgid',
+            '-T', 'fields',
+            '-e', 'tns.data_aq.queue',
+            '-e', 'tns.data_aq.correlation',
+            '-e', 'tns.data_aq.consumer',
+            '-e', 'tns.data_aq.condition',
+            '-e', 'tns.data_aq.msgid',
+            '-e', 'tns.data_aq.enq_time',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert len(rows) == 4, rows
+        assert rows[0][:2] == ['MYQ', 'corr-1'] and rows[0][6] == '', rows[0]
+        assert rows[1][4] == '202122232425262728292a2b2c2d2e2f', rows[1]
+        assert rows[2][:4] == ['MYQ', '', 'SUB1', 'priority = 1'], rows[2]
+        assert rows[3][5] == '2024-03-04 05:07:09' and rows[3][6] == '', rows[3]
+
+    def test_tns_aq_array(self, cmd_tshark, capture_file, test_env):
+        '''The array queuing call enqueues or dequeues several messages at
+        once: a row per message on the way out, the queue's options
+        repeated per message on the way in, and the ids on the way back.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_aq_array.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_aq.array_op || tns.data_aq.msgid',
+            '-T', 'fields',
+            '-e', 'tns.data_aq.array_op',
+            '-e', 'tns.data_aq.num_messages',
+            '-e', 'tns.data_aq.queue',
+            '-e', 'tns.data_aq.correlation',
+            '-e', 'tns.data_aq.consumer',
+            '-e', 'tns.data_aq.msgid',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert len(rows) == 4, rows
+        assert rows[0][:4] == ['1', '2', 'MYQ', 'corr-1,corr-2'], rows[0]
+        assert rows[1][5].count(',') == 1, rows[1]
+        assert rows[2][:3] == ['2', '2', 'MYQ'] and rows[2][4] == 'SUB1,SUB1', rows[2]
+        assert all(r[6] == '' for r in rows), rows
+
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
         if not features.have_zstd:
