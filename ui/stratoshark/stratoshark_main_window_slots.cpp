@@ -93,6 +93,7 @@ DIAG_ON(frame-larger-than=)
 #endif
 #include <ui/qt/utils/color_utils.h>
 #include "coloring_rules_dialog.h"
+#include "tagging_rules_dialog.h"
 #include "conversation_dialog.h"
 #include "conversation_colorize_action.h"
 #include "conversation_hash_tables_dialog.h"
@@ -1107,6 +1108,7 @@ void StratosharkMainWindow::setMenusForSelectedPacket()
     main_ui_->actionCopyListAsYAML->setEnabled(rows.count() > 0);
 
     main_ui_->actionEditMarkSelected->setEnabled(frame_selected || multi_selection);
+    packet_list_->updatePinActions(main_ui_->actionViewPinSelectedRows, main_ui_->actionViewUnpinAllRows);
     main_ui_->actionEditMarkAllDisplayed->setEnabled(have_frames);
     /* Unlike un-ignore, do not allow unmark of all frames when no frames are displayed  */
     main_ui_->actionEditUnmarkAllDisplayed->setEnabled(have_marked);
@@ -2210,6 +2212,9 @@ void StratosharkMainWindow::connectViewMenuActions()
     connect(main_ui_->actionViewColoringRules, &QAction::triggered, this,
             [this]() { showColoringRulesDialog(); });
 
+    connect(main_ui_->actionViewTaggingRules, &QAction::triggered, this,
+            [this]() { showTaggingRulesDialog(); });
+
     connect(main_ui_->actionViewColorizeResetColorization, &QAction::triggered, this, [this]() {
         char *err_msg = NULL;
         if (!color_filters_reset_tmp(&err_msg)) {
@@ -2241,6 +2246,11 @@ void StratosharkMainWindow::connectViewMenuActions()
             recent_set_column_width(col, packet_list_->columnWidth(col));
         }
     });
+
+    connect(main_ui_->actionViewPinSelectedRows, &QAction::triggered,
+            packet_list_, &PacketList::togglePinSelectedRows);
+    connect(main_ui_->actionViewUnpinAllRows, &QAction::triggered,
+            packet_list_, &PacketList::unpinAllRows);
 
     connect(main_ui_->actionViewInternalsConversationHashTables, &QAction::triggered, this, [this]() {
         ConversationHashTablesDialog *conversation_hash_tables_dlg = new ConversationHashTablesDialog(this);
@@ -2438,6 +2448,17 @@ void StratosharkMainWindow::showColoringRulesDialog()
     coloring_rules_dialog->setWindowModality(Qt::ApplicationModal);
     coloring_rules_dialog->setAttribute(Qt::WA_DeleteOnClose);
     coloring_rules_dialog->show();
+}
+
+void StratosharkMainWindow::showTaggingRulesDialog()
+{
+    TaggingRulesDialog *tagging_rules_dialog = new TaggingRulesDialog(this);
+    PacketList *pl = packet_list_;
+    tagging_rules_dialog->setColoringAcceptedCallback([pl]() { pl->recolorPackets(); });
+
+    tagging_rules_dialog->setWindowModality(Qt::ApplicationModal);
+    tagging_rules_dialog->setAttribute(Qt::WA_DeleteOnClose);
+    tagging_rules_dialog->show();
 }
 
 // actionViewColorizeConversation1 - 10
