@@ -1411,7 +1411,7 @@ class TestDissectTns:
             '-e', 'tns.data_setdt.caphdr.version',
             '-e', 'tns.data_setdt.override.client',
         ), encoding='utf-8', env=test_env)
-        # data_id = 2 (Set Datatypes); charset = 871 (US7ASCII) both ways;
+        # data_id = 2 (Set Datatypes); charset = 871 (UTF8) both ways;
         # version triple in capability header = 0x260601 (38, 6, 1);
         # override client list ends with the 0 terminator and includes
         # both long entries (e.g. 91) and short entries (e.g. 13).
@@ -2988,6 +2988,58 @@ class TestDissectTns:
         assert rows[1][5].count(',') == 1, rows[1]
         assert rows[2][:3] == ['2', '2', 'MYQ'] and rows[2][4] == 'SUB1,SUB1', rows[2]
         assert all(r[6] == '' for r in rows), rows
+
+    def test_tns_dty_12c(self, cmd_tshark, capture_file, test_env):
+        '''A 12c+ client's TTI_DTY: capability arrays of their own lengths,
+        and a type table of big-endian 16-bit entries.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_dty_12c.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_setdt.field_version',
+            '-e', 'tns.data_setdt.type',
+            '-e', 'tns.data_setdt.rep',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [['24', '1,2,112', '1,10,1', '']], rows
+
+    def test_tns_dty_reply(self, cmd_tshark, capture_file, test_env):
+        '''A 12c+ server's TTI_DTY reply lists 16-bit type pairs up to a 0
+        type; the message after it is decoded too.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_dty_reply.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tcp.srcport == 1521',
+            '-T', 'fields',
+            '-e', 'tns.data_setdt.type',
+            '-e', 'tns.data_setdt.conv_type',
+            '-e', 'tns.data_sta.call_status',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.strip().splitlines()]
+        assert rows == [['1,2', '1,0', '0x00000001']], rows
+
+    def test_tns_fast_auth(self, cmd_tshark, capture_file, test_env):
+        '''A 23ai client bundles the protocol, data types and session key
+        messages into one fast-authentication packet; the call inside it
+        carries no token, though the connection's field version is 24 and
+        the execute after it does.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_fast_auth.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_setp_req.cli_plat',
+            '-e', 'tns.data_setdt.field_version',
+            '-e', 'tns.data_auth.user',
+            '-e', 'tns.data_opi.param_name',
+            '-e', 'tns.data.token',
+            '-e', 'tns.data_all8.sql',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows[0][:4] == ['python', '13,24', 'SCOTT',
+                               'AUTH_PROGRAM_NM,AUTH_MACHINE'], rows[0]
+        assert rows[0][4] == '', rows[0]
+        assert rows[1][4] == '0' and rows[1][5] == 'SELECT 1 FROM DUAL', rows[1]
 
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
