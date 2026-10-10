@@ -1591,7 +1591,7 @@ class TestDissectTns:
         # oci id 0x60 = 96 (TTI_LOBOPS / "LOB and FILE related calls").
         assert rows[0] == ['0x60', '0x00000002', '1', '8192', '', '', ''], rows[0]
         assert rows[1] == ['0x60', '0x00000001', '1', '', '', '', ''], rows[1]
-        assert rows[2] == ['0x60', '0x00000110', '0', '', '873', '', ''], rows[2]
+        assert rows[2] == ['0x60', '0x00000110', '', '', '873', '', ''], rows[2]
         assert rows[3] == ['0x60', '0x00000040', '1', '', '', '006100620063', ''], rows[3]
 
     def test_tns_marker(self, cmd_tshark, capture_file, test_env):
@@ -2135,7 +2135,7 @@ class TestDissectTns:
 
     def test_tns_out_binds(self, cmd_tshark, capture_file, test_env):
         '''The TTI_RXD after a TTI_IOV holds the OUT bind values, typed by
-        the execute's binds and each followed by a return code; IN binds
+        the execute's binds and each followed by its actual length; IN binds
         have no value there. The status behind them is decoded too.'''
         stdout = subprocess.check_output((cmd_tshark,
             '-r', capture_file('tns_out_binds.pcap'),
@@ -2146,7 +2146,7 @@ class TestDissectTns:
         assert 'Bind 1 (NUMBER): 11' in stdout, stdout
         assert 'Bind 3 (VARCHAR): hi' in stdout, stdout
         assert 'Bind 2' not in stdout.split('Out Binds')[1], stdout
-        assert 'Return Code: 0' in stdout, stdout
+        assert 'Actual Length: 0' in stdout, stdout
         assert 'Oracle Error Return' in stdout, stdout
 
     def test_tns_lob_reply(self, cmd_tshark, capture_file, test_env):
@@ -2789,7 +2789,19 @@ class TestDissectTns:
             '-e', '_ws.malformed',
         ), encoding='utf-8', env=test_env)
         rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
-        assert rows == [['DATA_DIR', 'report.txt', '']] * 2, rows
+        assert rows == [['DATA_DIR', 'report.txt', '']] * 3, rows
+        # a FILE_OPEN sends its mode as the amount, and the reply echoes it
+        # after the locator, ahead of the status
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_bfile.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tcp.srcport == 1521 && tns.data_lob.amount',
+            '-T', 'fields',
+            '-e', 'tns.data_lob.amount',
+            '-e', 'tns.data_oer.err_code',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        assert stdout == '11\t0\t\n', stdout
 
     def test_tns_oci_12c(self, cmd_tshark, capture_file, test_env):
         '''At the 12c band an OCI client's narrow execute preamble inserts
@@ -3040,6 +3052,153 @@ class TestDissectTns:
                                'AUTH_PROGRAM_NM,AUTH_MACHINE'], rows[0]
         assert rows[0][4] == '', rows[0]
         assert rows[1][4] == '0' and rows[1][5] == 'SELECT 1 FROM DUAL', rows[1]
+
+    def test_tns_lob_binds(self, cmd_tshark, capture_file, test_env):
+        '''A LOB value carried by a bind is a bare locator on the way out and
+        the LOB block - its size and chunk size before the locator - on the
+        way back, for an OUT bind and a RETURNING bind alike. A LONG return
+        bind is a plain DALC.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_lob_binds.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Bind 1 (CLOB): locator\n' in stdout, stdout
+        assert 'Bind 2 (NUMBER): 10' in stdout, stdout
+        assert stdout.count('Bind 1 (CLOB): locator, size 50005') == 1, stdout
+        assert stdout.count('Bind 2 (CLOB): locator, size 50005') == 1, stdout
+        assert 'LOB Chunk Size: 8132' in stdout, stdout
+        assert 'Bind 3 (LONG): nineteen bytes here' in stdout, stdout
+        # a JSON bind sends its locator and image; the value returned for
+        # it is the same block a LOB's is
+        assert 'Bind 1 (JSON): {"k": 5}' in stdout, stdout
+        assert 'Bind 1 (JSON): locator, size 50005' in stdout, stdout
+        assert 'Malformed' not in stdout, stdout
+
+    def test_tns_actual_length(self, cmd_tshark, capture_file, test_env):
+        '''Each value a server returns for a bind is followed by its actual
+        length: 0 when it fitted, -1 when NULL, else its length before the
+        server cut it to the declared size - which is truncation only when
+        more than arrived.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_actual_length.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_bind.actual_len',
+            '-e', '_ws.expert.message',
+            '-e', '_ws.col.info',
+            '-Y', 'tns.data_bind.actual_len',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert [r[0] for r in rows] == ['23,-1', '5,11'], rows
+        assert rows[0][1] == 'The value was cut to 2 of its 23', rows[0]
+        assert rows[1][1] == 'The value was cut to 5 of its 11', rows[1]
+        assert all('[truncated]' in r[2] for r in rows), rows
+
+    def test_tns_create_temp(self, cmd_tshark, capture_file, test_env):
+        '''A CREATE_TEMP carries the charset form and type of the LOB to
+        create where other LOB operations carry offsets; an NCLOB is a
+        CLOB with the national form and charset.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_create_temp.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_lob.csform',
+            '-e', 'tns.data_lob.type',
+            '-e', 'tns.data_lob.charset',
+            '-e', 'tns.data_lob.offset',
+            '-e', '_ws.col.info',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert [r[:4] for r in rows] == [
+            ['1', '112', '873', ''],
+            ['2', '112', '2000', ''],
+            ['0', '113', '873', ''],
+        ], rows
+        assert [r[4].split('[CREATE_TEMP] ')[1] for r in rows] == ['[CLOB]', '[NCLOB]', '[BLOB]'], rows
+        assert all(r[5] == '' for r in rows), rows
+
+    def test_tns_bc_date(self, cmd_tshark, capture_file, test_env):
+        '''A DATE or TIMESTAMP before year 1 counts its century and year
+        down from the same bias and is shown as the BC year it is; a date
+        after it is unchanged.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_bc_date.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        for value in ('Column 1 (DATE): 4712-01-01 00:00:00 BC',
+                      'Column 2 (TIMESTAMP): 0044-03-15 12:30:05.500000000 BC',
+                      'Column 1 (DATE): 0044-03-15 00:00:00 BC',
+                      'Column 1 (DATE): 0001-12-31 23:59:59 BC',
+                      'Column 1 (DATE): 0101-06-01 00:00:00 BC',
+                      'Column 1 (DATE): 2026-09-22 00:00:00\n'):
+            assert value in stdout, value
+
+    def test_tns_lastrowid(self, cmd_tshark, capture_file, test_env):
+        '''The status block names the rowid of the last row a DML touched,
+        rendered as the extended rowid; a zero block means there is none.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_lastrowid.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_oer.rowid',
+            '-e', 'tns.data_oer.rowcount',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['AAAfXBAAAAAAVrtAAA', '1', ''],
+            ['AAAfXBAQAAAAVrtAAA', '1', ''],
+            ['', '0', ''],
+        ], rows
+
+    def test_tns_fv_12_1(self, cmd_tshark, capture_file, test_env):
+        '''A session at field version 12.1 already uses the 12c forms: a
+        one-byte describe scale, the array flag in the OAC's flag byte,
+        ub4 chunk lengths, and no trailing byte after a CLOB bind's
+        descriptor; the oaccolid waits for 12.2.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_fv_12_1.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_col.scale',
+            '-e', 'tns.data_col.value',
+            '-e', 'tns.data_bind.num_elements',
+            '-e', 'tns.data_bind.value',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows[1][0] == '-127,0', rows[1]
+        values = rows[2][1].split(',')
+        assert values[0] == 'c102' and len(values[1]) // 2 == 304, rows[2]
+        assert rows[3][2] == '2', rows[3]
+        binds = rows[3][3].split(',')
+        assert binds[:2] == ['c102', 'c103'] and len(binds) == 3, rows[3]
+        assert all(r[4] == '' for r in rows), rows
+
+    def test_tns_plsql_reexec(self, cmd_tshark, capture_file, test_env):
+        '''A PL/SQL block's bind directions, reported only in the reply to
+        its first execute, are remembered against its cursor: a re-execute
+        sends no value for the OUT bind, and each iteration's OUT value
+        comes back in a TTI_RXD of its own, with no IOV.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_plsql_reexec.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_bind.value',
+            '-e', 'tns.data_bind.actual_len',
+            '-e', 'tns.data_oer.cursor_id',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['6869,c106,fd01', '', '', ''],
+            ['c107', '0', '3', ''],
+            ['796f,c115,6f6b,c111', '', '', ''],
+            ['c116,c112', '0,0', '3', ''],
+        ], rows
 
 class TestDecompressMongo:
     def test_decompress_zstd(self, cmd_tshark, features, capture_file, test_env):
