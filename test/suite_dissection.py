@@ -2211,6 +2211,37 @@ class TestDissectTns:
         assert rows[1][2].startswith('(DESCRIPTION=') and len(rows[1][2]) == 238, rows[1]
         assert rows[1][3].endswith('Connect Data'), rows[1]
 
+    def test_tns_txn_priority(self, cmd_tshark, capture_file, test_env):
+        '''A 23ai client sets its transaction priority with an ALTER SESSION
+        piggyback in front of the next call, an empty value restoring the
+        default, and the server reports it back as keyword 204 of a
+        session-state sync.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_txn_priority.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'frame.number > 1',
+            '-T', 'fields',
+            '-e', 'tns.data_piggyback.alter_session_param',
+            '-e', 'tns.data_piggyback.alter_session_value',
+            '-e', 'tns.data_kv.keyword',
+            '-e', 'tns.data_oci.id',
+            '-e', 'data.len',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['TXN_PRIORITY', 'low', '', '0x0e', '', ''],
+            ['', '', '204', '', '', ''],
+            ['TXN_PRIORITY', '', '', '0x0e', '', ''],
+        ], rows
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_txn_priority.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert ': TXN_PRIORITY' in stdout, stdout
+        assert 'Session Parameter: TXN_PRIORITY = (default)' in stdout, stdout
+
     def test_tns_app_context(self, cmd_tshark, capture_file, test_env):
         '''An application context namespace is set or cleared with a
         piggyback in front of the next call. A zero byte ahead of the
@@ -2904,6 +2935,33 @@ class TestDissectTns:
         ), encoding='utf-8', env=test_env)
         rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
         assert rows == [['20001', 'ORA-20001: ' + 'A' * 321, '', '']] * 2, rows
+
+    def test_tns_oci_dty(self, cmd_tshark, capture_file, test_env):
+        '''An OCI client's TTI_DTY has encoding flag 2 and no type table: a
+        time zone block, from 11.2 on a timezone file version, and the
+        national charset follow its capabilities, and the server answers
+        with its own time zone block. The flag marks the client as an OCI
+        one, so a status block after it is read in the OCI layout.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oci_dty.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.data_setdt.field_version',
+            '-e', 'tns.data_setdt.tz_offset',
+            '-e', 'tns.data_setdt.tzfile_version',
+            '-e', 'tns.data_setdt.ncharset',
+            '-e', 'tns.data_oer.oci_status',
+            '-e', 'data.len',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['6', '+00:00:00', '14', '2000', '', '', ''],
+            ['', '+00:00:00', '14', '', '', '', ''],
+            ['', '', '', '', '1', '', ''],
+            ['4', '+00:00:00', '', '2000', '', '', ''],
+            ['', '+00:00:00', '', '', '', '', ''],
+        ], rows
 
     def test_tns_oci_kod(self, cmd_tshark, capture_file, test_env):
         '''An OCI client describes an object type with TTI_KOD, by name or
@@ -3945,3 +4003,34 @@ class TestDissectDnsUpdateLease:
         assert '2' in stdout
         assert '300' in stdout
         assert '600' in stdout
+
+class TestTcpFingerprint:
+    # Test cases come from
+    # https://github.com/ntop/nDPI/blob/dev/fingerprint/nDPI_TCP_fingerprint.md#appendix-a--test-vectors
+    @pytest.mark.parametrize("tcpfp_case", [
+            # capture file, packet number, fingerprint, option list
+            ('fp_tcp_linux_ubuntu24.pcap', 1, '2_64_64240_789c1d1f', '2,4,8,1,3:7'),
+            ('fp_tcp_android13.pcapng', 1, '2_64_65535_58b6a464', '2,4,8,1,3:10'),
+            ('fp_tcp_android16.pcapng', 1, '2_64_65535_58b6a464', '2,4,8,1,3:10'),
+            ('fp_tcp_freebsd15.pcap', 3, '2_64_65535_2b9b4c52', '2,1,3:6,4,8'),
+            ('fp_tcp_macos27.pcapng', 1, '194_64_65535_e76f0f14', '2,1,3:6,1,1,8,4,0'),
+            ('fp_tcp_iPadOS27.pcapng', 1, '194_64_65535_e76f0f14', '2,1,3:6,1,1,8,4,0'),
+            ('fp_tcp_iOS27_iphone.pcapng', 1, '2_64_65535_e76f0f14', '2,1,3:6,1,1,8,4,0'),
+            ('fp_tcp_iOS18_iPad.pcapng', 1, '2_64_65535_e76f0f14', '2,1,3:6,1,1,8,4,0'),
+            ('fp_tcp_iOS15_iPhone.pcapng', 1, '194_64_65535_2b6d3038', '2,1,3:5,1,1,8,4,0'),
+            ('fp_tcp_win10.pcapng', 1, '2_128_64240_47466ece', '2,1,3:8,1,1,4'),
+            ('fp_tcp_win11.pcapng', 1, '2_128_65535_47466ece', '2,1,3:8,1,1,4'),
+            ('fp_tcp_win11.pcapng', 3, '2_128_65535_47466ece', '2,1,3:8,1,1,4'),
+        ])
+    def test_tcpfp(self, cmd_tshark, capture_file, test_env, tcpfp_case):
+        (cap_file, frame_num, fp, fp_raw) = tcpfp_case
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file(os.path.join("tcpfp", cap_file)),
+                '-Y', 'frame.number == '+str(frame_num),
+                '-Tfields',
+                '-e', 'tcp.fingerprint',
+                '-e', 'tcp.fingerprint.raw',
+            ), encoding='utf-8', env=test_env)
+        (out_fp, out_fp_raw) = stdout.strip().split()
+        assert out_fp == fp
+        assert out_fp_raw == fp_raw

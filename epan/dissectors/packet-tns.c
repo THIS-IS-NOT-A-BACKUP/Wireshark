@@ -155,6 +155,10 @@ void proto_register_tns(void);
 #define TNS_OCI_ALL8_IND2_NARROW 23
 #define TNS_OCI_ALL8_IND2_WIDE   27
 
+/* The encoding flag of an OCI client's TTI_DTY, which sends no type
+ * table. */
+#define TNS_DTY_ENCODING_OCI     2
+
 /* An OCI client's object-type describe (TTI_KOD): the opcodes of its
  * request, where the request's name or REF sits from the TTI_FUN byte,
  * the kinds of message in its reply, and the last byte of SYS.KOTTD's
@@ -185,6 +189,7 @@ void proto_register_tns(void);
 #define TTI_SESSION_RELEASE     163
 #define TTI_SESSION_STATE       176
 #define TTI_PIPELINE_BEGIN      199
+#define TTI_ALTER_SESSION       204
 #define TTI_PIPELINE_END        200
 #define TTI_END_USER_SEC_CTX    205
 
@@ -354,6 +359,10 @@ static int hf_tns_data_sns_integrity;
 static int hf_tns_data_setdt_charset_in;
 static int hf_tns_data_setdt_charset_out;
 static int hf_tns_data_setdt_flag;
+static int hf_tns_data_setdt_tz;
+static int hf_tns_data_setdt_tz_offset;
+static int hf_tns_data_setdt_tzfile;
+static int hf_tns_data_setdt_ncharset;
 static int hf_tns_data_setdt_caphdr;
 static int hf_tns_data_setdt_caphdr_version;
 static int hf_tns_data_setdt_caphdr_flags;
@@ -547,6 +556,8 @@ static int hf_tns_data_pgy_app_ctx_op;
 static int hf_tns_data_pgy_app_ctx_namespace;
 static int hf_tns_data_pgy_app_ctx_attr;
 static int hf_tns_data_pgy_app_ctx_value;
+static int hf_tns_data_pgy_alter_param;
+static int hf_tns_data_pgy_alter_value;
 static int hf_tns_data_pgy_session_state;
 static int hf_tns_data_pgy_e2e_flags;
 static int hf_tns_data_pgy_client_id;
@@ -620,6 +631,7 @@ static int ett_tns_out_binds;
 static int ett_sql;
 static int ett_tns_kod;
 static int ett_tns_app_ctx;
+static int ett_tns_alter_session;
 
 static expert_field ei_tns_connect_data_next_packet;
 static expert_field ei_tns_data_descriptor_size_mismatch;
@@ -969,6 +981,7 @@ static const value_string tns_kv_keywords[] = {
 	{168, "CURRENT_SCHEMA"},
 	{172, "EDITION"},
 	{201, "TRANSACTION_ID"},
+	{204, "TXN_PRIORITY"},
 	{0, NULL}
 };
 
@@ -1345,6 +1358,7 @@ static const value_string tns_data_oci_subfuncs[] = {
 	{187, "Notify"},
 	{199, "Pipeline begin"},
 	{200, "Pipeline end"},
+	{204, "Alter session"},
 	{205, "End-user security context"},
 	{0, NULL}
 };
@@ -1570,7 +1584,6 @@ static int get_strtype_custom(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 	len = tvb_get_uint8(tvb, offset);
 	if (len == 254) {
 		int actual_len = 0;
-		len = 0;
 		do { // walk over the chunks
 			len = tvb_get_uint8(tvb, offset  + ret);
 			ret++; // 1st byte with the chunk size
@@ -4168,6 +4181,44 @@ static int dissect_tns_piggyback_body(tvbuff_t *tvb, packet_info *pinfo, proto_t
 			break;
 		}
 
+		case TTI_ALTER_SESSION:
+		{
+			/* Change session parameters, as ALTER SESSION would, without
+			 * a round trip of its own - a 23ai client sets its
+			 * transaction priority (TXN_PRIORITY) this way: a ub4 of
+			 * flags, a pointer and the ub4 number of parameters, then
+			 * each parameter and its value in the bytes_with_length form
+			 * and a ub4 flag, 1 when the value is empty to restore the
+			 * database default. */
+			int num = 0;
+
+			offset += get_sb4_custom(tvb, offset, &v);     /* flags */
+			offset += 1;                                   /* pointer */
+			offset += get_sb4_custom(tvb, offset, &num);
+			for ( int i = 0; i < num && tvb_reported_length_remaining(tvb, offset) > 0; i++ )
+			{
+				proto_tree *par_tree;
+				proto_item *par_item;
+				const char *param = NULL, *value = NULL;
+				int par_start = offset;
+
+				par_tree = proto_tree_add_subtree(tree, tvb, offset, -1, ett_tns_alter_session, &par_item, "Session Parameter");
+				start = offset;
+				offset += get_field_with_length(tvb, pinfo, offset, &param);
+				if ( param )
+					proto_tree_add_string(par_tree, hf_tns_data_pgy_alter_param, tvb, start, offset - start, param);
+				start = offset;
+				offset += get_field_with_length(tvb, pinfo, offset, &value);
+				proto_tree_add_string(par_tree, hf_tns_data_pgy_alter_value, tvb, start, offset - start, value ? value : "");
+				offset += get_sb4_custom(tvb, offset, &v);
+				proto_item_append_text(par_item, ": %s = %s", param ? param : "", value ? value : "(default)");
+				proto_item_set_len(par_item, offset - par_start);
+				if ( param )
+					col_append_fstr(pinfo->cinfo, COL_INFO, " [%s=%s]", param, value ? value : "default");
+			}
+			break;
+		}
+
 		case TTI_SESSION_STATE:
 			start = offset;
 			offset += get_ub8_custom(tvb, offset, &u);
@@ -4629,6 +4680,25 @@ static int dissect_tns_kod_image(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 	return offset;
 }
 
+/* The 11-byte time zone block of an OCI client's data-type round, in the
+ * request and the reply alike: the hours, minutes and seconds of the
+ * offset from UTC at bytes 4 to 6, each biased by 60. Returns the offset
+ * past it. */
+static int dissect_tns_dty_tz(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset)
+{
+	int h, m, sec;
+	bool negative;
+
+	proto_tree_add_item(tree, hf_tns_data_setdt_tz, tvb, offset, 11, ENC_NA);
+	h = tvb_get_uint8(tvb, offset + 4) - 60;
+	m = tvb_get_uint8(tvb, offset + 5) - 60;
+	sec = tvb_get_uint8(tvb, offset + 6) - 60;
+	negative = h < 0 || m < 0 || sec < 0;
+	proto_item_set_generated(proto_tree_add_string(tree, hf_tns_data_setdt_tz_offset, tvb, offset + 4, 3,
+		wmem_strdup_printf(pinfo->pool, "%c%02d:%02d:%02d", negative ? '-' : '+', abs(h), abs(m), abs(sec))));
+	return offset + 11;
+}
+
 /* Read the error text after an OCI status block: a length byte for up to
  * 252 bytes, else 0xFE and chunks until a zero length. The chunk lengths
  * are single bytes from an 11g server and ub4 LE from an 18c one, and
@@ -4679,6 +4749,20 @@ static int dissect_tns_oci_message(tvbuff_t *tvb, int offset, packet_info *pinfo
 {
 	switch ( data_func_id )
 	{
+		case SQLNET_SET_DATATYPES:
+			/* The answer to an OCI client's data-type round: the
+			 * database's time zone block and, when the client sent one,
+			 * the timezone file version as a ub4 BE. */
+			if ( !tvb_bytes_exist(tvb, offset, 11) )
+				return offset;
+			offset = dissect_tns_dty_tz(tvb, pinfo, data_tree, offset);
+			if ( tvb_bytes_exist(tvb, offset, 4) )
+			{
+				proto_tree_add_item(data_tree, hf_tns_data_setdt_tzfile, tvb, offset, 4, ENC_BIG_ENDIAN);
+				offset += 4;
+			}
+			return offset;
+
 		case SQLNET_INVOKE_USER_CB:
 		{
 			/* A message of a TTI_KOD reply: a by-name reply's header,
@@ -4957,6 +5041,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			 * is shown whole. */
 			proto_tree *caphdr_tree, *ov_tree;
 			proto_item *caphdr_item, *ov_item;
+			uint32_t dty_flag;
 			uint8_t caps_len;
 
 			if ( !is_request )
@@ -4993,7 +5078,7 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			offset += 2;
 			proto_tree_add_item(data_tree, hf_tns_data_setdt_charset_out, tvb, offset, 2, ENC_LITTLE_ENDIAN);
 			offset += 2;
-			proto_tree_add_item(data_tree, hf_tns_data_setdt_flag, tvb, offset, 1, ENC_BIG_ENDIAN);
+			proto_tree_add_item_ret_uint(data_tree, hf_tns_data_setdt_flag, tvb, offset, 1, ENC_BIG_ENDIAN, &dty_flag);
 			offset += 1;
 
 			caps_len = tvb_get_uint8(tvb, offset);
@@ -5022,6 +5107,28 @@ static int dissect_tns_message(tvbuff_t *tvb, int offset, packet_info *pinfo, pr
 			caps_len = tvb_get_uint8(tvb, offset);
 			proto_tree_add_item(data_tree, hf_tns_data_setdt_tblhdr, tvb, offset, 1 + caps_len, ENC_NA);
 			offset += 1 + caps_len;
+
+			if ( dty_flag == TNS_DTY_ENCODING_OCI )
+			{
+				/* An OCI client - sqlplus, thick python-oracledb - sends
+				 * no type table: the server keeps its own representations,
+				 * the fixed-width integers of the OCI dialect, which this
+				 * flag is the first sign of. In the table's place come the
+				 * session's time zone block, from 11.2 on a ub4 BE
+				 * timezone file version, and the national charset as a
+				 * little-endian ub2. */
+				if ( !PINFO_FD_VISITED(pinfo) )
+					tns_get_conv_info(pinfo)->oci_dialect = true;
+				offset = dissect_tns_dty_tz(tvb, pinfo, data_tree, offset);
+				if ( tvb_reported_length_remaining(tvb, offset) >= 6 )
+				{
+					proto_tree_add_item(data_tree, hf_tns_data_setdt_tzfile, tvb, offset, 4, ENC_BIG_ENDIAN);
+					offset += 4;
+				}
+				proto_tree_add_item(data_tree, hf_tns_data_setdt_ncharset, tvb, offset, 2, ENC_LITTLE_ENDIAN);
+				offset += 2;
+				break;
+			}
 
 			ov_item = proto_tree_add_item(data_tree, hf_tns_data_setdt_overrides, tvb, offset, -1, ENC_NA);
 			ov_tree = proto_item_add_subtree(ov_item, ett_tns_setdt_overrides);
@@ -8000,6 +8107,18 @@ void proto_register_tns(void)
 		{ &hf_tns_data_setdt_charset_out, {
 			"Charset Out", "tns.data_setdt.charset_out", FT_UINT16, BASE_DEC,
 			VALS(tns_charsets), 0x0, "NLS_NCHAR charset id", HFILL }},
+		{ &hf_tns_data_setdt_tz, {
+			"Time Zone Block", "tns.data_setdt.tz", FT_BYTES, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setdt_tz_offset, {
+			"Time Zone Offset", "tns.data_setdt.tz_offset", FT_STRING, BASE_NONE,
+			NULL, 0x0, "The offset from UTC the time zone block carries", HFILL }},
+		{ &hf_tns_data_setdt_tzfile, {
+			"Timezone File Version", "tns.data_setdt.tzfile_version", FT_UINT32, BASE_DEC,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_setdt_ncharset, {
+			"National Charset", "tns.data_setdt.ncharset", FT_UINT16, BASE_DEC,
+			VALS(tns_charsets), 0x0, NULL, HFILL }},
 		{ &hf_tns_data_setdt_flag, {
 			"Flag", "tns.data_setdt.flag", FT_UINT8, BASE_HEX,
 			NULL, 0x0, NULL, HFILL }},
@@ -8484,6 +8603,12 @@ void proto_register_tns(void)
 		{ &hf_tns_data_pgy_app_ctx_value, {
 			"Value", "tns.data_piggyback.app_context_value", FT_STRING, BASE_NONE,
 			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_pgy_alter_param, {
+			"Session Parameter", "tns.data_piggyback.alter_session_param", FT_STRING, BASE_NONE,
+			NULL, 0x0, NULL, HFILL }},
+		{ &hf_tns_data_pgy_alter_value, {
+			"Value", "tns.data_piggyback.alter_session_value", FT_STRING, BASE_NONE,
+			NULL, 0x0, "Empty to restore the database default", HFILL }},
 		{ &hf_tns_data_pgy_session_state, {
 			"Session State", "tns.data_piggyback.session_state", FT_UINT64, BASE_HEX,
 			NULL, 0x0, "Request boundary: the client begins or ends a request", HFILL }},
@@ -8707,6 +8832,7 @@ void proto_register_tns(void)
 		&ett_tns_oer,
 		&ett_tns_kod,
 		&ett_tns_app_ctx,
+		&ett_tns_alter_session,
 		&ett_tns_call_status,
 		&ett_tns_warn_flags,
 		&ett_tns_auth_mode,
