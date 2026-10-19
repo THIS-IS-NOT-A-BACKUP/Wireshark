@@ -9,6 +9,7 @@
 '''Dissection tests'''
 
 import os.path
+import struct
 import subprocess
 import sys
 
@@ -969,6 +970,117 @@ class TestDissectRtpproxy:
             ), encoding='utf-8', env=test_env)
         # Only the first frame (no trailing LF) is flagged; the second has one.
         assert stdout.strip() == '1'
+
+class TestDissectErldp:
+    def test_erldp_flags(self, cmd_tshark, capture_file, test_env):
+        '''The distribution flags added in OTP 25 to 29 are named, not left in Reserved or Spare'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_flags.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-Y', 'erldp.flags.mandatory_25_digest && erldp.flags.altact_sig'
+                      ' && erldp.flags.native_records && erldp.flags.local_ext == 0'
+                      ' && erldp.flags.reserved == 0 && erldp.flags.spare == 0',
+                '-T', 'fields', '-e', 'erldp.name',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == 'a@127.0.0.1'
+
+    def test_erldp_complement(self, cmd_tshark, capture_file, test_env):
+        '''After an old name message, the complement message carries the high flags and the creation'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_complement.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-T', 'fields', '-e', '_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'SEND_NAME a@127.0.0.1', 'SEND_STATUS ok', 'SEND_CHALLENGE b@127.0.0.1',
+            'SEND_COMPLEMENT', 'SEND_CHALLENGE_REPLY', 'SEND_CHALLENGE_ACK',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_complement.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-Y', 'erldp.flags_high && erldp.flags.spawn && erldp.flags.alias'
+                      ' && erldp.flags.altact_sig && erldp.flags.native_records'
+                      ' && erldp.flags.name_me == 0 && erldp.flags.spare == 0',
+                '-T', 'fields', '-e', 'frame.number', '-e', 'erldp.flags_high',
+                '-e', 'erldp.creation',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '4\t0x0000006d\t1554098974'
+
+    def test_erldp_ctlmsg(self, cmd_tshark, capture_file, test_env):
+        '''The control messages added in OTP 24 to 28 are named'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_ctlmsg.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-T', 'fields', '-e', '_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [
+            'ALIAS_SEND', 'ALIAS_SEND_TT', 'UNLINK_ID', 'UNLINK_ID_ACK',
+            'ALTACT_SIG_SEND', 'ALTACT_SIG_SEND', 'ALTACT_SIG_SEND',
+        ]
+
+    def test_erldp_small_big(self, cmd_tshark, capture_file, test_env):
+        '''A bignum of up to 8 bytes is shown once, as a decimal integer'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_ctlmsg.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-Y', 'erldp.small_big_ext_len',
+                '-T', 'fields', '-e', 'erldp.big_ext_int', '-e', 'erldp.big_ext_str',
+            ), encoding='utf-8', env=test_env)
+        # The Id of UNLINK_ID and UNLINK_ID_ACK
+        assert stdout.splitlines() == ['1234605616436508552\t'] * 2
+
+    def test_erldp_altact_flags(self, cmd_tshark, capture_file, test_env):
+        '''The flags of ALTACT_SIG_SEND tell what To is and what kind of signal it is'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_ctlmsg.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-Y', 'erldp.altact_flags',
+                '-T', 'fields', '-e', 'frame.number', '-e', 'erldp.altact_flags',
+                '-e', 'erldp.altact_flags.prio', '-e', 'erldp.altact_flags.token',
+                '-e', 'erldp.altact_flags.alias', '-e', 'erldp.altact_flags.name',
+                '-e', 'erldp.altact_flags.exit',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '5\t0x09\tTrue\tFalse\tFalse\tTrue\tFalse',    # priority, to a name
+            '6\t0x06\tFalse\tTrue\tTrue\tFalse\tFalse',    # to an alias, with a token
+            '7\t0x10\tFalse\tFalse\tFalse\tFalse\tTrue',   # an exit signal
+        ]
+
+    def test_erldp_record_ext(self, cmd_tshark, capture_file, test_env):
+        '''A native record (OTP 29) is decoded, and so is the term after it'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_record.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-T', 'fields', '-e', 'erldp.record_ext.num_fields',
+                '-e', 'erldp.record_ext.flags.exported', '-e', 'erldp.atom_text',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '2\tTrue\ta@127.0.0.1,b@127.0.0.1,users,user,name,age,done',
+            '0\tFalse\ta@127.0.0.1,b@127.0.0.1,shop,empty,done',
+        ]
+
+    def test_erldp_old_tags(self, cmd_tshark, capture_file, test_env):
+        '''Deprecated atoms and references are decoded, local data is kept
+        opaque, and an unknown tag is flagged rather than silently misread'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_old_tags.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-T', 'fields', '-e', 'erldp.atom_text', '-e', 'erldp.ref_ext.id',
+                '-e', 'erldp.local_ext.hash', '-e', 'erldp.undecoded',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            # Latin-1 atoms, then the atom after the reference
+            'a@127.0.0.1,b@127.0.0.1,h\u00e9llo,b@127.0.0.1,done\t0x0000002a\t\t',
+            'a@127.0.0.1,b@127.0.0.1\t\t0xc0ffee11\t',
+            'a@127.0.0.1,b@127.0.0.1\t\t\t02037704646f6e65',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('erldp_old_tags.pcap'),
+                '-d', 'tcp.port==45000,erldp',
+                '-Y', 'erldp.unknown_tag',
+                '-T', 'fields', '-e', 'frame.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '3'
 
 class TestDissectTcp:
     @staticmethod
@@ -2304,6 +2416,20 @@ class TestDissectTns:
         assert 'Column 2 (REFCURSOR): cursor 5' in stdout, stdout
         assert 'Malformed' not in stdout, stdout
 
+    def test_tns_refcursor_bind(self, cmd_tshark, capture_file, test_env):
+        '''A client's REF CURSOR bind is a count of cursor ids and the ids:
+        none for an OUT bind, the cursor passed for an IN one. The bind
+        after it decodes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_refcursor_bind.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-O', 'tns',
+        ), encoding='utf-8', env=test_env)
+        assert 'Bind 1 (REFCURSOR): a new cursor' in stdout, stdout
+        assert 'Bind 1 (REFCURSOR): cursor 3' in stdout, stdout
+        assert stdout.count('Bind 2 (NUMBER): 7') == 2, stdout
+        assert 'Malformed' not in stdout, stdout
+
     def test_tns_implicit_results(self, cmd_tshark, capture_file, test_env):
         '''The implicit result sets message carries, per result, a describe
         and the cursor id to fetch it with; the status behind it follows.'''
@@ -2534,21 +2660,49 @@ class TestDissectTns:
 
     def test_tns_oci_all8(self, cmd_tshark, capture_file, test_env):
         '''An OCI client's execute has a fixed preamble in one of two widths,
-        told apart by where its second pointer indicator sits. The cursor
-        id, bind count and SQL are found in both.'''
+        told apart by where its second pointer indicator sits. The options,
+        cursor id, bind count and SQL are found in both; SET AUTOCOMMIT ON
+        shows as the options' commit bit.'''
         stdout = subprocess.check_output((cmd_tshark,
             '-r', capture_file('tns_oci_all8.pcap'),
             '-d', 'tcp.port==1521,tns',
             '-T', 'fields',
             '-e', 'tns.data_all8.oci_preamble',
+            '-e', 'tns.data_all8.options',
+            '-e', 'tns.data_all8.options.commit',
             '-e', 'tns.data.cursor',
             '-e', 'tns.data_all8.bind_count',
             '-e', 'tns.data_all8.sql',
         ), encoding='utf-8', env=test_env)
         rows = [r.split('\t') for r in stdout.strip().splitlines()]
         assert rows == [
-            ['OCI, wide (8-byte slots)', '0', '0', 'SELECT * FROM DUAL'],
-            ['OCI, narrow (4-byte slots)', '5', '1', 'SELECT :v FROM DUAL'],
+            ['OCI, wide (8-byte slots)', '0x00000000', 'False', '0', '0', 'SELECT * FROM DUAL'],
+            ['OCI, narrow (4-byte slots)', '0x00000000', 'False', '5', '1', 'SELECT :v FROM DUAL'],
+            ['OCI, narrow (4-byte slots)', '0x00008021', 'False', '0', '0', 'INSERT INTO T VALUES (1)'],
+            ['OCI, narrow (4-byte slots)', '0x00008121', 'True', '0', '0', 'INSERT INTO T VALUES (1)'],
+        ], rows
+
+    def test_tns_oci_10_2_all8(self, cmd_tshark, capture_file, test_env):
+        '''sqlplus 10.2 sends a narrow preamble with the SQL at 148 and real
+        addresses in its pointer fields; the session's field version, from
+        its data-type round, says which form it is.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oci_10_2_all8.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_all8.oci_preamble',
+            '-T', 'fields',
+            '-e', 'frame.number',
+            '-e', 'tns.data_all8.oci_preamble',
+            '-e', 'tns.data_all8.options',
+            '-e', 'tns.data_all8.bind_count',
+            '-e', 'tns.data_all8.sql',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        # Frame 5, on a connection whose negotiation was not seen, is not
+        # taken for one.
+        assert rows == [
+            ['3', 'OCI, narrow (4-byte slots), 10.2', '0x00008061', '0', 'SELECT USER FROM DUAL'],
+            ['4', 'OCI, narrow (4-byte slots), 10.2', '0x00040429', '1', 'BEGIN :r := 42; END;\\n'],
         ], rows
 
     def test_tns_oci_sql_length(self, cmd_tshark, capture_file, test_env):
@@ -3007,6 +3161,28 @@ class TestDissectTns:
         assert rows[0][:3] == ['0', '0x21', 'True'], rows[0]
         assert 'compiled with errors' in rows[0][3], rows[0]
         assert rows[1][:4] == ['0', '0x00', 'False', ''], rows[1]
+
+    def test_tns_oer_flags(self, cmd_tshark, capture_file, test_env):
+        '''Below 12.1 the third of a status's six one-byte fields is a
+        variable-length ub2, which a warning makes two bytes wide; the
+        warning flags after it are read in place on either side of 12.1,
+        and with no field version known.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oer_flags.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_oer.warn_flags',
+            '-T', 'fields',
+            '-e', 'frame.number',
+            '-e', 'tns.data_oer.warn_flags',
+            '-e', 'tns.data_oer.rowcount64',
+            '-e', '_ws.expert.message',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['2', '0x05', '', ''],
+            ['4', '0x05', '1', ''],
+            ['5', '0x05', '', ''],
+        ], rows
 
     def test_tns_parse_only(self, cmd_tshark, capture_file, test_env):
         '''An execute that asks for no work - no EXECUTE, DEFINE or FETCH -
@@ -3620,6 +3796,50 @@ class TestDissectUsbHid:
                 '-Tfields', '-eusbhid.data.padding',
             ), encoding='utf-8', env=test_env)
         assert stdout.strip() == '03,ff07\n01,b907\n00,0000'
+
+class TestDissectUsbPtp:
+    def test_usb_ptp_class_data_type(self, cmd_text2pcap, cmd_tshark, result_file, test_env):
+        '''PTP must not use class data that another USB class stored on its interface.'''
+        def urb(urb_id, event, xfer_type, endpoint, setup=None, data=b''):
+            # Linux usbmon header (LINKTYPE_USB_LINUX_MMAPPED) followed by the data
+            setup_flag = 0 if setup else ord('-')
+            data_flag = 0 if data else ord('<')
+            status = -115 if event == 'S' else 0
+            return struct.pack('<QBBBBHbbqiiII8siiII', urb_id, ord(event), xfer_type, endpoint, 1, 1,
+                               setup_flag, data_flag, 0, 0, status, len(data), len(data),
+                               setup or bytes(8), 0, 0, 0, 0) + data
+
+        config_descriptor = bytes.fromhex(
+            '090239000201008032'    # configuration, 2 interfaces
+            '09040000010a000000'    # interface 0, alternate setting 0: CDC Data
+            '07058102000200'        # bulk IN endpoint 0x81
+            '090400010106010100'    # interface 0, alternate setting 1: Still Image (PTP)
+            '07058102000200'        # bulk IN endpoint 0x81
+            '090401000106010100'    # interface 1: Still Image (PTP)
+            '07058202000200')       # bulk IN endpoint 0x82
+        ptp_response = bytes.fromhex('0c00000003000120' '01000000')    # OK, transaction 1
+        packets = [
+            urb(1, 'S', 2, 0x80, setup=bytes.fromhex('8006000200003900')),    # GET_DESCRIPTOR
+            urb(1, 'C', 2, 0x80, data=config_descriptor),
+            urb(2, 'C', 3, 0x81, data=bytes(4)),                             # CDC Data on interface 0
+            urb(3, 'S', 2, 0x00, setup=bytes.fromhex('010b010000000000')),    # SET_INTERFACE 0 to setting 1
+            urb(4, 'C', 3, 0x81, data=ptp_response),                         # PTP on interface 0
+            urb(5, 'C', 3, 0x82, data=ptp_response),                         # PTP on interface 1
+        ]
+        text_file = result_file('usb-ptp.txt')
+        capture = result_file('usb-ptp.pcapng')
+        with open(text_file, 'w') as f:
+            for packet in packets:
+                f.write(f'000000  {packet.hex(" ")}\n')
+        subprocess.check_call((cmd_text2pcap, '-q', '-l', '220', text_file, capture), env=test_env)
+
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture,
+                '-Y', 'usbcom || usb-ptp.container.length',
+                '-Tfields', '-eframe.number', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        # Interface 0's class data belongs to CDC Data, so PTP leaves frame 5 undissected.
+        assert stdout == '3\tUSBCOM\n6\tUSB-PTP\n'
 
 class TestDissectUltraEthernet:
     def test_uet_crc(self, cmd_tshark, capture_file, test_env):
