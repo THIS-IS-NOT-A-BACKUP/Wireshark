@@ -98,6 +98,7 @@ set (STRATOSHARK_MANAGER_HEADERS ${WIRESHARK_MANAGER_HEADERS})
 set(WIRESHARK_UTILS_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/byte_view_text_cells.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/color_utils.h
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/coloring_rule_utils.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/data_printer.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/field_information.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/font_manager.h
@@ -110,7 +111,6 @@ set(WIRESHARK_UTILS_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update_backend.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/stock_icon.h
-	${CMAKE_SOURCE_DIR}/ui/qt/utils/tango_colors.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_manager.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_styler.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/color_math.h
@@ -438,6 +438,7 @@ endif()
 set(WIRESHARK_UTILS_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/byte_view_text_cells.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/color_utils.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/coloring_rule_utils.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/data_printer.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/field_information.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/font_manager.cpp

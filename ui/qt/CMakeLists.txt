@@ -95,6 +95,7 @@ set(WIRESHARK_MANAGER_HEADERS
 set(WIRESHARK_UTILS_HEADERS
 	utils/byte_view_text_cells.h
 	utils/color_utils.h
+	utils/coloring_rule_utils.h
 	utils/data_printer.h
 	utils/field_information.h
 	utils/font_manager.h
@@ -111,7 +112,6 @@ set(WIRESHARK_UTILS_HEADERS
 	utils/software_update.h
 	utils/software_update_backend.h
 	utils/stock_icon.h
-	utils/tango_colors.h
 	utils/theme_manager.h
 	utils/theme_styler.h
 	utils/themes/color_math.h
@@ -460,6 +460,7 @@ endif()
 set(WIRESHARK_UTILS_SRCS
 	utils/byte_view_text_cells.cpp
 	utils/color_utils.cpp
+	utils/coloring_rule_utils.cpp
 	utils/data_printer.cpp
 	utils/field_information.cpp
 	utils/font_manager.cpp
