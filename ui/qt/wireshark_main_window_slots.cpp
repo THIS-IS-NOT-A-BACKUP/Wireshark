@@ -166,7 +166,7 @@ DIAG_ON(frame-larger-than=)
 #include "tlskeylog_launcher_dialog.h"
 #include "stats_tree_dialog.h"
 #include "strip_headers_dialog.h"
-#include <ui/qt/utils/stock_icon.h>
+#include <ui/qt/utils/themes/themed_shape_icon.h>
 #include <ui/qt/utils/themes/themed_icon.h>
 #include "keyboard_shortcuts_dialog.h"
 #include "supported_protocols_dialog.h"
@@ -1661,7 +1661,7 @@ void WiresharkMainWindow::initViewColorizeMenu()
         if (colorf) {
             QColor bg = ColorUtils::fromColorT(colorf->bg_color);
             QColor fg = ColorUtils::fromColorT(colorf->fg_color);
-            cc_action->setIcon(StockIcon::colorIcon(bg.rgb(), fg.rgb(), QString::number(color_num)));
+            cc_action->setIcon(ThemedShapeIcon(ThemedShapeIcon::Square, bg, fg, QString::number(color_num)));
         }
         color_num++;
     }
@@ -4119,6 +4119,7 @@ void WiresharkMainWindow::connectHelpMenuActions()
     connect(main_ui_->actionHelpMPTShark, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(LOCALPAGE_MAN_TSHARK); });
     connect(main_ui_->actionHelpWebsite, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_WIRESHARK_HOME); });
     connect(main_ui_->actionHelpFAQ, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_FAQ); });
+    connect(main_ui_->actionHelpDiscord, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_DISCORD); });
     connect(main_ui_->actionHelpAsk, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_ASK); });
     connect(main_ui_->actionHelpDownloads, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_WIRESHARK_DOWNLOAD); });
     connect(main_ui_->actionHelpWiki, &QAction::triggered, this, [=]() { mainApp->helpTopicAction(ONLINEPAGE_WIRESHARK_WIKI); });

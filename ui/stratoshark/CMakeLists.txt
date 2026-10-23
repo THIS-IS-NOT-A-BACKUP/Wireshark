@@ -65,7 +65,6 @@ set(WIRESHARK_WIDGET_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/resolved_addresses_view.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/rowmove_tree_view.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/splash_overlay.h
-	${CMAKE_SOURCE_DIR}/ui/qt/widgets/stock_icon_tool_button.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/syntax_line_edit.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/tabnav_tree_view.h
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/theme_preview_widget.h
@@ -110,7 +109,6 @@ set(WIRESHARK_UTILS_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/qt_ui_utils.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update_backend.h
-	${CMAKE_SOURCE_DIR}/ui/qt/utils/stock_icon.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_manager.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_styler.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/color_math.h
@@ -122,6 +120,8 @@ set(WIRESHARK_UTILS_HEADERS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/theme_token_handler.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/themed_icon.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/contrast_adapt_icon.h
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/themed_shape_icon.h
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/icon_engine_utils.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/variant_pointer.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/wireshark_mime_data.h
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/wireshark_zip_helper.h
@@ -385,7 +385,6 @@ set(WIRESHARK_WIDGET_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/resolved_addresses_view.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/rowmove_tree_view.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/splash_overlay.cpp
-	${CMAKE_SOURCE_DIR}/ui/qt/widgets/stock_icon_tool_button.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/syntax_line_edit.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/tabnav_tree_view.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/widgets/theme_preview_widget.cpp
@@ -449,7 +448,6 @@ set(WIRESHARK_UTILS_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/qt_ui_utils.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/software_update.cpp
 	${WIRESHARK_SOFTWARE_UPDATE_PLATFORM_SRC}
-	${CMAKE_SOURCE_DIR}/ui/qt/utils/stock_icon.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_manager.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/theme_styler.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/color_math.cpp
@@ -460,6 +458,7 @@ set(WIRESHARK_UTILS_SRCS
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/theme_token_handler.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/themed_icon.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/contrast_adapt_icon.cpp
+	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/themed_shape_icon.cpp
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/themes/system_theme_detector_common.cpp
 	${WIRESHARK_THEMES_PLATFORM_SRC}
 	${CMAKE_SOURCE_DIR}/ui/qt/utils/wireshark_mime_data.cpp
@@ -883,9 +882,7 @@ endif()
 qt_add_resources(STRATOSHARK_QT_QRC
 	${CMAKE_SOURCE_DIR}/resources/about.qrc
 	${CMAKE_SOURCE_DIR}/resources/languages/languages.qrc
-	${CMAKE_SOURCE_DIR}/resources/layout.qrc
 	${SSICON_QRC}
-	${CMAKE_SOURCE_DIR}/resources/stock_icons.qrc
 	${CMAKE_SOURCE_DIR}/resources/theme_icons.qrc
 	${STRATOSHARK_I18N_QRC}
 	${STRATOSHARK_AUTHORS_QRC}

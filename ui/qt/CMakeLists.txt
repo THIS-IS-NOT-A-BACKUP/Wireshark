@@ -67,7 +67,6 @@ set(WIRESHARK_WIDGET_HEADERS
 	widgets/rowmove_tree_view.h
 	widgets/rtp_audio_graph.h
 	widgets/splash_overlay.h
-	widgets/stock_icon_tool_button.h
 	widgets/syntax_line_edit.h
 	widgets/tabnav_tree_view.h
 	widgets/theme_preview_widget.h
@@ -111,7 +110,6 @@ set(WIRESHARK_UTILS_HEADERS
 	utils/rtp_audio_silence_generator.h
 	utils/software_update.h
 	utils/software_update_backend.h
-	utils/stock_icon.h
 	utils/theme_manager.h
 	utils/theme_styler.h
 	utils/themes/color_math.h
@@ -124,6 +122,8 @@ set(WIRESHARK_UTILS_HEADERS
 	utils/themes/themed_icon.h
 	utils/themes/token_palette.h
 	utils/themes/contrast_adapt_icon.h
+	utils/themes/themed_shape_icon.h
+	utils/themes/icon_engine_utils.h
 	utils/variant_pointer.h
 	utils/wireshark_mime_data.h
 	utils/wireshark_zip_helper.h
@@ -412,7 +412,6 @@ set(WIRESHARK_WIDGET_SRCS
 	widgets/rowmove_tree_view.cpp
 	widgets/rtp_audio_graph.cpp
 	widgets/splash_overlay.cpp
-	widgets/stock_icon_tool_button.cpp
 	widgets/syntax_line_edit.cpp
 	widgets/tabnav_tree_view.cpp
 	widgets/theme_preview_widget.cpp
@@ -475,7 +474,6 @@ set(WIRESHARK_UTILS_SRCS
 	utils/rtp_audio_silence_generator.cpp
 	utils/software_update.cpp
 	${WIRESHARK_SOFTWARE_UPDATE_PLATFORM_SRC}
-	utils/stock_icon.cpp
 	utils/theme_manager.cpp
 	utils/theme_styler.cpp
 	utils/themes/color_math.cpp
@@ -486,6 +484,7 @@ set(WIRESHARK_UTILS_SRCS
 	utils/themes/theme_token_handler.cpp
 	utils/themes/themed_icon.cpp
 	utils/themes/contrast_adapt_icon.cpp
+	utils/themes/themed_shape_icon.cpp
 	utils/themes/system_theme_detector_common.cpp
 	${WIRESHARK_THEMES_PLATFORM_SRC}
 	utils/wireshark_mime_data.cpp
@@ -975,8 +974,6 @@ endif()
 qt_add_resources(WIRESHARK_QT_QRC
 	../../resources/about.qrc
 	../../resources/languages/languages.qrc
-	../../resources/layout.qrc
-	../../resources/stock_icons.qrc
 	../../resources/theme_icons.qrc
 	${WSICON_QRC}
 	${I18N_QRC}

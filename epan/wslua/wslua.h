@@ -153,7 +153,7 @@ struct _wslua_pinfo {
  * @brief Represents a sub-range of a Lua tvbuff, defined by an offset and length within the parent tvb.
  */
 struct _wslua_tvbrange {
-    struct _wslua_tvb* tvb;    /**< The parent Lua tvbuff from which this range is derived. */
+    struct _wslua_tvb  tvb;    /**< The range's own wrapper of the parent tvbuff, private to this range. */
     unsigned           offset; /**< Byte offset within the parent tvbuff at which this range begins. */
     unsigned           len;    /**< Length in bytes of this range within the parent tvbuff. */
 };
@@ -297,12 +297,11 @@ struct _wslua_cols {
 };
 
 /**
- * @brief Wraps a GHashTable for use as a Lua private data table, tracking ownership and expiry.
+ * @brief Wraps a GHashTable for use as a Lua private data table, tracking expiry.
  */
 struct _wslua_private_table {
-    GHashTable* table;        /**< The underlying hash table storing key-value pairs for the private data. */
-    bool        is_allocated; /**< True if this wrapper allocated the hash table and is responsible for freeing it. */
-    bool        expired;      /**< True if the table is no longer valid. */
+    GHashTable* table;   /**< The underlying hash table storing key-value pairs for the private data. */
+    bool        expired; /**< True if the table is no longer valid. */
 };
 
 /**
