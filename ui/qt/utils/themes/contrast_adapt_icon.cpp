@@ -29,14 +29,6 @@
 
 namespace {
 
-// Global minimum contrast ratio, captured by each icon at construction.
-// Function-local static avoids static-init-order issues.
-qreal &defaultMinContrastRef()
-{
-    static qreal value = ColorMath::IconContrastRatio;
-    return value;
-}
-
 // Fit @p src into @p box preserving aspect ratio, centred.
 QRectF aspectFit(QSizeF src, const QRectF &box)
 {
@@ -67,16 +59,17 @@ const QRegularExpression &paintColorRe()
 class ContrastAdaptIconEngine : public QIconEngine
 {
 public:
-    ContrastAdaptIconEngine(const QString &path, qreal min_contrast,
+    ContrastAdaptIconEngine(const QString &path,
                             QPalette::ColorRole surface_role,
                             QColor explicit_bg, QSize size,
-                            IconPaletteRef palette) :
+                            IconPaletteRef palette,
+                            IconTokenColorsRef token_colors) :
         path_(path),
-        min_contrast_(min_contrast),
         surface_role_(surface_role),
         explicit_bg_(explicit_bg),
         size_(size),
-        palette_(palette)
+        palette_(palette),
+        token_colors_(token_colors)
     {
         path_ = path;
         QFile f(path);
@@ -107,15 +100,18 @@ public:
 #endif
     {
         const QColor bg = backgroundFor(mode);
+        const qreal min_contrast = ColorMath::activeRatios().icon;
         const QSize logical = (size.isValid() && !size.isEmpty()) ? size : size_;
 
-        // Background colour is part of the key, so a theme/light-dark flip (which
-        // changes the resolved background) is a natural cache miss.
-        const QString key = QStringLiteral("contrastadapt:%1:%2:%3:%4:%5:%6x%7@%8")
+        // Background colour and contrast ratio are part of the key, so a
+        // theme/light-dark flip (which changes the resolved background) or a
+        // contrast level change is a natural cache miss.
+        const QString key = QStringLiteral("contrastadapt:%1:%2:%3:%4:%5:%6:%7x%8@%9")
                                 .arg(path_)
                                 .arg(int(mode))
                                 .arg(int(state))
                                 .arg(bg.rgba())
+                                .arg(min_contrast)
                                 .arg(tokenSignature())
                                 .arg(logical.width())
                                 .arg(logical.height())
@@ -125,7 +121,7 @@ public:
         if (QPixmapCache::find(key, &pm))
             return pm;
 
-        pm = render(logical, scale, mode, state, bg);
+        pm = render(logical, scale, mode, state, bg, min_contrast);
         QPixmapCache::insert(key, pm);
         return pm;
     }
@@ -133,8 +129,8 @@ public:
     QIconEngine *clone() const override
     {
         ContrastAdaptIconEngine *e =
-            new ContrastAdaptIconEngine(path_, min_contrast_, surface_role_, explicit_bg_,
-                                        size_, palette_);
+            new ContrastAdaptIconEngine(path_, surface_role_, explicit_bg_,
+                                        size_, palette_, token_colors_);
         e->svg_ = svg_;
         e->swaps_ = swaps_;
         e->token_maps_ = token_maps_;
@@ -256,10 +252,16 @@ private:
         }
     }
 
-    // Current colour of a mapped token, falling back to the palette text colour
-    // when the theme does not supply it.
+    // Current colour of a mapped token: a caller-supplied override first, then the
+    // live theme, falling back to the palette text colour when the theme does not
+    // supply it.
     QColor tokenColor(ThemeManager::ThemeToken token) const
     {
+        if (token_colors_) {
+            const QColor c = token_colors_->value(token);
+            if (c.isValid())
+                return c;
+        }
         return resolveIconToken(token, iconPalettePtr(palette_));
     }
 
@@ -277,7 +279,7 @@ private:
     // declared per-state colour when one exists for this mode, then adapt that
     // for contrast against the mode's background.
     QColor finalColor(const QColor &base, QIcon::Mode mode, QIcon::State state,
-                      const QColor &bg) const
+                      const QColor &bg, qreal min_contrast) const
     {
         const auto mapped = token_maps_.constFind(base.name());
         if (mapped != token_maps_.constEnd())
@@ -293,10 +295,11 @@ private:
             else if (state == QIcon::On && it->normal_on.isValid())
                 src = it->normal_on;
         }
-        return ColorMath::ensureContrast(src, bg, min_contrast_);
+        return ColorMath::ensureContrast(src, bg, min_contrast);
     }
 
-    QString adaptedSvg(QIcon::Mode mode, QIcon::State state, const QColor &bg) const
+    QString adaptedSvg(QIcon::Mode mode, QIcon::State state, const QColor &bg,
+                       qreal min_contrast) const
     {
         QString out;
         out.reserve(svg_.size());
@@ -307,7 +310,7 @@ private:
             const QRegularExpressionMatch m = it.next();
             out += QStringView{svg_}.mid(last, m.capturedStart(1) - last);
             const QColor c = QColor(m.captured(1));
-            const QColor a = c.isValid() ? finalColor(c, mode, state, bg) : c;
+            const QColor a = c.isValid() ? finalColor(c, mode, state, bg, min_contrast) : c;
             out += a.isValid() ? a.name() : m.captured(1);
             last = m.capturedEnd(1);
         }
@@ -316,13 +319,13 @@ private:
     }
 
     QPixmap render(const QSize &logical, qreal scale, QIcon::Mode mode,
-                   QIcon::State state, const QColor &bg) const
+                   QIcon::State state, const QColor &bg, qreal min_contrast) const
     {
         QPixmap pm = transparentIconPixmap(logical, scale);
         if (svg_.isEmpty())
             return pm;
 
-        QSvgRenderer renderer(adaptedSvg(mode, state, bg).toUtf8());
+        QSvgRenderer renderer(adaptedSvg(mode, state, bg, min_contrast).toUtf8());
         QPainter p(&pm);
         // Disabled: dim the whole rendering, as ThemedIcon does, rather than
         // per-colour so overlapping shapes don't show through each other.
@@ -336,11 +339,11 @@ private:
 
     QString path_;
     QString svg_;
-    qreal min_contrast_;
     QPalette::ColorRole surface_role_;
     QColor explicit_bg_;
     QSize size_;
     IconPaletteRef palette_;
+    IconTokenColorsRef token_colors_;
     QHash<QString, StateColors> swaps_;
     QHash<QString, ThemeManager::ThemeToken> token_maps_;
 };
@@ -350,39 +353,36 @@ private:
 ContrastAdaptIcon::ContrastAdaptIcon(const QString &svg_resource_path,
                                      QPalette::ColorRole surface_role, QSize size) :
     ContrastAdaptIcon(svg_resource_path, surface_role, QColor(), size,
-                      makeIconPaletteRef())
+                      makeIconPaletteRef(), makeIconTokenColorsRef())
 {
 }
 
 ContrastAdaptIcon::ContrastAdaptIcon(const QString &svg_resource_path,
                                      const QColor &explicit_background, QSize size) :
     ContrastAdaptIcon(svg_resource_path, QPalette::Window, explicit_background,
-                      size, makeIconPaletteRef())
+                      size, makeIconPaletteRef(), makeIconTokenColorsRef())
 {
 }
 
 ContrastAdaptIcon::ContrastAdaptIcon(const QString &svg_resource_path,
                                      QPalette::ColorRole surface_role,
                                      const QColor &explicit_background,
-                                     QSize size, IconPaletteRef palette) :
-    QIcon(new ContrastAdaptIconEngine(svg_resource_path, defaultMinContrastRef(),
+                                     QSize size, IconPaletteRef palette,
+                                     IconTokenColorsRef token_colors) :
+    QIcon(new ContrastAdaptIconEngine(svg_resource_path,
                                       surface_role, explicit_background, size,
-                                      palette)),
-    palette_(palette)
+                                      palette, token_colors)),
+    palette_(palette),
+    token_colors_(token_colors)
 {
+}
+
+void ContrastAdaptIcon::setTokenColors(const QHash<ThemeManager::ThemeToken, QColor> &colors)
+{
+    *token_colors_ = colors;
 }
 
 void ContrastAdaptIcon::setPalette(const QPalette &palette)
 {
     *palette_ = palette;
-}
-
-void ContrastAdaptIcon::setDefaultMinContrast(qreal ratio)
-{
-    defaultMinContrastRef() = ratio;
-}
-
-qreal ContrastAdaptIcon::defaultMinContrast()
-{
-    return defaultMinContrastRef();
 }

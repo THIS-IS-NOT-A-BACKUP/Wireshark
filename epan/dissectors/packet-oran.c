@@ -571,6 +571,9 @@ static int hf_oran_ue_tpmi_rank_y_sinr_lx;
 static int hf_oran_ue_layer_pre_eq_sinr;
 
 static int hf_oran_chan_type_sel;
+static int hf_oran_srs_meas_port_mask;
+static int hf_oran_srs_ue_port_wb_power;
+static int hf_oran_srs_ue_port_wb_sinr;
 
 /* Computed fields */
 static int hf_oran_c_eAxC_ID;
@@ -5952,9 +5955,43 @@ static int dissect_oran_c_section(tvbuff_t *tvb, proto_tree *tree, packet_info *
                     }
                     break;
                 }
-                /* TODO: new measurement types */
                 case 12:
+                {
+                    /* SRS UE port wideband signal power measurement report */
+                    /* srsMeasPortMask (2 bytes) */
+                    uint16_t srs_meas_port_mask;
+                    proto_tree_add_item_ret_uint16(mr_tree, hf_oran_srs_meas_port_mask, tvb, offset, 2, ENC_BIG_ENDIAN, &srs_meas_port_mask);
+                    offset += 2;
+
+                    for (unsigned p=0; p < 16; p++) {
+                        if ((1<<p) & srs_meas_port_mask) {
+                            /* srsUePortWbPower (one for each port mask bit set) */
+                            proto_item *wb_power_ti = proto_tree_add_item(mr_tree, hf_oran_srs_ue_port_wb_power, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            proto_item_append_text(wb_power_ti, " (antenna port %u)", p);
+                            offset += 2;
+                        }
+                    }
+                    break;
+                }
                 case 13:
+                {
+                    /* SRS UE port wideband SINR measurement report */
+                    /* srsMeasPortMask (2 bytes) */
+                    uint16_t srs_meas_port_mask;
+                    proto_tree_add_item_ret_uint16(mr_tree, hf_oran_srs_meas_port_mask, tvb, offset, 2, ENC_BIG_ENDIAN, &srs_meas_port_mask);
+                    offset += 2;
+
+                    for (unsigned p=0; p < 16; p++) {
+                        if ((1<<p) & srs_meas_port_mask) {
+                            /* srsUePortWbSinr (one for each port mask bit set) */
+                            proto_item *sinr_ti = proto_tree_add_item(mr_tree, hf_oran_srs_ue_port_wb_sinr, tvb, offset, 2, ENC_BIG_ENDIAN);
+                            proto_item_append_text(sinr_ti, " (antenna port %u)", p);
+                            offset += 2;
+                        }
+                    }
+                    break;
+                }
+                /* TODO: new measurement types */
                 case 14:
                 case 15:
                 case 16:
@@ -7728,7 +7765,7 @@ static int dissect_oran_u_section_header(tvbuff_t *tvb, packet_info *pinfo, unsi
                     }
 
                     if (total_gap > 0) {
-                        proto_item *cplane_delta_ti = proto_tree_add_uint(section_tree, hf_oran_corresponding_cplane_frame_time_delta, tvb, 0, 0, (uint32_t)total_gap);
+                        proto_item *cplane_delta_ti = proto_tree_add_uint64(section_tree, hf_oran_corresponding_cplane_frame_time_delta, tvb, 0, 0, (uint64_t)total_gap);
                         proto_item_set_generated(cplane_delta_ti);
                     }
 
@@ -11583,6 +11620,28 @@ proto_register_oran(void)
             NULL, HFILL}
         },
 
+        /* 7.7.3.117 */
+        { &hf_oran_srs_meas_port_mask,
+          { "srsMeasPortMask", "oran_fh_cus.srsMeasPortMask",
+            FT_UINT16, BASE_DEC,
+            NULL, 0xffff,
+            NULL, HFILL}
+        },
+        /* 7.7.3.106 */
+        { &hf_oran_srs_ue_port_wb_power,
+          { "srsUePortWbPower", "oran_fh_cus.srsUePortWbPower",
+            FT_UINT16, BASE_DEC,
+            NULL, 0x0,
+            NULL, HFILL}
+        },
+        /* 7.7.3.107 */
+        { &hf_oran_srs_ue_port_wb_sinr,
+          { "srsUePortWbSinr", "oran_fh_cus.srsUePortWbSinr",
+            FT_UINT16, BASE_DEC,
+            NULL, 0x0,
+            NULL, HFILL}
+        },
+
         { &hf_oran_c_section_common,
           { "Common Section", "oran_fh_cus.c-plane.section.common",
             FT_STRING, BASE_NONE,
@@ -11666,7 +11725,7 @@ proto_register_oran(void)
         /* Time since corresponding C-plane frame for U-plane */
         { &hf_oran_corresponding_cplane_frame_time_delta,
           { "Time since C-plane frame", "oran_fh_cus.cplane-frame-time-delta",
-            FT_UINT32, BASE_DEC, NULL, 0x0,
+            FT_UINT64, BASE_DEC, NULL, 0x0,
             "Microseconds since C-plane frame", HFILL}
         },
         /* Corresponding U-plane frame for C-plane */
