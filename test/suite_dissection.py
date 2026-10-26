@@ -1578,8 +1578,7 @@ class TestDissectMoqLiteDatagram:
         text_file = result_file("moql.txt")
         capture = result_file("moql.pcapng")
         with open(text_file, "w") as output:
-            for offset in range(0, len(payload), 16):
-                output.write(f"{offset:06x}  {payload[offset:offset + 16].hex(' ')}\n")
+            output.writelines(f"{offset:06x}  {payload[offset:offset + 16].hex(' ')}\n" for offset in range(0, len(payload), 16))
         subprocess.check_call((cmd_text2pcap, "-q", "-P", "moq-lite.datagram",
                                text_file, capture), env=test_env)
         command = [cmd_tshark, "-r", capture, "-T", "fields"]
@@ -3914,8 +3913,7 @@ class TestDissectUsbPtp:
         text_file = result_file('usb-ptp.txt')
         capture = result_file('usb-ptp.pcapng')
         with open(text_file, 'w') as f:
-            for packet in packets:
-                f.write(f'000000  {packet.hex(" ")}\n')
+            f.writelines(f'000000  {packet.hex(" ")}\n' for packet in packets)
         subprocess.check_call((cmd_text2pcap, '-q', '-l', '220', text_file, capture), env=test_env)
 
         stdout = subprocess.check_output((cmd_tshark,
@@ -4633,3 +4631,322 @@ class TestDissectAcn:
             [[str(u) for u in range(1, 17)], [str(u) for u in range(17, 33)],
              [str(u) for u in range(33, 40)]],
         ]
+
+
+AJP13_OPTS = ('-d', 'tcp.port==8009,ajp13')  # 8009 is nvme-tcp by default
+
+
+class TestDissectAjp13:
+    def test_ajp13_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type, method, coded and named header and request
+        attribute decodes without malformed packets, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark, *AJP13_OPTS,
+                '-r', capture_file('ajp13_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('AJP13') == 111
+        assert protocols.count('TCP') == 30
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *AJP13_OPTS, *passes,
+                    '-r', capture_file('ajp13_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_ajp13_large_query_string(self, cmd_tshark, capture_file, test_env):
+        '''A request with a 31000 octet URI and 11000 null query_string
+        attributes decodes. It used to keep a copy of the URI for each
+        attribute, about 1.4 GB.'''
+        stdout = subprocess.check_output((cmd_tshark, *AJP13_OPTS,
+                '-r', capture_file('ajp13_coverage.pcap.gz'),
+                '-Y', 'ajp13.query_string',
+                '-Tfields', '-eframe.number', '-eajp13.uri',
+                '-e', 'ajp13.query_string', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['4', '58', '137']
+        number, uri, query_strings = frames[2]
+        assert uri.endswith('/big')
+        assert query_strings == '|' * 10999
+
+    def test_ajp13_export_objects(self, cmd_tshark, capture_file, features, test_env, tmp_path):
+        '''Request and response bodies are reassembled and exported,
+        uncompressed, and the query string is appended to the URI once.'''
+        export_dir = tmp_path / 'export'
+        export_dir.mkdir()
+        subprocess.check_call((cmd_tshark, *AJP13_OPTS,
+                '-r', capture_file('ajp13_coverage.pcap.gz'),
+                '-q', '--export-objects', f'ajp13,{export_dir}',
+            ), env=test_env)
+        text = b'The quick brown fox jumps over the lazy servlet. ' * 8
+        files = {p.name: p.read_bytes() for p in export_dir.iterdir()}
+        assert sorted(files) == [
+            'bad.txt', 'big%3f', 'c.txt', 'd.txt', 'form%3fa=1&b=2', 'form%3fa=1&b=2(1)',
+            'index.html%3fq=all&x=1', 'items(1).json', 'items.json',
+            'object118.text%2fplain', 'raw', 'raw(1)', 'z.txt',
+        ]
+        # The large request: a single "?" for the 11000 empty query strings
+        assert files['big%3f'] == b'big response\n'
+        # Request body over three body packets
+        assert files['form%3fa=1&b=2'] == b'name=alice&city=springfield&x=1'
+        # gzip response over three chunks and four segments, deflate,
+        # x-gzip, x-deflate and an unknown encoding
+        assert files['form%3fa=1&b=2(1)'] == text
+        assert files['d.txt'] == text
+        assert files['c.txt'] == text
+        assert files['raw'] == text
+        assert files['items.json'] == files['items(1).json']
+        assert files['items.json'].startswith(b'{"items":[{"id":0},')
+        # Data that is not gzip is exported as it is
+        assert files['bad.txt'] == b'this is not gzip data'
+        if features.have_brotli:
+            assert files['raw(1)'] == text
+        if features.have_zstd:
+            assert files['z.txt'] == text[:200]
+
+
+# TCP port 5190 belongs to the "aol" dissector by default.
+AIM_OPTS = ('-d', 'tcp.port==5190,aim')
+
+
+class TestDissectAim:
+    def test_aim_port_not_aim_by_default(self, cmd_tshark, capture_file, test_env):
+        '''Port 5190 goes to the AOL dissector unless Decode As says AIM.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Y', 'aim',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_aim_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every SNAC family is dissected, with no malformed packets and
+        no errors.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIM_OPTS,
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 261
+        assert protocols.count('AIM') == 14
+        assert protocols.count('AIM Administration') == 10
+        assert protocols.count('AIM Advertisements') == 3
+        assert protocols.count('AIM BOS') == 8
+        assert protocols.count('AIM Buddylist') == 11
+        assert protocols.count('AIM Chat') == 17
+        assert protocols.count('AIM ChatNav') == 9
+        assert protocols.count('AIM Directory') == 5
+        assert protocols.count('AIM Email') == 4
+        assert protocols.count('AIM Generic') == 33
+        assert protocols.count('AIM ICQ') == 11
+        assert protocols.count('AIM Invitation') == 3
+        assert protocols.count('AIM Location') == 12
+        assert protocols.count('AIM Messaging') == 26
+        assert protocols.count('AIM Popup') == 7
+        assert protocols.count('AIM Signon') == 9
+        assert protocols.count('AIM SSI') == 35
+        assert protocols.count('AIM SST') == 7
+        assert protocols.count('AIM Stats') == 4
+        assert protocols.count('AIM Translate') == 3
+        assert protocols.count('AIM User Lookup') == 3
+        assert protocols.count('TLSv1.2') == 11
+        stdout = subprocess.check_output((cmd_tshark, *AIM_OPTS,
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Y', '_ws.malformed || _ws.expert.severity == error',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_aim_chat_long_messages(self, cmd_tshark, capture_file, test_env):
+        '''Chat messages longer than 999 octets are not shown, and the
+        Info column does not pick up an uninitialised buffer.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIM_OPTS,
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Y', 'aim_chat && aim.datalen > 999',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '151\tAIM Chat, Outgoing Message -> ',
+            '152\tAIM Chat, Incoming Messagefrom:  -> ',
+        ]
+
+    def test_aim_chat_short_messages(self, cmd_tshark, capture_file, test_env):
+        '''The text of a short chat message is taken from the HTML.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIM_OPTS,
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Y', 'aim_chat.screen_name == "bob"',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'AIM Chat, Incoming Messagefrom: bob -> llmmtthh',
+            'AIM Chat, Incoming Messagefrom: bob -> Hi everybody',
+            'AIM Chat, Incoming Messagefrom: bob -> hi',
+        ]
+
+    def test_aim_tls_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''AIM in a TLS session (NULL cipher) is found by the aim_tls
+        heuristic when it is enabled.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIM_OPTS,
+                '--enable-heuristic', 'aim_tls',
+                '-r', capture_file('aim_coverage.pcap.gz'),
+                '-Y', 'tls && aim',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'New Connection',
+            'AIM Generic, Server Ready',
+        ]
+
+    def test_aim_two_pass(self, cmd_tshark, capture_file, test_env):
+        '''One pass and two passes give the same AIM output.'''
+        def aim_info(*opts):
+            return subprocess.check_output((cmd_tshark, *AIM_OPTS, *opts,
+                    '-r', capture_file('aim_coverage.pcap.gz'),
+                    '-Y', 'aim',
+                    '-Tfields', '-eframe.number', '-e_ws.col.info',
+                ), encoding='utf-8', env=test_env)
+        assert aim_info() == aim_info('-2')
+
+
+class TestDissectAfs:
+    def test_afs_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every RX data packet is dissected as AFS, with no malformed
+        packets or error expert infos.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('afs_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 392
+        assert protocols.count('AFS (RX)') == 391
+        assert protocols.count('RX') == 1
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('afs_coverage.pcap.gz'),
+                '-Y', '_ws.malformed || _ws.expert.severity == error',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_afs_full_tree(self, cmd_tshark, capture_file, test_env):
+        '''With the whole tree shown every field is added, which is where
+        a field added with the wrong encoding shows up as a dissector bug,
+        as the get-xstats timestamp did.'''
+        for defragment in ('FALSE', 'TRUE'):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('afs_coverage.pcap.gz'),
+                    '-o', 'afs.defragment:' + defragment,
+                    '-V', '-O', 'afs',
+                ), encoding='utf-8', env=test_env)
+            assert 'Malformed Packet' not in stdout
+            assert 'Expert Info (Error' not in stdout
+
+    def test_afs_defragment(self, cmd_tshark, capture_file, test_env):
+        '''With afs.defragment, the multi-packet store-data request and
+        fetch-data reply are reassembled.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('afs_coverage.pcap.gz'),
+                '-o', 'afs.defragment:TRUE',
+                '-Y', 'afs.fragment.count',
+                '-Tfields', '-eframe.number', '-eafs.fragment.count',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['382', '3', '386', '2']
+
+    def test_afs_store_acl(self, cmd_tshark, capture_file, test_env):
+        '''Store ACL requests with a huge positive count and with 16000
+        entries in one datagram decode quickly and completely.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('afs_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 389',
+                '-Tfields', '-eframe.number', '-eafs.fs.acl.count.positive',
+                '-eafs.fs.acl.entity', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [(f[0], f[1], len(f[2].split('|'))) for f in frames] == [
+            ('389', '2', 3),
+            ('390', '2147483647', 1),
+            ('391', '2147483647', 1),
+            ('392', '16000', 16000),
+        ]
+
+
+# The capture is SS7 over M3UA with ANSI point codes and SCCP addresses.
+AIN_OPTS = ('-o', 'mtp3.standard:ANSI')
+
+
+class TestDissectAin:
+    def test_ain_needs_ansi_mtp3(self, cmd_tshark, capture_file, test_env):
+        '''With the default (ITU) MTP3 standard the ANSI SCCP addresses do
+        not route to TCAP, so nothing is dissected as AIN.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ain_coverage.pcap.gz'),
+                '-Y', 'ain',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_ain_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every operation is dissected, with no malformed packets and no
+        warning or error expert infos.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIN_OPTS,
+                '-r', capture_file('ain_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 131
+        assert protocols.count('AIN') == 130
+        # the Reject is not passed to AIN
+        assert protocols.count('ANSI TCAP') == 1
+        stdout = subprocess.check_output((cmd_tshark, *AIN_OPTS,
+                '-r', capture_file('ain_coverage.pcap.gz'),
+                '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_ain_parameters(self, cmd_tshark, capture_file, test_env):
+        '''The hand-written AINDigits, CarrierFormat and AMAslpID bodies and
+        the ExtensionParameter OID callback decode their values.'''
+        for dfilter, frames in (
+                ('ain.bcd_digits == "9085551212"', 47),
+                ('ain.carrier_bcd_digits == "0288"', 17),
+                ('ain.amaslpid == "123456789"', 29),
+                ('ain.ext_type_oid == "2.5.4.3" && x509sat.printableString == "AIN synthetic extension"', 121),
+                ):
+            stdout = subprocess.check_output((cmd_tshark, *AIN_OPTS,
+                    '-r', capture_file('ain_coverage.pcap.gz'),
+                    '-Y', dfilter,
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == frames, dfilter
+
+    def test_ain_return_result(self, cmd_tshark, capture_file, test_env):
+        '''An Invoke and its ReturnResult in one package (it used to hit
+        DISSECTOR_ASSERT_NOT_REACHED in dissect_ain()) decodes the result
+        of the invoked operation.'''
+        stdout = subprocess.check_output((cmd_tshark, *AIN_OPTS,
+                '-r', capture_file('ain_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-e_ws.col.info', '-eain.actResult', '-e_ws.malformed',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == 'activityTest ReturnResult \t0\t\n'
+        # Every ReturnResult (one for each of the 12 operations with a
+        # result, more for those sent several times) gets its operation
+        stdout = subprocess.check_output((cmd_tshark, *AIN_OPTS,
+                '-r', capture_file('ain_coverage.pcap.gz'),
+                '-Y', '_ws.col.info contains "ReturnResult"',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 33
+        assert 'Unknown' not in stdout
+
+    def test_ain_two_pass(self, cmd_tshark, capture_file, test_env):
+        '''Two passes give the same AIN output as one.'''
+        outputs = []
+        for passes in ((), ('-2',)):
+            outputs.append(subprocess.check_output((cmd_tshark, *AIN_OPTS, *passes,
+                    '-r', capture_file('ain_coverage.pcap.gz'),
+                    '-O', 'ain', '-V',
+                ), encoding='utf-8', env=test_env))
+        assert outputs[0] == outputs[1]
