@@ -5501,7 +5501,6 @@ class TestDissectAmqp:
                      'list-item (byte): -100', 'list-item (short): -30000',
                      'list-item (int): -2000000000', 'list-item (smallint): -17',
                      'list-item (long): -77162851027281784', 'list-item (smalllong): -99',
-                     'list-item (float): 1.500000', 'list-item (double): -2.250000',
                      'list-item (decimal32): (not supported)',
                      'list-item (decimal128): (not supported)', 'list-item (char): €',
                      'list-item (timestamp): Oct  9, 2025 08:53:20.123000000',
@@ -5510,6 +5509,9 @@ class TestDissectAmqp:
                      'list-item (sym32): long-form-symbol', 'k32 (uint): 32',
                      'list-item (array of 2 elements)'):
             assert text in stdout, text
+        # Floats are shown with the decimal separator of the locale
+        for text in ('list-item (float): 1.500000', 'list-item (double): -2.250000'):
+            assert text in stdout or text.replace('.', ',') in stdout, text
 
     def test_amqp10_reassembly(self, cmd_tshark, capture_file, test_env):
         '''A transfer over three TCP segments (the first split inside the
@@ -6312,3 +6314,2367 @@ class TestDissectAnsiMap:
         assert counts['0x35'] == 39    # SMS Delivery Point to Point
         assert counts['0x70'] == 2     # QualificationRequest2 (the last)
         assert counts['0x67'] == 0     # not an ANSI MAP operation
+
+
+# The capture is SS7 over M3UA with ANSI point codes and SCCP addresses.
+ANSI_TCAP_OPTS = ('-o', 'mtp3.standard:ANSI')
+
+
+class TestDissectAnsiTcap:
+    def test_ansi_tcap_needs_ansi_mtp3(self, cmd_tshark, capture_file, test_env):
+        '''With the default (ITU) MTP3 standard the ANSI SCCP addresses do
+        not route to TCAP, so nothing is dissected as ANSI TCAP.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'ansi_tcap',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_ansi_tcap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every package type, component type, operation code family and
+        national parameter decodes without malformed packets or error expert
+        infos, and two passes give the same result as one.'''
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 135
+        assert protocols.count('ANSI TCAP') == 86
+        assert protocols.count('ANSI MAP') == 24
+        assert protocols.count('IS-637-A') == 19
+        assert protocols.count('AIN') == 3
+        assert protocols.count('LNPDQP') == 3
+        outputs = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS, *passes,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            outputs.append(subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS, *passes,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'), '-V',
+                ), encoding='utf-8', env=test_env))
+        assert outputs[0] == outputs[1]
+
+    def test_ansi_tcap_many_components(self, cmd_tshark, capture_file, test_env):
+        '''Packages of 600 components (ANSI MAP, AIN, national LNP) used to
+        fail the layer limit DISSECTOR_ASSERT() in call_dissector_work().
+        The components are handed over until the frame nears the limit,
+        the rest are reported with a warning. 400 components fit.'''
+        expected = {
+            '127': ('ansi_map', 475, 125),
+            '128': ('ansi_map', 400, 0),
+            '129': ('ain', 475, 125),
+            '130': ('lnpdqp', 475, 125),
+        }
+        for frame, (proto, handed, skipped) in expected.items():
+            stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', f'frame.number == {frame}', '-V',
+                ), encoding='utf-8', env=test_env)
+            assert 'Dissector bug' not in stdout
+            assert 'Malformed Packet' not in stdout
+            assert count_output(stdout, r'Expert Info \(Warning/Undecoded\): Too many components in one package') == skipped
+            stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', f'frame.number == {frame}',
+                    '-Tfields', '-eframe.protocols',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.strip().split(':').count(proto) == handed
+
+    def test_ansi_tcap_same_frame_match(self, cmd_tshark, capture_file, test_env):
+        '''A package with an Invoke, a ReturnResult and a second Invoke of
+        the same transaction: the ReturnResult is matched only with Invokes
+        of earlier frames, so it does not get the second Invoke's
+        operation, and two passes give the same result as one.'''
+        outputs = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS, *passes,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 131',
+                    '-Tfields', '-eansi_tcap.private',
+                ), encoding='utf-8', env=test_env)
+            # The two Invokes' private operation codes, and no generated
+            # operation code for the ReturnResult
+            assert stdout.strip() == '2357,2317'
+            outputs.append(subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS, *passes,
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 131', '-V',
+                ), encoding='utf-8', env=test_env))
+        assert outputs[0] == outputs[1]
+
+    def test_ansi_tcap_long_transaction_id(self, cmd_tshark, capture_file, test_env):
+        '''A transaction ID of 260 octets is used whole for invoke/result
+        matching (its length was truncated to 8 bits): a result whose ID
+        differs after the first four octets is not matched, one with the
+        same ID is.'''
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 21 && frame.number <= 23',
+                '-Tfields', '-eframe.number', '-eansi_tcap.identifier', '-eansi_tcap.national',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [len(f[1]) for f in frames] == [520, 520, 520]
+        assert frames[0][1][:8] == frames[1][1][:8] == 'c1c2c3c4'
+        assert frames[1][2] == ''
+        assert frames[2][2] == '257'
+
+    def test_ansi_tcap_matching(self, cmd_tshark, capture_file, test_env):
+        '''Invoke/result matching by transaction ID only (the default), by
+        ID and source, and by ID, source and destination: a result from a
+        relay and a result to another node.'''
+        expected = {
+            'tid': '112\t257\n114\t257\n116\t257\n',
+            'tid_source': '112\t257\n114\t257\n116\t\n',
+            'tid_source_dest': '112\t257\n114\t\n116\t\n',
+        }
+        for matchtype, result in expected.items():
+            stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                    '-o', f'ansi_tcap.transaction.matchtype:{matchtype}',
+                    '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                    '-Y', 'frame.number in {112, 114, 116}',
+                    '-Tfields', '-eframe.number', '-eansi_tcap.national',
+                ), encoding='utf-8', env=test_env)
+            assert stdout == result
+        # The AIN ReturnResult gets its operation from the matched Invoke
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 108',
+                '-Tfields', '-eansi_tcap.private', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.startswith('26886\tactivityTest ReturnResult')
+
+    def test_ansi_tcap_values(self, cmd_tshark, capture_file, test_env):
+        '''Abort causes, reject problems, error codes and national
+        parameters.'''
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'ansi_tcap.abortCause',
+                '-Tfields', '-eansi_tcap.abortCause',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [str(c) for c in range(1, 11)] + ['42', '6']
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 58',
+                '-Tfields', '-eansi_tcap.rejectProblem',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '257,258,259,260,513,514,515,516,769,770,771,1025,1026,1027,1028,1029,1281,1282,1283,1284,1285,1286'
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'ansi_tcap.parameter',
+                '-Tfields', '-eansi_tcap.parameter', '-E', 'occurrence=a',
+            ), encoding='utf-8', env=test_env)
+        params = set(','.join(stdout.split()).split(','))
+        assert len(params) == 38
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_TCAP_OPTS,
+                '-r', capture_file('ansi_tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 121 || frame.number == 124 || frame.number == 125',
+                '-Tfields', '-eansi_tcap.timestamp.difference', '-eansi_tcap.generic_name.characters',
+                '-eansi_tcap.display_text',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '-5\t\t\n\tALICE\t\n\t\tHELLO\n'
+
+
+class TestDissectTcap:
+    def test_tcap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type, dialogue PDU and component type, selected by
+        application context, SSN or the data fallback, decodes without
+        malformed packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 139
+        assert protocols.count('GSM MAP') == 99
+        assert protocols.count('TCAP') == 27
+        assert protocols.count('Camel-v2') == 4
+        assert protocols.count('Camel') == 2
+        assert protocols.count('INAP') == 3
+        assert protocols.count('ANSI TCAP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('tcap_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_tcap_too_many_components(self, cmd_tshark, capture_file, test_env):
+        '''A Begin with 600 GSM MAP invokes (frame 138) used to fail the
+        layer limit assertion in call_dissector_work(). The components are
+        handed to GSM MAP until the frame is 16 layers from the limit, the
+        rest get a warning. Frame 139 has 520 components for the data
+        dissector and then one of every component type and problem code,
+        which TCAP dissects itself once the limit is near.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number in {138, 139}',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-e_ws.expert.message', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        frames = {}
+        for line in stdout.splitlines():
+            number, protos, experts = line.split('\t')
+            frames[number] = (protos.split(':'), experts.split('|'))
+        for number, proto, total in (('138', 'gsm_map', 600), ('139', 'data', 549)):
+            protos, experts = frames[number]
+            assert set(experts) == {'Too many components in one message, not dissected'}
+            assert protos.count(proto) >= 470
+            assert protos.count(proto) + len(experts) == total
+        # The first ~480 invokes of the reproducer are GSM MAP mo-forwardSM
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 138',
+                '-Tfields', '-egsm_old.localValue', '-egsm_old.invokeID',
+            ), encoding='utf-8', env=test_env)
+        opcodes, invoke_ids = stdout.strip('\n').split('\t')
+        opcodes = opcodes.split(',')
+        assert len(opcodes) >= 470 and set(opcodes) == {'46'}
+        assert invoke_ids.split(',')[:3] == ['0', '1', '2']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 139',
+                '-Tfields', '-etcap.generalProblem', '-etcap.invokeProblem',
+                '-etcap.returnResultProblem', '-etcap.returnErrorProblem',
+                '-etcap.nationaler', '-etcap.privateer', '-etcap.linkedID',
+                '-etcap.globalValue', '-etcap.constructor_eoc',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip('\n').split('\t') == [
+            '0,1,2', '0,1,2,3,4,5,6,7', '0,1,2', '0,1,2,3,4', '-300', '70000',
+            '1', '0.4.0.0.1.2.3', '0x0000']
+
+    def test_tcap_subdissector(self, cmd_tshark, capture_file, test_env):
+        '''The components go to the subdissector of the application context
+        (also when only an earlier message of the transaction had it, or
+        the response changes it), else that of the called SSN, else data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+            ), encoding='utf-8', env=test_env)
+        last = {}
+        for line in stdout.splitlines():
+            number, protos = line.split('\t')
+            last[int(number)] = protos.split(':')[-1]
+        for numbers, proto in (
+                # by ACN; dialogue-only Begin, then components without dialogue
+                ((1, 2, 22, 23), 'gsm_map'),
+                # unknown ACN: GSM MAP by SSN 6, data at SSN 10/11
+                ((26, 27, 30, 31), 'gsm_map'),
+                ((28, 29, 32, 33, 36, 38), 'data'),
+                # Unidirectional by ACN and by SSN
+                ((34, 35, 37), 'gsm_map'),
+                # CAMEL by ACN and by SSN 146, INAP by SSN 106 and by ACN
+                ((111, 112, 114, 115, 117, 118), 'camel'),
+                ((119, 120, 121), 'inap'),
+                # dialogue only, aborts
+                ((21, 24, 89, 102, 122), 'tcap'),
+                # ANSI TCAP through the ITU TCAP dissector
+                ((125,), 'ansi_tcap'),
+                # SSN 20/21: not TCAP without an SCCP users table entry
+                ((43, 44), 'data'),
+                ):
+            for number in numbers:
+                assert last[number] == proto, number
+        # The SCCP users table hands SSN 20 at PC 808 to GSM MAP over TCAP
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'uat:sccp_users:"2","808","20","GSM MAP"',
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number in {43, 44}',
+                '-Tfields', '-e_ws.col.info', '-etcap.srt.session_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'invoke sendAuthenticationInfo \t14,14',
+            'returnResultLast sendAuthenticationInfo \t14,14',
+        ]
+
+    def test_tcap_transactions(self, cmd_tshark, capture_file, test_env):
+        '''Begin, Continue, End and Abort are matched into sessions: by the
+        Begin key, the Continue key in both directions, the End key; a
+        Continue from the initiator; SUA (IP addresses instead of point
+        codes); TIDs reused after an End, after the repetition and the lost
+        timeouts, or by other nodes; a duplicate Begin; unmatched messages.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-etcap.srt.session_id',
+                '-etcap.srt.end', '-etcap.srt.duplicate', '-etcap.srt.sessiontime',
+                '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        srt = {}
+        for line in stdout.splitlines():
+            number, *fields = line.split('\t')
+            srt[int(number)] = fields
+        for number, fields in (
+                (2, ['1', '1', '', '0.250000000']),       # End answers the Begin
+                (6, ['2', '3', '', '0.750000000']),       # Begin/Continue/Continue/End
+                (13, ['4', '12', '', '0.250000000']),     # U-Abort
+                (23, ['8', '20', '', '0.750000000']),     # dialogue-only Begin
+                (46, ['', '', '45', '']),                 # duplicate of frame 45 (session 14)
+                (47, ['14', '45', '', '2.250000000']),
+                (49, ['15', '48', '', '0.250000000']),    # TID reused after the End
+                (51, ['16', '50', '', '0.250000000']),
+                (56, ['19', '', '', '']),                 # after the repetition timeout
+                (58, ['20', '', '', '']),                 # unanswered
+                (60, ['21', '59', '', '0.250000000']),    # after the lost timeout
+                (63, ['22', '61', '', '0.500000000']),    # Continue from the initiator
+                (66, ['', '', '', '']),                   # second responder, not matched
+                (82, ['26', '78', '', '1.000000000']),    # Continue TIDs reused
+                (85, ['27', '83', '', '0.500000000']),    # same TIDs, other nodes
+                (86, ['', '', '', '']),                   # retransmitted End
+                (87, ['', '', '', '']),
+                (40, ['', '', '', '']),                   # End without a Begin
+                (130, ['45', '127', '', '0.750000000']),  # SUA
+                (132, ['46', '131', '', '0.250000000']),
+                (135, ['47', '133', '', '0.500000000']),
+                ):
+            assert srt[number] == fields, number
+        # The duplicate is shown as such
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'tcap.srt.duplicate',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['46']
+        # With a longer lost timeout the unanswered Begin's TID reused 35 s
+        # later is a duplicate too
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'tcap.losttimeout:60',
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'tcap.srt.duplicate',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['46', '59']
+        # Two passes: the Begin links to the frame that ends its session
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1, 3, 68}',
+                '-Tfields', '-etcap.srt.begin', '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['2', '6', '72']
+
+    def test_tcap_dialogue(self, cmd_tshark, capture_file, test_env):
+        '''Dialogue portion: AARE results and diagnostics (ACN fallback),
+        P-Abort causes, ABRT sources, and dialogue PDUs nested in the user
+        information.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'tcap.p_abortCause || tcap.abort_source || tcap.result == 1',
+                '-Tfields', '-eframe.number', '-etcap.p_abortCause',
+                '-etcap.abort_source', '-etcap.dialogue_service_user',
+                '-etcap.dialogue_service_provider',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '13\t\t\t2\t',      # application-context-name-not-supported
+            '89\t0\t\t\t', '91\t1\t\t\t', '93\t2\t\t\t', '95\t3\t\t\t', '97\t4\t\t\t',
+            '100\t\t0\t\t', '102\t\t1\t\t',
+            '104\t\t\t\t2', '108\t\t\t\t1', '110\t\t\t1\t',
+            '116\t\t0\t\t',     # CAMEL, with a CAP U-Abort reason
+            '132\t4\t\t\t',     # SUA
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('tcap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 39',
+                '-Tfields', '-etcap.UniDialoguePDU', '-etcap.DialoguePDU',
+                '-etcap.aarq_application_context_name',
+                '-etcap.audt_application_context_name',
+            ), encoding='utf-8', env=test_env)
+        # The outer AUDT is dissected as an AARQ (same tag), the nested AUDT
+        # as a UniDialoguePDU
+        assert stdout.strip('\n').split('\t') == [
+            '0', '0', '0.4.0.0.1.0.21.2,0.4.0.0.1.0.19.2', '0.4.0.0.1.0.21.2']
+
+
+class TestDissectAodv:
+    def test_aodv_types(self, cmd_tshark, capture_file, test_env):
+        '''Every message type over IPv4, IPv6 and draft-01 IPv6 is
+        dissected, with no malformed packets and no errors.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aodv_coverage.pcap.gz'),
+                '-Y', 'aodv',
+                '-Tfields', '-eaodv.type',
+            ), encoding='utf-8', env=test_env)
+        types = stdout.splitlines()
+        assert len(types) == 66
+        assert types.count('1') == 22     # RREQ
+        assert types.count('2') == 13     # RREP
+        assert types.count('3') == 8      # RERR
+        assert types.count('4') == 4      # RREP-ACK
+        assert types.count('16') == 9     # draft-01 IPv6 RREQ
+        assert types.count('17') == 5     # draft-01 IPv6 RREP
+        assert types.count('18') == 3     # draft-01 IPv6 RERR
+        assert types.count('19') == 2     # draft-01 IPv6 RREP-ACK
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aodv_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aodv_ipv6(self, cmd_tshark, capture_file, test_env):
+        '''RFC 3561 types over IPv6 have IPv6 addresses; the draft-01
+        RERR has the sequence number before the address.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aodv_coverage.pcap.gz'),
+                '-Y', 'aodv.type == 3 || aodv.type == 18',
+                '-Tfields', '-eframe.number', '-eaodv.flags.rerr_nodelete',
+                '-eaodv.destcount', '-eaodv.unreach_dest_ip',
+                '-eaodv.unreach_dest_ipv6', '-eaodv.dest_seqno',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert lines[2] == '22\tFalse\t4\t192.0.2.7,192.0.2.8,192.0.2.9,192.0.2.10\t\t2,3,4,4294967295'
+        assert lines[6] == '43\tFalse\t3\t\t2001:db8::7,2001:db8::8,2001:db8::9\t1,2,3'
+        assert lines[9] == '59\tFalse\t3\t\t2001:db8::1,2001:db8::2,2001:db8::3\t7,8,9'
+
+    def test_aodv_extensions(self, cmd_tshark, capture_file, test_env):
+        '''Hello Interval, Timestamp, None and unknown extensions, alone
+        and chained, longer than needed (the excess is skipped).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aodv_coverage.pcap.gz'),
+                '-Y', 'aodv.ext_type && frame.number < 61',
+                '-Tfields', '-eframe.number', '-eaodv.ext_type',
+                '-eaodv.ext_length', '-eaodv.hello_interval', '-eaodv.timestamp',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t2\t4\t1000\t',
+            '9\t3\t8\t\t81985529216486895',
+            '10\t1\t2\t\t',
+            '11\t200\t3\t\t',
+            '12\t2,3,1,7\t6,9,1,1\t500\t42',
+            '18\t2\t4\t1000\t',
+            '19\t3,2\t8,4\t250\t1',
+            '36\t2,3,1,9\t4,8,2,2\t1000\t99',
+            '40\t2\t4\t1000\t',
+            '52\t2,3,1,9\t4,8,2,2\t1000\t7',
+            '56\t2,3\t4,8\t1000\t8',
+        ]
+
+    def test_aodv_many_extensions(self, cmd_tshark, capture_file, test_env):
+        '''A RREQ with 470 one octet unknown extensions and a draft-01
+        RREQ with 100 (batch46-55 reproducers) dissect every one.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aodv_coverage.pcap.gz'),
+                '-Y', 'frame.number == 61 || frame.number == 67',
+                '-Tfields', '-eaodv.ext_type',
+            ), encoding='utf-8', env=test_env)
+        assert [len(line.split(',')) for line in stdout.splitlines()] == [470, 100]
+
+    def test_aodv_udp_port_pref(self, cmd_tshark, capture_file, test_env):
+        '''Frame 28 is AODV on UDP port 6540, dissected only once the port
+        is added to the preference.'''
+        def frame28(*opts):
+            return subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('aodv_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 28',
+                    '-Tfields', '-eaodv.rreq_id', '-eaodv.flags.rreq_destinationonly',
+                ), encoding='utf-8', env=test_env)
+        assert frame28() == '\t\n'
+        assert frame28('-o', 'aodv.udp.port:654,6540') == '300\tTrue\n'
+
+    def test_aodv_short_extension(self, cmd_text2pcap, cmd_tshark, result_file, test_env):
+        '''A Hello Interval extension shorter than 4 octets and a Timestamp
+        extension shorter than 8 get the "Invalid option length" expert
+        info and are skipped, without an exception; the extension after
+        them is dissected.'''
+        def ext(t, data):
+            return struct.pack('!BB', t, len(data)) + data
+        rreq = (struct.pack('!BHBI', 1, 0x8000, 3, 7) + bytes([192, 0, 2, 9])
+                + struct.pack('!I', 5) + bytes([192, 0, 2, 1]) + struct.pack('!I', 6))
+        packets = [
+            rreq + ext(2, b'\x00\x01') + ext(2, struct.pack('!I', 5)),
+            rreq + ext(3, bytes(7)) + ext(2, struct.pack('!I', 9)),
+        ]
+        text_file = result_file('aodv_short_ext.txt')
+        capture = result_file('aodv_short_ext.pcapng')
+        with open(text_file, 'w') as f:
+            f.writelines(f'000000  {packet.hex(" ")}\n' for packet in packets)
+        subprocess.check_call((cmd_text2pcap, '-q', '-4', '192.0.2.1,192.0.2.2',
+                               '-u', '654,654', text_file, capture), env=test_env)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture,
+                '-Tfields', '-eframe.number', '-eaodv.ext_length.invalid',
+                '-eaodv.hello_interval', '-eaodv.timestamp', '-e_ws.malformed.expert',
+            ), encoding='utf-8', env=test_env)
+        # The expert info is in the Malformed group, but no exception follows it
+        assert stdout == '1\t1\t5\t\t\n2\t1\t9\t\t\n'
+
+
+class TestDissectAol:
+    def test_aol_types(self, cmd_tshark, capture_file, test_env):
+        '''Every P3 frame type is dissected on port 5190 without Decode As,
+        with no malformed packets and no errors.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aol',
+                '-Tfields', '-eaol.type',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 38
+        types = stdout.replace('\n', ',').rstrip(',').split(',')
+        assert len(types) == 43
+        assert types.count('0x20') == 15    # Data
+        assert types.count('0x21') == 3     # SS Request
+        assert types.count('0x22') == 2     # SS Response
+        assert types.count('0x23') == 8     # Init
+        assert types.count('0x24') == 5     # ACK
+        assert types.count('0x25') == 2     # NAK
+        assert types.count('0x26') == 6     # Heartbeat
+        assert types.count('0x27') == 1     # unknown
+        assert types.count('0x3f') == 1     # unknown
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aim',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aol_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aol_init(self, cmd_tshark, capture_file, test_env):
+        '''INIT in each layout: WAOL 1.5 (no filler), later versions (filler),
+        4.0 (unparsed tail) and one octet short (end marker missing).
+        aol.init.win_ver holds the Windows version, not the DOS version
+        (frame 61 is the batch46-55 reproducer: DOS 6.22, Windows 10.0).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aol.type == 0x23 && aol.init_data',
+                '-Tfields', '-eframe.number', '-eaol.init.platform',
+                '-eaol.init.dos_ver', '-eaol.init.win_ver', '-eaol.init.filler',
+                '-eaol.init.conn_spd', '-eaol.udata', '-eaol.end_missing',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '4\t0x03\t0x0616\t0x0000030a\t0x00\t0x05\t\t',
+            '31\t0x0c\t0x0616\t0x0000030a\t\t0x05\t\t',
+            '32\t0x03\t0x0616\t0x00000400\t\t\t000102030405060708090a0b0c0d0e\t',
+            '33\t0x07\t0x0700\t0x00000500\t0x01\t0x05\t\t',
+            '34\t0x03\t0x0616\t0x0000030a\t0x00\t0x05\t\t',
+            '35\t0x03\t0x0616\t0x0000030a\t\t0x0d\t\t1',
+            '61\t0x03\t0x0616\t0x00000a00\t0x00\t0x05\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aol.init.win_ver == 0x0a00',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '61\n'
+
+    def test_aol_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''PDUs split across segments (also inside the fixed header) are
+        reassembled, and several PDUs in one segment are all dissected.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aol && tcp.stream == 2',
+                '-Tfields', '-eframe.number', '-eaol.len', '-eaol.token',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '45\t305\tAb',
+            '47\t17\tCd',
+            '49\t3\t',
+            '50\t3,8,3,8\tEf,Gh',
+            '51\t3,3\t',
+            '52\t55,3\tIj',
+            '53\t3\t',
+            '54\t85\tKl',
+        ]
+
+    def test_aol_desegment_pref(self, cmd_tshark, capture_file, test_env):
+        '''With aol.desegment off, the first segment of a split PDU is
+        dissected alone and reported as unreassembled.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'aol.desegment:FALSE',
+                '-r', capture_file('aol_coverage.pcap.gz'),
+                '-Y', 'aol && _ws.unreassembled',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '43\n48\n51\n53\n65\n67\n'
+
+    def test_aol_tcp_port_pref(self, cmd_tshark, capture_file, test_env):
+        '''The last connection is AOL on port 15190, dissected only once
+        the port is added to the preference.'''
+        def alt_port(*opts):
+            return subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('aol_coverage.pcap.gz'),
+                    '-Y', 'aol && tcp.port == 15190',
+                    '-Tfields', '-eaol.token',
+                ), encoding='utf-8', env=test_env)
+        assert alt_port() == ''
+        assert alt_port('-o', 'aol.tcp.port:5190,15190') == 'Pq\nRs\n'
+
+    def test_aol_two_pass(self, cmd_tshark, capture_file, test_env):
+        '''One pass and two passes give the same AOL output; the frame
+        with a 65535 octet length is left waiting for its data.'''
+        def aol_info(*opts):
+            return subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('aol_coverage.pcap.gz'),
+                    '-Y', 'aol || frame.number == 67',
+                    '-Tfields', '-eframe.number', '-e_ws.col.info', '-eaol.len',
+                ), encoding='utf-8', env=test_env)
+        one_pass = aol_info()
+        assert one_pass == aol_info('-2')
+        assert one_pass.splitlines()[-1].startswith('67\t40000 → 5190 [PSH, ACK]')
+
+
+# applemidi_coverage.pcap.gz is synthetic: every packet was generated, to
+# cover as much of the AppleMIDI dissector as possible. Its heuristic is
+# disabled by default.
+APPLEMIDI_OPTS = ('--enable-heuristic', 'applemidi_udp')
+
+
+class TestDissectAppleMidi:
+    def applemidi_fields(self, cmd_tshark, capture_file, test_env, *fields, opts=APPLEMIDI_OPTS):
+        args = []
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output((cmd_tshark, *opts,
+                '-r', capture_file('applemidi_coverage.pcap.gz'),
+                '-Tfields', '-E', 'aggregator=|', '-e', 'frame.number', *args,
+            ), encoding='utf-8', env=test_env)
+        return {int(line.split('\t')[0]): line.split('\t')[1:] for line in stdout.splitlines()}
+
+    def test_applemidi_heuristic_disabled_by_default(self, cmd_tshark, capture_file, test_env):
+        '''Nothing is dissected as AppleMIDI unless the heuristic is enabled.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('applemidi_coverage.pcap.gz'),
+                '-Y', 'applemidi || rtpmidi',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_applemidi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every command, on the control and data ports, over IPv4 and
+        IPv6, and RTP-MIDI after the session set-up, decode without
+        malformed packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark, *APPLEMIDI_OPTS,
+                '-r', capture_file('applemidi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('AppleMIDI') == 42
+        assert protocols.count('RTP-MIDI') == 14
+        # The heuristic rejects 3 octets, an unknown first command and
+        # a packet without the 0xffff signature
+        assert protocols.count('UDP') == 3
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *APPLEMIDI_OPTS, *passes,
+                    '-r', capture_file('applemidi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_applemidi_commands(self, cmd_tshark, capture_file, test_env):
+        '''Each command and its fields.'''
+        frames = self.applemidi_fields(cmd_tshark, capture_file, test_env,
+                                       'applemidi.command', 'applemidi.count',
+                                       'applemidi.rtp_sequence_number',
+                                       'applemidi.bitrate_limit', 'applemidi.unknown_data')
+        assert frames[1] == ['0x494e', '', '', '', '']             # IN
+        assert frames[2] == ['0x4f4b', '', '', '', '']             # OK
+        assert frames[29] == ['0x4e4f', '', '', '', '']            # NO
+        assert frames[26] == ['0x4259', '', '', '', '']            # BY
+        assert [frames[n][1] for n in (5, 6, 7)] == ['0', '1', '2']  # CK
+        assert frames[24] == ['0x5253', '', '1', '', 'beef']       # RS
+        assert frames[20] == ['0x524c', '', '', '31250', '']       # RL
+        # An unknown command once the conversation is set up
+        assert frames[21] == ['0x5a5a', '', '', '', '01020304']
+
+    def test_applemidi_names(self, cmd_tshark, capture_file, test_env):
+        '''The name length is taken from the NUL in the packet, not from
+        the name converted to UTF-8: a name without a NUL and a name in
+        invalid UTF-8 decode without malformed packets, and what follows
+        the NUL is shown as unknown data.'''
+        frames = self.applemidi_fields(cmd_tshark, capture_file, test_env,
+                                       'applemidi.name', 'applemidi.unknown_data',
+                                       '_ws.malformed')
+        assert frames[36] == ['peer', '', '']
+        assert frames[37] == ['peer', '', '']            # no NUL
+        assert frames[38] == ['�' * 4, '7461696c', '']  # invalid UTF-8, then "tail"
+        assert frames[39] == ['Studio Köln ♫', '', '']
+        assert frames[40] == ['', '', '']                 # only the NUL
+        assert frames[41] == ['ab��', '', '']   # invalid UTF-8, no NUL
+
+    def test_applemidi_rtp_midi(self, cmd_tshark, capture_file, test_env):
+        '''After the invitation, RTP on the session's ports is dissected as
+        RTP-MIDI (dynamic payload type 97 set up by AppleMIDI), in both
+        directions, in one and two passes.'''
+        rtp_frames = [str(n) for n in range(8, 19)] + ['44', '54', '55']
+        setup = ['3'] * 11 + ['42', '51', '51']
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *APPLEMIDI_OPTS, *passes,
+                    '-r', capture_file('applemidi_coverage.pcap.gz'),
+                    '-Y', 'rtpmidi',
+                    '-Tfields', '-eframe.number', '-ertp.setup-frame', '-ertp.p_type',
+                ), encoding='utf-8', env=test_env)
+            frames = [line.split('\t') for line in stdout.splitlines()]
+            assert [f[0] for f in frames] == rtp_frames
+            assert [f[1] for f in frames] == setup
+            assert all(f[2] == '97' for f in frames)
+        frames = self.applemidi_fields(cmd_tshark, capture_file, test_env, '_ws.col.info')
+        assert frames[44] == ['Note On (c=1, n=C4, v=64)']
+        assert frames[11] == ['Program Change (c=3, p=5), Channel Pressure (c=3, p=48), '
+                              'Pitch Bend Change (c=3, pb=8192)']
+
+
+APRS_OPTS = ('-o', 'ax25_nol3.showaprs:TRUE')  # APRS decoding is off by default
+
+
+class TestDissectAprs:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args, decimals=()):
+        stdout = subprocess.check_output((cmd_tshark, *APRS_OPTS,
+                '-r', capture_file('aprs_coverage.pcap.gz'),
+                '-Tfields', *args,
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        # The columns in decimals are shown with the decimal separator of the locale
+        for f in frames:
+            for c in decimals:
+                f[c] = f[c].replace(',', '.')
+        return frames
+
+    def test_aprs_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every data type indicator, position format, extension, Mic-E
+        destination character, weather field, item, object and message
+        decodes without malformed packets, in one and two passes and with
+        the lax preference.'''
+        protocols = [f[0] for f in self.run_fields(cmd_tshark, capture_file, test_env,
+                                                   '-e_ws.col.protocol')]
+        assert protocols.count('APRS') == 162
+        assert protocols.count('AX.25-NoL3') == 2
+        for opts in ((), ('-2',), ('-o', 'aprs.showaprslax:TRUE')):
+            stdout = subprocess.check_output((cmd_tshark, *APRS_OPTS, *opts,
+                    '-r', capture_file('aprs_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        # Without the ax25_nol3 preference nothing is APRS
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aprs_coverage.pcap.gz'),
+                '-Y', 'aprs', '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_aprs_compressed_course(self, cmd_tshark, capture_file, test_env):
+        '''The compressed course is (c - 33) * 4 up to 356 for 'z'; it was
+        kept in 8 bits.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number == 1 || (frame.number >= 32 && frame.number <= 35)',
+                                 '-eframe.number', '-eaprs.msg.cse', '-eaprs.msg.spd',
+                                 decimals=(2,))
+        assert frames == [['1', '356', '   1.00'], ['32', '0', '  37.23'],
+                          ['33', '88', '  37.23'], ['34', '188', '  37.23'],
+                          ['35', '356', '  37.23']]
+
+    def test_aprs_mic_e(self, cmd_tshark, capture_file, test_env):
+        '''Mic-E: the course takes the units of DC as hundreds (251 for
+        DC=30, SE=79; the units used to be multiplied by 10), speed and
+        course wrap at 800 and 400, the destination address gives the
+        latitude and the eight message codes.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'aprs.mic_e_current', '-eframe.number',
+                                 '-eaprs.mic_e_current', '-eaprs.mic_e.speed_dc',
+                                 '-eaprs.mic_e.speed_se')
+        mic_e = {int(f[0]): f[1:] for f in frames}
+        assert mic_e[2] == ['Lat: 3325.64N Long: 11220.50W, Cse: 251, Spd: 20, SSID: 0, Msg Returning',
+                            '0x1e', '0x4f']
+        assert mic_e[80][0] == 'Lat: 3325.64N Long: 07201.75W, Cse: 111, Spd: 14, SSID: 0, Msg Returning'
+        messages = [mic_e[n][0].split(', Msg ')[1] for n in range(53, 61)]
+        assert messages == ['Off Duty', 'En Route', 'In Service', 'Returning',
+                            'Committed', 'Special', 'Priority', 'Emergency']
+        # Longitude degrees with and without the offset of 100, and the
+        # 180-189 and 190-199 ranges
+        longitudes = [mic_e[n][0].split('Long: ')[1][:9] for n in range(74, 80)]
+        assert longitudes == ['05001.99W', '11001.99W', '10001.99W',
+                              '00001.99W', '10001.99W', '00501.99W']
+
+    def test_aprs_items(self, cmd_tshark, capture_file, test_env):
+        '''Item names end at the first '!' or '_' in the packet; a name with
+        octets over 0x7f is as long as in the packet (the position after it
+        decodes) and a killed item ending in '_' is found.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'aprs.item', '-eframe.number', '-eaprs.item',
+                                 '-eaprs.position.lat', '-eaprs.position.long',
+                                 decimals=(2, 3))
+        assert frames == [
+            ['3', '\ufffd' * 9, '4903.50N', '07201.75W'],
+            ['91', 'AID #2', '4903.50N', '07201.75W'],
+            ['92', 'ITEM', '4903.50N', '07201.75W'],
+            ['93', 'AB', ' 49.50', ' -72.75'],
+            ['94', 'AB', '-33.59', ' -72.75'],
+            ['95', 'TENCHARSXX', '4903.50N', '07201.75W'],
+            ['96', 'MOBIL', ' 49.50', ' -72.75'],
+            ['97', 'G1', '4903.50N', '07201.75W'],
+            ['98', '\ufffd\ufffdt\ufffd\ufffd', '4903.50N', '07201.75W'],
+            ['161', 'NOCMT', '4903.50N', '07201.75W'],
+        ]
+
+    def test_aprs_compression_type(self, cmd_tshark, capture_file, test_env):
+        '''The compression type subfields are the bits of the octet minus 33,
+        not of the octet itself.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number == 1 || (frame.number >= 41 && frame.number <= 48)',
+                                 '-eaprs.ct', '-eaprs.ct.gps_fix', '-eaprs.ct.nmea_src',
+                                 '-eaprs.ct.origin')
+        assert frames == [
+            ['0x33', '0x01', '0x02', '0x03'],
+            ['0x00', '0x00', '0x00', '0x00'],
+            ['0x09', '0x00', '0x01', '0x01'],
+            ['0x12', '0x00', '0x02', '0x02'],
+            ['0x1b', '0x00', '0x03', '0x03'],
+            ['0x24', '0x01', '0x00', '0x04'],
+            ['0x2d', '0x01', '0x01', '0x05'],
+            ['0x36', '0x01', '0x02', '0x06'],
+            ['0x3f', '0x01', '0x03', '0x07'],
+        ]
+
+    def test_aprs_lax(self, cmd_tshark, capture_file, test_env):
+        '''A position without messaging is read as having an extension
+        unless the lax preference is set, which takes only D, P, R and T.'''
+        for opts, expected in (((), [['5', '1', '5'], ['10', '1', '']]),
+                               (('-o', 'aprs.showaprslax:TRUE'), [['5', '1', '5'], ['10', '0', '']])):
+            frames = self.run_fields(cmd_tshark, capture_file, test_env, *opts,
+                                     '-Y', 'frame.number == 10 || frame.number == 5',
+                                     '-eframe.number', '-e', 'count(aprs.msg)',
+                                     '-eaprs.msg.phg.p')
+            assert frames == expected
+
+    def test_aprs_storm(self, cmd_tshark, capture_file, test_env):
+        '''Storm reports as in APRS101: the course and speed are the
+        position's extension (or the compressed course/speed), the storm
+        data starts with the type.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'aprs.storm', '-eframe.number',
+                                 '-eaprs.msg.cse', '-eaprs.msg.spd',
+                                 '-eaprs.storm.type', '-eaprs.storm.sws',
+                                 '-eaprs.storm.pwg', '-eaprs.storm.central_pressure',
+                                 '-eaprs.storm.radius_hurricane_winds',
+                                 '-eaprs.storm.radius_tropical_storms_winds',
+                                 '-eaprs.storm.radius_whole_gale',
+                                 decimals=(2,))
+        hc = ['/HC', '/150', '^200', '/0980', '>090', '&050', '%040']
+        ts = ['/TS', '/090', '^120', '/0995', '>000', '&030', '%020']
+        assert frames == [
+            ['12', '088', '036', *hc],     # '!' uncompressed
+            ['13', '088', '036', *ts],     # '!' alternate table
+            ['28', '088', '036', *hc],     # '@' with timestamp
+            ['51', '88', '  37.23', *hc],  # compressed
+            ['52', '88', '  37.23', *ts],  # compressed, alternate table
+            ['102', '088', '036', *hc],    # object with MDHM timestamp
+            ['163', '088', '036', *hc],    # '/' with timestamp, no comment
+        ]
+
+    def test_aprs_no_comment(self, cmd_tshark, capture_file, test_env):
+        '''Uncompressed positions with no comment or one of 1-6 octets
+        ('!', '=', '/', '@', an item and an object) decode with no
+        extension and no malformed packet, with and without lax mode.'''
+        comments = ['', 'A', 'PHG51', '088/03'] * 4 + ['', '']
+        for opts in ((), ('-o', 'aprs.showaprslax:TRUE')):
+            frames = self.run_fields(cmd_tshark, capture_file, test_env, *opts,
+                                     '-Y', 'frame.number >= 145 && frame.number <= 162',
+                                     '-eframe.number', '-e', 'count(aprs.msg)',
+                                     '-eaprs.comment', '-e_ws.malformed',
+                                     '-eaprs.position.lat')
+            assert frames == [[str(n), '0', c, '', '4903.50N']
+                              for n, c in zip(range(145, 163), comments)]
+
+
+# ar_drone_coverage.pcap.gz is synthetic: every packet was generated, to
+# cover as much of the AR Drone dissector as possible. No UDP port is
+# registered for it by default and its heuristic is disabled.
+AR_DRONE_OPTS = ('-d', 'udp.port==5556,ar_drone')
+AR_DRONE_HEUR = ('--enable-heuristic', 'ar_drone_udp')
+
+
+class TestDissectArDrone:
+    def ar_drone_fields(self, cmd_tshark, capture_file, test_env, *fields, opts=AR_DRONE_OPTS):
+        args = []
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output((cmd_tshark, *opts,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Tfields', '-E', 'aggregator=|', '-e', 'frame.number', *args,
+            ), encoding='utf-8', env=test_env)
+        return {int(line.split('\t')[0]): line.split('\t')[1:] for line in stdout.splitlines()}
+
+    def ar_drone_tree(self, cmd_tshark, capture_file, test_env, frame):
+        stdout = subprocess.check_output((cmd_tshark, *AR_DRONE_OPTS,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Y', f'frame.number == {frame}', '-V', '-O', 'ar_drone',
+            ), encoding='utf-8', env=test_env)
+        return [line.strip() for line in stdout.splitlines() if line.startswith('    ')]
+
+    def test_ar_drone_not_by_default(self, cmd_tshark, capture_file, test_env):
+        '''Nothing is dissected as AR Drone without Decode As or the heuristic.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Y', 'ar_drone',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_ar_drone_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every command decodes without malformed packets or error expert
+        infos, in one and two passes, by port and by the heuristic.'''
+        for opts, ar_drone, udp in ((AR_DRONE_OPTS, 39, 8), (AR_DRONE_HEUR, 40, 7)):
+            stdout = subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                    '-Tfields', '-e_ws.col.protocol',
+                ), encoding='utf-8', env=test_env)
+            protocols = stdout.split()
+            assert protocols.count('ar_drone') == ar_drone
+            assert protocols.count('UDP') == udp
+            for passes in ((), ('-2',)):
+                stdout = subprocess.check_output((cmd_tshark, *opts, *passes,
+                        '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                        '-Y', '_ws.malformed || _ws.short || _ws.expert.severity >= warning',
+                        '-Tfields', '-eframe.number',
+                    ), encoding='utf-8', env=test_env)
+                assert count_output(stdout) == 0
+
+    def test_ar_drone_commands(self, cmd_tshark, capture_file, test_env):
+        '''Every command, several per packet, and their fields.'''
+        frames = self.ar_drone_fields(cmd_tshark, capture_file, test_env,
+                                      'ar_drone.command', 'ar_drone.ref.ctrl',
+                                      'ar_drone.ctrl.mode', 'ar_drone.config.name',
+                                      'ar_drone.led.anim', 'ar_drone.anim.num')
+        assert frames[27] == ['PCMD|REF|CONFIG_IDS|ANIM|FTRIM|CONFIG|LED|COMWDG|CTRL',
+                              '290718208', '5', '"control:altitude_max"', '2', '3']
+        assert frames[25][0] == 'REF|PCMD|FTRIM'
+        assert [frames[n][2] for n in range(3, 8)] == ['4', '5', '6', '0', '4']
+        # Parsing stops at data that is not an AT command
+        assert frames[29][0] == 'COMWDG'
+        assert frames[30][0] == 'REF'
+        assert frames[31][0] == 'REF|FOO'
+        assert self.ar_drone_tree(cmd_tshark, capture_file, test_env, 3)[-2] == \
+            'Control Mode: 4 (CFG_GET_CONTROL_MODE)'
+        assert self.ar_drone_tree(cmd_tshark, capture_file, test_env, 6)[-2] == \
+            'Control Mode: 0 (Unknown Mode)'
+
+    def test_ar_drone_pcmd_directions(self, cmd_tshark, capture_file, test_env):
+        '''Each direction of roll, pitch, gaz and yaw. An empty value has
+        no direction.'''
+        def values(frame):
+            return self.ar_drone_tree(cmd_tshark, capture_file, test_env, frame)[-4:]
+        assert values(14) == ['Roll: 0 (NO CHANGE)', 'Pitch: 0 (NO CHANGE)',
+                              'Gaz: 0 (NO CHANGE)', 'Yaw: 0 (NO CHANGE)']
+        assert values(15) == ['Roll: 1056964608 (ROLL RIGHT)',
+                              'Pitch: 1056964608 (PITCH BACKWARD)',
+                              'Gaz: 1056964608 (INCREASE VERT SPEED)',
+                              'Yaw: 1056964608 (ROTATE RIGHT)']
+        assert values(16) == ['Roll: -1090519040 (ROLL LEFT)',
+                              'Pitch: -1090519040 (PITCH FORWARD)',
+                              'Gaz: -1090519040 (DECREASE VERT SPEED)',
+                              'Yaw: -1090519040 (ROTATE LEFT)']
+        assert values(17) == ['Roll: -0 (NO CHANGE)', 'Pitch: -0 (NO CHANGE)',
+                              'Gaz: -0 (NO CHANGE)', 'Yaw: -0 (NO CHANGE)']
+        # The empty Roll value of the review reproducer
+        assert values(20) == ['Roll:', 'Pitch: 0 (NO CHANGE)',
+                              'Gaz: 0 (NO CHANGE)', 'Yaw: 0 (NO CHANGE)']
+        assert values(24) == ['Roll:', 'Pitch:', 'Gaz:', 'Yaw:']
+
+    def test_ar_drone_equals_sign_early(self, cmd_tshark, capture_file, test_env):
+        '''A second command with '=' at its first or second octet is not an
+        AT command and ends the packet. Its length used to wrap and the
+        packet was shown as "Packet size limited during capture".'''
+        frames = self.ar_drone_fields(cmd_tshark, capture_file, test_env,
+                                      'ar_drone.command', '_ws.short', '_ws.malformed')
+        assert frames[34] == ['REF', '', '']
+        assert frames[35] == ['COMWDG', '', '']
+
+    def test_ar_drone_not_ours_decode_as(self, cmd_tshark, capture_file, test_env):
+        '''Through Decode As too, a packet whose first command is unknown or
+        has no '=' is left as plain UDP: nothing is added to the columns or
+        the tree (frames 42 and 43, with both ports 5556, used to get the
+        items twice).'''
+        frames = self.ar_drone_fields(cmd_tshark, capture_file, test_env,
+                                      '_ws.col.protocol', 'ar_drone.command')
+        # AT*FOO=1,2; AT*; ATX*REF=1,2; AT*COMWDG without '='; AT*=1
+        for n in (36, 40, 41, 42, 43):
+            assert frames[n] == ['UDP', ''], n
+        stdout = subprocess.check_output((cmd_tshark, *AR_DRONE_OPTS,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Y', 'ar_drone',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [str(n) for n in [*range(1, 36), 37, 38, 39, 44]]
+        stdout = subprocess.check_output((cmd_tshark, *AR_DRONE_OPTS,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Y', 'frame.number in {36, 42, 43}', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'AR Drone' not in stdout
+        assert stdout.count('Data (') == 3
+
+    def test_ar_drone_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''The heuristic takes a known first command with a '=', on any
+        port, and leaves other packets, AT*FOO among them, untouched as
+        plain UDP.'''
+        frames = self.ar_drone_fields(cmd_tshark, capture_file, test_env,
+                                      '_ws.col.protocol', 'ar_drone.command',
+                                      opts=AR_DRONE_HEUR)
+        assert frames[36] == ['UDP', '']         # AT*FOO=1,2
+        assert frames[45] == ['ar_drone', 'REF']  # not on port 5556
+        assert frames[46] == ['UDP', '']         # AT*FOO=1
+        assert frames[47] == ['UDP', '']         # no '='
+        stdout = subprocess.check_output((cmd_tshark, *AR_DRONE_HEUR,
+                '-r', capture_file('ar_drone_coverage.pcap.gz'),
+                '-Y', 'frame.number == 36', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'AR Drone' not in stdout
+        assert 'Data (11 bytes)' in stdout
+
+
+class TestDissectArinc615a:
+    def test_arinc615a_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every A615A protocol file type and FIND message decodes without
+        malformed packets, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('A615a') == 22
+        assert protocols.count('FIND') == 4
+        assert protocols.count('TFTP') == 67
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_arinc615a_heur_null_data(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU naming the "a615a" heuristic gives it no TFTP
+        file name (data == NULL). It must not be decoded as A615a (and used
+        to dereference the NULL pointer).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-Y', 'exported_pdu',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-eexported_pdu.heur_prot_name', '-edata.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['107', 'exported_pdu:data', 'a615a', '0000000841310000']
+
+    def test_arinc615a_file_types(self, cmd_tshark, capture_file, test_env):
+        '''The file type comes from the TFTP file name of the request; the
+        exception timer is present only for protocol versions after A1.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-Y', 'a615a',
+                '-Tfields', '-ea615a.type', '-ea615a.protocol_version',
+                '-ea615a.exception_timer', '-E', 'separator=;',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        types = sorted(set(line.split(';')[0] for line in lines))
+        assert types == [
+            'Load Configuration Initialization', 'Load Configuration List',
+            'Load Configuration Status', 'Load Downloading Answer',
+            'Load Downloading List', 'Load Downloading Media',
+            'Load Downloading Operator', 'Load Downloading Request',
+            'Load Downloading Status', 'Load Upload Initialization',
+            'Load Uploading Request', 'Load Uploading Status',
+        ]
+        assert 'Load Uploading Status;A2;30' in lines
+        assert 'Load Uploading Status;A1;' in lines
+        assert 'Load Downloading Status;A3;30' in lines
+        assert 'Load Downloading Status;A1;' in lines
+
+    def test_arinc615a_lcl(self, cmd_tshark, capture_file, test_env):
+        '''Load Configuration List: target hardware with nested part numbers.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-Y', 'a615a.num_hardware',
+                '-Tfields', '-ea615a.literal_name', '-ea615a.serial_number',
+                '-ea615a.num_parts', '-ea615a.designation', '-E', 'separator=;',
+                '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == ('FMC_L|FMC_R;SN000123|SN000124;2|0;'
+                                  'Operational program|Navigation database')
+
+    def test_arinc615a_rejected(self, cmd_tshark, capture_file, test_env):
+        '''Files the heuristic rejects stay TFTP data: a load header file,
+        a file shorter than 6 octets, a wrong file length, no "A" version,
+        a lower case suffix and a DATA packet with no request seen.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-Y', 'tftp.opcode == 3 && data',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        # 103 and 105 are the two blocks of a file that is not reassembled
+        assert stdout.split() == ['17', '89', '92', '95', '98', '100', '103', '105']
+
+    def test_arinc615a_reassembled(self, cmd_tshark, capture_file, test_env):
+        '''With TFTP reassembly a file over two blocks reaches the heuristic.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('arinc615a_coverage.pcapng.gz'),
+                '-o', 'tftp.defragment:TRUE',
+                '-Y', 'a615a.file_count == 40',
+                '-Tfields', '-eframe.number', '-ea615a.type', '-ea615a.file_name',
+                '-E', 'separator=;', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        number, ftype, names = stdout.strip().split(';')
+        assert number == '105'
+        assert ftype == 'Load Downloading Status'
+        assert names.split('|') == ['FILE%03d.BIN' % i for i in range(40)]
+
+
+# armagetronad_coverage.pcap.gz is synthetic: every packet was generated,
+# to cover as much of the Armagetronad dissector as possible.
+
+
+class TestDissectArmagetronad:
+    def armagetronad_fields(self, cmd_tshark, capture_file, test_env, *fields):
+        args = []
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('armagetronad_coverage.pcap.gz'),
+                '-Tfields', '-E', 'aggregator=|', '-e', 'frame.number', *args,
+            ), encoding='utf-8', env=test_env)
+        return {int(line.split('\t')[0]): line.split('\t')[1:] for line in stdout.splitlines()}
+
+    def test_armagetronad_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every descriptor, ACKs, unknown descriptors and packets without
+        messages, on ports 4533 and 4534, over IPv4 and IPv6, decode
+        without malformed packets or expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('armagetronad_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('Armagetronad') == 17
+        # Turned down: no payload, one octet, a DataLen past the end, one
+        # octet or none after the last message, data cut by the snapshot
+        # length
+        assert protocols.count('UDP') == 6
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('armagetronad_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_armagetronad_no_message(self, cmd_tshark, capture_file, test_env):
+        '''A packet with only the SenderID shows "No message" in Info. It
+        used to show "[]".'''
+        frames = self.armagetronad_fields(cmd_tshark, capture_file, test_env,
+                                          '_ws.col.info', 'armagetronad.sender_id',
+                                          'armagetronad.message')
+        assert frames[1] == ['[No message] from 0x1234', '0x1234', '']
+        assert frames[2] == ['[No message] from 0x0000', '0x0000', '']
+
+    def test_armagetronad_messages(self, cmd_tshark, capture_file, test_env):
+        '''Messages, their fields and the Info column.'''
+        frames = self.armagetronad_fields(cmd_tshark, capture_file, test_env,
+                                          '_ws.col.info', 'armagetronad.descriptor_id',
+                                          'armagetronad.message_id', 'armagetronad.data_len',
+                                          'armagetronad.data', 'armagetronad.sender_id')
+        assert frames[4] == ['[login_accept, version] from 0x0000', '5|10', '0x0100|0x0101',
+                             '2|2', '00030000|00140015', '0x0000']
+        # An ACK carries the acked MessageIDs as data
+        assert frames[5] == ['[ack] from 0x0003', '1', '0x0000', '3', '010001010102', '0x0003']
+        # An ACK of none (empty Data)
+        assert frames[6][:4] == ['[ack] from 0x0003', '1', '0x0000', '0']
+        assert frames[12][0] == ('[Unknown (0), Chat, Unknown (12), Unknown (999), '
+                                 'Unknown (65535)] from 0x0003')
+        assert frames[12][1] == '0|200|12|999|65535'
+        # IPv6
+        assert frames[16][0] == '[ack, big_server] from 0x0000'
+        # All 47 known descriptors, none unknown
+        info = ''.join(frames[n][0] for n in range(7, 12))
+        assert info.count(', ') + 5 == 47
+        assert 'Unknown' not in info
+
+
+ARP_STORM_OPTS = ('-o', 'arp.detect_request_storms:TRUE',
+                  '-o', 'arp.detect_storm_number_of_packets:3')
+
+
+class TestDissectArp:
+    def test_arp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every opcode of ARP, RARP, DRARP, Inverse ARP, MARS and MAPOS,
+        AX.25 ARP and ATMARP decodes without malformed packets, in one and
+        two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 153
+        assert protocols.count('ARP') == 67
+        assert protocols.count('RARP') == 8
+        assert protocols.count('DRARP') == 4
+        assert protocols.count('Inverse ARP') == 4
+        assert protocols.count('MARS') == 36
+        assert protocols.count('MAPOS') == 3
+        assert protocols.count('ATMARP') == 24
+        assert protocols.count('ATMRARP') == 2
+        assert protocols.count('Inverse ATMARP') == 5
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('arp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_arp_probe_announcement(self, cmd_tshark, capture_file, test_env):
+        '''ARP Probes and Announcements are recognized for Ethernet/IPv4
+        only. Requests with short or non-IPv4 addresses (frames 59-62)
+        used to be malformed or taken for a probe.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Y', 'arp.isprobe || arp.isannouncement || arp.isgratuitous',
+                '-Tfields', '-eframe.number', '-earp.isprobe',
+                '-earp.isannouncement', '-earp.isgratuitous',
+            ), encoding='utf-8', env=test_env)
+        flags = {int(f[0]): tuple(f[1:]) for f in
+                 (line.split('\t') for line in stdout.splitlines())}
+        assert flags[3] == ('', 'True', 'True')      # announcement
+        assert flags[4] == ('', '', 'True')          # gratuitous request
+        assert flags[6] == ('True', '', '')          # probe
+        assert flags[7] == ('True', '', '')          # probe, nonzero target
+        assert 59 not in flags and 60 not in flags and 61 not in flags
+        assert flags[62] == ('', '', 'True')
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Y', 'arp.dst.nonzero.probe',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['7']
+
+    def test_arp_duplicate_address(self, cmd_tshark, capture_file, test_env):
+        '''Duplicate IP addresses are reported against the right earlier
+        frame, in one and two passes, and not at all with the preference
+        off.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('arp_coverage.pcap.gz'),
+                    '-Y', 'arp.duplicate-address-detected',
+                    '-Tfields', '-eframe.number',
+                    '-earp.duplicate-address-frame',
+                    '-earp.seconds-since-duplicate-address-frame',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '11\t10\t1', '12\t10\t2', '14\t13\t1', '21\t10\t70',
+                '22\t11,10\t70,71',
+            ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-o', 'arp.detect_duplicate_ips:FALSE',
+                '-Y', 'arp.duplicate-address-detected',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_arp_storm(self, cmd_tshark, capture_file, test_env):
+        '''Request storms are found in the 1 ms bursts of AX.25 and Ethernet
+        requests, the same in one and two passes. Frames 150-153 are
+        requests 2^29 s apart: the gap in ms used to overflow and frame
+        153 was reported as a storm.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes, *ARP_STORM_OPTS,
+                    '-r', capture_file('arp_coverage.pcap.gz'),
+                    '-Y', 'arp.packet-storm-detected',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == ['78', '142', '146']
+        # Off by default
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Y', 'arp.packet-storm-detected',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_arp_atmarp(self, cmd_tshark, capture_file, test_env):
+        '''ATMARP NSAP addresses are broken down by AFI, E.164 numbers are
+        shown as text and an unknown AFI gets a warning.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 126 && frame.number <= 134',
+                '-Tfields', '-eframe.number', '-earp.src.atm_afi',
+                '-earp.src.atm_num_e164', '-earp.dst.atm_num_e164',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[1] for f in lines[:7]] == [
+            '0x39,0x39', '0xbd,0xbd', '0x47,0x47', '0xc5,0xc5',
+            '0x45,0x45', '0xc3,0xc3', '0x00,0x00']
+        assert lines[8][2:] == ['15551230001', '15551230002']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('arp_coverage.pcap.gz'),
+                '-Y', 'arp.src.atm_afi.unknown',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['132']
+
+
+# artemis_coverage.pcap.gz is synthetic: every packet was generated, to
+# cover as much of the Artemis dissector as possible.
+
+
+class TestDissectArtemis:
+    def artemis_fields(self, cmd_tshark, capture_file, test_env, *fields, opts=()):
+        args = []
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output((cmd_tshark, *opts,
+                '-r', capture_file('artemis_coverage.pcap.gz'),
+                '-Tfields', '-E', 'aggregator=|', '-e', 'frame.number', *args,
+            ), encoding='utf-8', env=test_env)
+        return {int(line.split('\t')[0]): line.split('\t')[1:] for line in stdout.splitlines()}
+
+    def test_artemis_protocols(self, cmd_tshark, capture_file, test_env):
+        '''PDUs one per segment, several per segment and split over
+        segments, over IPv4 and IPv6, decode without malformed packets or
+        warning or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artemis_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('ARTEMIS') == 22
+        assert protocols.count('TCP') == 16
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('artemis_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        frames = self.artemis_fields(cmd_tshark, capture_file, test_env, 'artemis.length')
+        pdus = sum(len(v[0].split('|')) for v in frames.values() if v[0])
+        assert pdus == 22
+
+    def test_artemis_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''PDUs split over segments are reassembled, in one and two
+        passes.'''
+        for passes in ((), ('-2',)):
+            frames = self.artemis_fields(cmd_tshark, capture_file, test_env,
+                                         'artemis.length', 'artemis.type', 'artemis.channel',
+                                         'tcp.segment.count', opts=passes)
+            # Three PDUs in one segment
+            assert frames[6] == ['29|9|17', '40|67|10', '2|2|0', '']
+            # 2000 octets over three segments
+            assert frames[10] == ['1996', '71', '2', '3']
+            # The length field split after two octets
+            assert frames[13] == ['109', '71', '2', '2']
+            # The end of one PDU, a whole one and the start of a third,
+            # then the rest of the third
+            assert frames[15] == ['59|69', '71|71', '2|2', '2']
+            assert frames[16] == ['79', '71', '2', '2']
+            # A 5000-octet PDU over four segments, then a PDU in the last
+            assert frames[22] == ['4996|9', '75|21', '2|2', '4']
+            # IPv6, each direction split in two
+            assert frames[36] == ['309', '30', '1', '2']
+            assert frames[38] == ['209', '31', '1', '2']
+            # Segments in the middle of a PDU carry no Artemis items
+            for n in (8, 9, 12, 14, 19, 20, 21, 35, 37):
+                assert frames[n][0] == ''
+
+    def test_artemis_fields(self, cmd_tshark, capture_file, test_env):
+        '''The header fields and the buffer.'''
+        frames = self.artemis_fields(cmd_tshark, capture_file, test_env,
+                                     'artemis.length', 'artemis.type', 'artemis.channel',
+                                     'artemis.buffer')
+        assert frames[5] == ['13', '31', '1', '0000007f']
+        # Length 9: no body
+        assert frames[17][:3] == ['9', '51', '2']
+        # Every channel octet set, type 255
+        assert frames[24] == ['11', '255', '18446744073709551615', '0102']
+        # A connection picked up in the middle, two PDUs per segment
+        assert frames[29][:3] == ['39|40', '71|71', '7|7']
+        assert frames[30][:3] == ['9|9', '21|21', '7|7']
+
+
+class TestDissectArtnet:
+    def test_artnet_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every Art-Net opcode, with ArtDmx/ArtNzs DMX data and ArtRdm
+        carrying RDM for every standard PID, decodes without malformed
+        packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert protocols.count('ARTNET') == 140
+        assert protocols.count('DMX Channels') == 10
+        assert protocols.count('RDM') == 289
+        assert protocols.count('UDP') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('artnet_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_artnet_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''The heuristic takes only packets with the "Art-Net" ID.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Y', 'udp && !artnet',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['440', '441']
+
+    def test_artnet_poll_reply_node_report(self, cmd_tshark, capture_file, test_env):
+        '''The node report of an ArtPollReply is split into status code,
+        counter and text.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 13 && artnet.poll_reply',
+                '-Tfields', '-eframe.number',
+                '-e', 'artnet.poll_reply.node_report_status_code',
+                '-e', 'artnet.poll_reply.node_report_response_counter',
+                '-e', 'artnet.poll_reply.node_report_status_string',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert lines == [
+            ['7', '0x0001', '42', 'Power On Tests successful'],
+            ['8', '0xffff', '7', 'x'],
+            ['9', '', '', ''],                      # empty report
+            ['10', '0x0001', '42', 'A' * 51],       # 64 octets, no NUL
+            ['11', '0x00ff', '123', 'Ready'],
+            ['12', '0x0002', '9', 'Ok'],
+        ]
+
+    def test_artnet_dmx_and_vlc(self, cmd_tshark, capture_file, test_env):
+        '''ArtDmx hands its channel data to the DMX dissector, and ArtNzs
+        with the VLC magic shows the beacon payload.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Y', 'artnet.output',
+                '-Tfields', '-eartnet.output.universe', '-eartnet.output.length',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['1\t512', '32767\t26', '16\t2', '1\t37']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Y', 'artnet.nzs.vlc_esta_man_id',
+                '-Tfields', '-eartnet.nzs.vlc_payload_beacon_url',
+                '-eartnet.nzs.vlc_payload_beacon_text',
+                '-eartnet.nzs.vlc_payload_beacon_location_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'https://example.com/beacon\t\t',
+            '\tSynthetic beacon text\t',
+            '\t\t4660',
+            '\t\t',
+            '\t\t',
+        ]
+
+    def test_artnet_tod_data(self, cmd_tshark, capture_file, test_env):
+        '''ArtTodData lists its UIDs and the universe they belong to.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('artnet_coverage.pcap.gz'),
+                '-Y', 'artnet.tod_data',
+                '-Tfields', '-eartnet.tod_data.uid_count',
+                '-eartnet.tod_control.universe', '-eartnet.tod_data.tod.dev',
+                '-E', 'aggregator=,',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert lines[0] == ['3', '1', '0x00000001,0x00000002,0x80000003']
+        assert lines[1] == ['0', '32767', '']
+        assert lines[2][:2] == ['20', '272']
+        assert len(lines[2][2].split(',')) == 20
+
+
+class TestDissectArubaAdp:
+    def test_aruba_adp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Requests, responses and unknown types on UDP port 8200 decode
+        without malformed packets or error expert infos, in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_adp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['ADP'] * 13
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aruba_adp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aruba_adp_values(self, cmd_tshark, capture_file, test_env):
+        '''A request carries the AP MAC address, a response the switch
+        address; other types have only the header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_adp_coverage.pcap.gz'),
+                '-Tfields', '-eadp.version', '-eadp.type', '-eadp.id',
+                '-eadp.mac', '-eadp.switch', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert lines[0] == ['1', '1', '1', '00:0b:86:9a:00:01', '',
+                            'ADP Request Src MAC: 00:0b:86:9a:00:01']
+        assert lines[1] == ['1', '2', '1', '', '10.20.0.1',
+                            'ADP Response Switch IP: 10.20.0.1']
+        assert lines[6][2:4] == ['65535', '00:0b:86:9a:00:04']
+        assert lines[7][4] == '192.0.2.200'
+        assert lines[8][:2] == ['2', '1']
+        assert [line[1] for line in lines[10:]] == ['0', '3', '65535']
+        assert [line[3:] for line in lines[10:]] == [['', '', '']] * 3
+
+
+# Aruba ERM has no default port. The capture sends ERM type N to UDP port
+# 41000 + N; the type is chosen with Decode As.
+ARUBA_ERM_OPTS = ('-o', 'aruba_erm.udp.port:41000-41006')
+
+
+class TestDissectArubaErm:
+    def test_aruba_erm_no_port(self, cmd_tshark, capture_file, test_env):
+        '''Without the port preference nothing is Aruba ERM.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                '-Y', 'aruba_erm', '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_aruba_erm_no_decode_as(self, cmd_tshark, capture_file, test_env):
+        '''Without Decode As every frame gets the "Use Decode As" note and
+        the payload is shown as data.'''
+        stdout = subprocess.check_output((cmd_tshark, *ARUBA_ERM_OPTS,
+                '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol', '-e_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == \
+            ['ARUBA_ERM\tUse Decode AS (Aruba ERM Type) for decoding payload'] * 38
+
+    @pytest.mark.parametrize('erm_type,protocols', [
+        (0, {'802.11': 2, 'ARP': 2}),
+        (1, {'802.11': 4, 'ARP': 2}),
+        (2, {'ARUBA_ERM': 2}),
+        (3, {'802.11': 4, 'ARP': 11}),
+        (4, {'802.11': 1, 'ARP': 1}),
+        (5, {'802.11': 1, 'ARP': 5}),
+        (6, {'802.11': 1, 'ARP': 2}),
+    ])
+    def test_aruba_erm_types(self, cmd_tshark, capture_file, test_env, erm_type, protocols):
+        '''Each type decodes its frames down to 802.11 and ARP without
+        malformed packets or error expert infos, in one and two passes.
+        Type 2 (Airmagnet) is not decoded and always has an error.'''
+        opts = (*ARUBA_ERM_OPTS, '-d', f'aruba_erm.type,aruba_erm_type{erm_type}',
+                '-Y', f'udp.dstport == {41000 + erm_type}')
+        stdout = subprocess.check_output((cmd_tshark, *opts,
+                '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        found = stdout.splitlines()
+        assert {p: found.count(p) for p in set(found)} == protocols
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *opts, *passes,
+                    '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.number', '-e_ws.malformed',
+                    '-e', 'aruba_erm.airmagnet', '-e_ws.expert.severity',
+                ), encoding='utf-8', env=test_env)
+            for line in stdout.splitlines():
+                number, malformed, airmagnet, severities = line.split('\t')
+                assert malformed == ''
+                if erm_type == 2:
+                    assert airmagnet != ''
+                else:
+                    # warnings only (no preamble information for 11b)
+                    assert '8388608' not in severities.split(',')
+
+    def test_aruba_erm_type3(self, cmd_tshark, capture_file, test_env):
+        '''Type 3 (pcap + radio header): data rate, channel and signal, the
+        PHY guessed from the rate and channel, and no FCS when the signal
+        is 100 % (a frame the AP sent).'''
+        stdout = subprocess.check_output((cmd_tshark, *ARUBA_ERM_OPTS,
+                '-d', 'aruba_erm.type,aruba_erm_type3', '-Y', 'udp.dstport == 41003',
+                '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                '-Tfields', '-earuba_erm.incl_len', '-earuba_erm.data_rate_gen',
+                '-earuba_erm.channel', '-earuba_erm.signal_strength',
+                '-ewlan_radio.phy', '-ewlan.fcs',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert len(lines) == 15
+        # 11b, 11b, 11b, 11b (no FCS), 11g, 11a, 11a (no FCS), unknown
+        assert [line[4] for line in lines[:8]] == ['4', '4', '4', '4', '6', '5', '5', '']
+        assert lines[0][1:4] == ['1', '1', '55']
+        assert lines[3][1:4] == ['11', '13', '100']
+        assert lines[3][5] == ''
+        assert lines[6][1:4] == ['48', '149', '100']
+        assert lines[6][5] == ''
+        assert lines[7][1] == '6.5'
+        assert all(line[5] for line in lines if line[3] != '100')
+
+    def test_aruba_erm_type0(self, cmd_tshark, capture_file, test_env):
+        '''Type 0: the pcap record header and 802.11 with an FCS.'''
+        stdout = subprocess.check_output((cmd_tshark, *ARUBA_ERM_OPTS,
+                '-d', 'aruba_erm.type,aruba_erm_type0', '-Y', 'udp.dstport == 41000',
+                '-r', capture_file('aruba_erm_coverage.pcap.gz'),
+                '-Tfields', '-earuba_erm.incl_len', '-earuba_erm.orig_len',
+                '-ewlan.fc.type_subtype', '-ewlan.fcs',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert [line[:3] for line in lines] == [
+            ['62', '62', '0x0008'], ['64', '64', '0x0020'],
+            ['66', '66', '0x0028'], ['14', '14', '0x001d']]
+        assert lines[0][3] == '0x186a8b89'
+
+
+class TestDissectArubaIap:
+    def test_aruba_iap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame with the 0xbeef magic number is dissected, without
+        malformed packets or error expert infos, in one and two passes;
+        the frame without it is left to the data dissector.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 64
+        assert protocols.count('IAP') == 63
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                '-Y', '!aruba_iap', '-Tfields', '-eframe.number', '-edata.len',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['64', '46']
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aruba_iap_magic(self, cmd_tshark, capture_file, test_env):
+        '''The magic number field says it is always 0xbeef, and it is in
+        every dissected frame.'''
+        stdout = subprocess.check_output((cmd_tshark, '-G', 'fields'),
+                encoding='utf-8', env=test_env)
+        magic = [line.split('\t') for line in stdout.splitlines()
+                 if '\taruba_iap.magic\t' in line]
+        assert len(magic) == 1
+        assert magic[0][7] == 'Magic Number of IAP traffic (Always 0xbeef)'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                '-Y', 'aruba_iap', '-Tfields', '-earuba_iap.magic',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['0xbeef'] * 63
+
+    def test_aruba_iap_values(self, cmd_tshark, capture_file, test_env):
+        '''Types 3, 4, 5 and 7 carry the VC address, model and PVID; other
+        types only unknown octets.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                '-Y', 'aruba_iap.vc_ip', '-Tfields', '-earuba_iap.type',
+                '-earuba_iap.vc_ip', '-earuba_iap.model', '-earuba_iap.pvid',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert len(lines) == 57
+        assert [line[0] for line in lines[:4]] == ['3', '4', '5', '7']
+        assert lines[0][1:] == ['10.30.0.1', '10', '1', 'Aruba Instant AP VC IP: 10.30.0.1']
+        assert lines[55][1:4] == ['10.30.0.14', '71', '14']
+        assert lines[56][1:4] == ['192.0.2.1', '127', '4094']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_iap_coverage.pcap.gz'),
+                '-Y', 'aruba_iap && !aruba_iap.vc_ip', '-Tfields', '-earuba_iap.type',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['0', '1', '2', '6', '8', '255']
+
+
+class TestDissectArubaPapi:
+    def test_aruba_papi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''v2 and v3 headers, every License Manager TLV, a UBT payload,
+        data payloads and data without the PAPI magic decode without
+        malformed packets, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('PAPI') == 8
+        assert protocols.count('UBT') == 1
+        assert protocols.count('UDP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aruba_papi_headers(self, cmd_tshark, capture_file, test_env):
+        '''The v3 header carries IPv6 addresses; the packet type is shown
+        in decimal and hex (it used to be shown in octal).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Y', 'papi.hdr.version == 3',
+                '-Tfields', '-eframe.number', '-epapi.hdr.dest.ipv6', '-epapi.hdr.src.ipv6',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3\t2001:db8::2\t2001:db8::1',
+            '4\t2001:db8::2\t2001:db8::1',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Y', 'frame.number == 5', '-O', 'papi',
+            ), encoding='utf-8', env=test_env)
+        assert 'Packet Type: 8 (0x0008)' in stdout
+
+    def test_aruba_papi_license_manager(self, cmd_tshark, capture_file, test_env):
+        '''License Manager TLVs, found by the destination or source port.
+        A serial number shorter than 32 octets is read by its TLV length
+        and the TLV after it is decoded (frame 6, it used to be malformed).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Y', 'papi.licmgr',
+                '-Tfields', '-eframe.number', '-epapi.licmgr.serial_number',
+                '-epapi.licmgr.hostname', '-epapi.licmgr.ip',
+                '-epapi.licmgr.license.ap.remaining',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\tCN0123456789\tcontroller-1\t10.1.2.3\t1007',
+            '2\t\t\t\t64',
+            '3\t\tv6-controller\t\t',
+            '6\tSN123456\thost\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-epapi.licmgr.type', '-E', 'aggregator=,',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,18,19,99'
+
+    def test_aruba_papi_experimental_decode(self, cmd_tshark, capture_file, test_env):
+        '''With papi.experimental_decode the payload is decoded as debug
+        items, one of each kind and an unknown one.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'papi.experimental_decode:TRUE',
+                '-r', capture_file('aruba_papi_coverage.pcap.gz'),
+                '-Y', 'frame.number == 7',
+                '-Tfields', '-epapi.debug.text', '-epapi.debug.48bits',
+                '-epapi.debug.8bits', '-epapi.debug.16bits', '-epapi.debug.32bits',
+                '-epapi.debug.ipv4', '-epapi.debug.bytes', '-epapi.debug.64bits',
+                '-e_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.rstrip('\n').split('\t') == [
+            'debug text!', '11042563100175', '42', '4660,22136', '3735928559',
+            '198.51.100.9', '0102030405', '72623859790382856', 'Unknown (6)',
+        ]
+
+
+class TestDissectArubaUbt:
+    def test_aruba_ubt_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type and every TLV type decode without malformed
+        packets, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['UBT'] * 34
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                '-Tfields', '-eubt.msg_type',
+            ), encoding='utf-8', env=test_env)
+        assert set(int(t) for t in stdout.split()) == set(range(21)) | {99}
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_aruba_ubt_tlv_length(self, cmd_tshark, capture_file, test_env):
+        '''Dissection goes on after each TLV by its length: a SAC IP
+        address shorter than 20 octets (frame 29), silent client VLANs
+        (frames 30, 11), and SAC/server IP addresses, a node list and a
+        bucket map longer than their fixed layout (frames 31-33) are
+        followed by the TLVs after them.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                '-Y', 'frame.number in {11,29..33}',
+                '-Tfields', '-eframe.number', '-eubt.tlv_type', '-eubt.username',
+                '-eubt.user_portname', '-eubt.silent_client_vlan', '-eubt.sac_ipv4',
+                '-eubt.server_ipaddressv6',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '11\t3,7,8,9,11,18,19,20,16,22\tuser0\t1/1/0\t000a,0014,001e\t\t',
+            '29\t5,19,20\talice\tport1\t\t192.0.2.7\t',
+            '30\t22,19\tbob\t\t000a,0014\t\t',
+            '31\t5,19,17,20\tcarol\tport2\t\t192.0.2.8\t2001:db8::50',
+            '32\t13,19\tdave\t\t\t\t',
+            '33\t14,19\terin\t\t\t\t',
+        ]
+
+    def test_aruba_ubt_values(self, cmd_tshark, capture_file, test_env):
+        '''Node list and bucket map contents, and the messages without a
+        switch MAC address.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                '-Y', 'frame.number in {3,5}',
+                '-Tfields', '-eubt.node_list.cluster_name', '-eubt.uac_count',
+                '-eubt.uac_ipv4', '-eubt.uac_ipv6', '-eubt.bucket_map.identifier',
+            ), encoding='utf-8', env=test_env)
+        uac4 = ','.join(['10.0.0.1'] + [f'10.0.0.{i}' for i in range(4, 13)])
+        assert stdout.splitlines() == [
+            f'cluster-one\t12\t{uac4}\t2001:db8::a01\t',
+            f'\t3\t{uac4}\t2001:db8::a01\tbucketmap-identifier-0123456789ab',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('aruba_ubt_coverage.pcap.gz'),
+                '-Y', 'ubt && !ubt.switch.mac_addr',
+                '-Tfields', '-eframe.number', '-eubt.msg_type',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['16\t12', '20\t16']
+
+
+ASAM_CMP_OPTS = ('-d', 'ethertype==0x99fe,asam-cmp', '-d', 'udp.port==50000,asam-cmp')
+
+
+class TestDissectAsamCmp:
+    def test_asam_cmp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every data message payload type, control, status and vendor
+        message, over Ethernet and UDP, decodes without malformed packets
+        or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('ASAM-CMP') == 82
+        # Ethernet data messages carrying IPv4/UDP
+        assert protocols.count('UDP') == 4
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS, *passes,
+                    '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_asam_cmp_ctrl_vendor_length(self, cmd_tshark, capture_file, test_env):
+        '''The message after a vendor specific control message is decoded.
+        Its length used to count the vendor data twice.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {66, 67}',
+                '-Tfields', '-eframe.number', '-easam-cmp.msg_hdr.payload_type',
+                '-easam-cmp.msg.dsr.device_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '66\t0xff,0x01\t0x0a0b',
+            '67\t0xff,0x01\t0x0a0b',
+        ]
+
+    def test_asam_cmp_ethernet_nesting(self, cmd_tshark, capture_file, test_env):
+        '''Ethernet in ASAM CMP is handed to the Ethernet dissector, and
+        300 levels of ASAM CMP in Ethernet stop before the tree depth limit
+        with an expert info instead of an assertion.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Y', 'asam-cmp.expert.too_deep',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['86']
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {34, 37}',
+                '-Tfields', '-eframe.number', '-eudp.dstport', '-easam-cmp.hdr.device_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '34\t5678\t0x0102',
+            '37\t\t0x0102,0x0a0a',
+        ]
+
+    def test_asam_cmp_payloads(self, cmd_tshark, capture_file, test_env):
+        '''CAN data and LIN sleep frames are handed off, analog samples
+        include the last one, digital samples above 32 pins are skipped
+        and segmentation flags are decoded.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1, 12, 23, 30, 32, 58, 59, 60}',
+                '-Tfields', '-eframe.number', '-edata.data',
+                '-easam-cmp.msg.analog.sample', '-easam-cmp.msg_hdr.seg',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        frames = {f[0]: f[1:] for f in (line.split('\t') for line in stdout.splitlines())}
+        assert frames['1'][0] == '1122334455667788'
+        assert frames['12'][3].endswith('Go-to-sleep Command')
+        assert frames['23'][3].endswith('(Digital) 0x11 0x22 0x33 0x44')
+        assert frames['30'][1] == '25.5,-24.5,8192.25'
+        assert frames['32'][1] == '42,500'
+        assert [frames[n][2] for n in ('58', '59', '60')] == ['0x01', '0x02', '0x03']
+
+    def test_asam_cmp_uat_names(self, cmd_tshark, capture_file, test_env):
+        '''Device and interface names from the UATs are shown.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASAM_CMP_OPTS,
+                '-o', 'uat:ASAM_CMP_devices:"0102","Gateway ECU"',
+                '-o', 'uat:ASAM_CMP_interfaces:"10","CAN-Body","1"',
+                '-r', capture_file('asam_cmp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1, 72}', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'Device ID: 0x0102 (Gateway ECU)' in stdout
+        assert 'Interface ID: 0x00000010 (CAN-Body)' in stdout
+        assert 'Interface CAN-Body, Type: CAN' in stdout
+        assert 'Interface 0x101, Type: CAN FD' in stdout
+
+
+class TestDissectAsap:
+    def test_asap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type, parameter and cause decodes without malformed
+        packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asap_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        # Frames 21 and 22 are SCTP fragments of the message in frame 23
+        assert stdout.split() == ['ASAP'] * 20 + ['SCTP'] * 2 + ['ASAP'] * 9
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asap_coverage.pcap.gz'),
+                '-Tfields', '-easap.message_type',
+            ), encoding='utf-8', env=test_env)
+        types = set(int(t) for line in stdout.split() for t in line.split(','))
+        assert types == set(range(1, 15)) | {0x20}
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asap_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_asap_in_error_pkt(self, cmd_tshark, capture_file, test_env):
+        '''Frame 30 bundles an ASAP Error with an Operation Error, the first
+        fragment of a Registration and a Keep-Alive; frame 31 holds the
+        last fragment. The Operation Error does not stop the later
+        messages from setting Info and being reassembled, in one and two
+        passes.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asap_coverage.pcap.gz'),
+                    '-Y', 'frame.number in {30,31}',
+                    '-Tfields', '-e_ws.col.info', '-easap.message_type',
+                    '-easap.pool_element_pe_identifier', '-easap.sctp_transport_port',
+                    '-easap.ipv4_address',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                'ASAP Error DATA (TSN=1) (Message Fragment) ASAP Endpoint Keep-Alive \t14,7\t\t\t',
+                'ASAP Registration \t1\t0x00000001\t5000\t192.0.2.9',
+            ]
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asap_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 31', '-V',
+                ), encoding='utf-8', env=test_env)
+            assert 'Reassembled SCTP Fragments (52 bytes, 2 fragments)' in stdout
+            assert 'Type: ASAP Registration (1)' in stdout
+            assert 'Pool Handle: 706f6f6c68616e646c65 (poolhandle)' in stdout
+            assert 'Registration Life: 1000ms' in stdout
+
+    def test_asap_stat(self, cmd_tshark, capture_file, test_env):
+        '''-z asap,stat counts every tapped message once: the messages
+        after the Operation Error in frame 30 are counted, the messages
+        nested in Unrecognized message causes are not, and the undefined
+        message type has no row.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asap_coverage.pcap.gz'),
+                    '-q', '-z', 'asap,stat',
+                ), encoding='utf-8', env=test_env)
+            # Floats are shown with the decimal separator of the locale
+            stdout = stdout.replace(',', '.')
+            assert 'ASAP Registration         |4 |12.500 % |384 |14.071 % |0.000000 |30.000000 |30.000000 |0.13 |12.80 |' in stdout
+            assert 'ASAP Endpoint Keep-Alive  |3 |9.375 % |56 |2.052 % |7.000000 |29.000000 |22.000000 |0.14 |2.55 |' in stdout
+            assert 'ASAP Handle Resolution Response |3 |9.375 % |1460 |53.499 % |6.000000 |25.000000 |19.000000 |0.16 |76.84 |' in stdout
+            assert 'ASAP Error                |2 |6.250 % |168 |6.156 % |15.000000 |29.000000 |14.000000 |0.14 |12.00 |' in stdout
+            assert 'ASAP Deregistration Response |1 |3.125 % |28 |1.026 % |4.000000 |4.000000 |' in stdout
+
+    def test_asap_values(self, cmd_tshark, capture_file, test_env):
+        '''The 32-bit DCCP service code (frames 1 and 29), the SCTP
+        reassembly of the three fragment Handle Resolution Response
+        (frame 23), the parameters ending at the message Length (frame 19)
+        and the policies in frame 7.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asap_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1,19,23,29}',
+                '-Tfields', '-eframe.number', '-easap.dccp_transport_service_code',
+                '-easap.pool_handle_pool_handle', '-easap.pool_element_pe_identifier',
+            ), encoding='utf-8', env=test_env)
+        pe_ids = ','.join('0x%08x' % (0x4000 + i) for i in range(12))
+        assert stdout.splitlines() == [
+            '1\t305419896\t6563686f2d706f6f6c\t0x00001001',
+            '19\t\t6563686f2d706f6f6c,706f6f6c31\t',
+            f'23\t\t6563686f2d706f6f6c\t{pe_ids}',
+            '29\t305419896\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asap_coverage.pcap.gz'),
+                '-Y', 'frame.number == 7',
+                '-Tfields', '-easap.pool_member_selection_policy_type',
+                '-easap.pool_member_selection_policy_distance',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0x00000001,0x00000001,0x00000002,0x00000003,0x00000004,0x00000005,'
+            '0x40000001,0x40000004,0x40000002,0x40000003,0xb0002002,0xb0002001,'
+            '0xb0001003,0x7fffffff\t25,50',
+        ]
+
+
+class TestDissectAscend:
+    def test_ascend_records(self, cmd_tshark, capture_file, test_env):
+        '''Every record type the Ascend text reader produces (WDD with and
+        without a date, TAOS 6/7/8 wandsess and wandisp, XMIT:/RECV:,
+        PPP-OUT/PPP-IN, PRI-XMIT/PRI-RCV including a frame split over two
+        records, ETHER) decodes without malformed packets, in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ascend_coverage.txt.gz'),
+                '-Tfields', '-eascend.type', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        # 1 WDS transmit, 2 WDS receive, 3 WDD, 4 ISDN transmit,
+        # 5 ISDN receive, 6 Ethernet
+        assert [t for t, p in lines] == [
+            '3', '3', '2', '1', '2', '1', '2', '1', '2', '1',
+            '1', '2', '1', '2', '1', '2', '4', '5', '4', '5',
+            '6', '6', '2', '3', '1', '2', '3', '6', '1', '2', '1']
+        protocols = [p for t, p in lines]
+        assert protocols.count('PPP LCP') == 10
+        assert protocols.count('LAPD') == 2
+        assert protocols.count('Q.931') == 1
+        assert protocols.count('TEI') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ascend_coverage.txt.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_ascend_user_per_packet(self, cmd_tshark, capture_file, test_env):
+        '''Each WAN session packet shows its own user name. The reader used
+        to keep the first packet's user name for every later packet
+        (frames 3 and 4 are batch66-70/ascend_stale_user.txt); the TAOS 7
+        and 8 wandisp records have no user and show "<none>".'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ascend_coverage.txt.gz'),
+                    '-Y', 'ascend.type == 1 || ascend.type == 2',
+                    '-Tfields', '-eframe.number', '-eascend.user', '-eascend.sess',
+                ), encoding='utf-8', env=test_env)
+            assert [line.split('\t') for line in stdout.splitlines()] == [
+                ['3', 'alice', '241'], ['4', 'bob', '242'],
+                ['5', 'Max7', '20'], ['6', 'Max7', '20'],
+                ['7', 'Max7', '20'], ['8', 'Max7', '20'],
+                ['9', '<none>', '187'], ['10', '<none>', '187'],
+                ['11', '<none>', '44'], ['12', '<none>', '44'],
+                ['13', 'dave', '9'], ['14', 'dave', '9'],
+                ['15', '_erin', '11'], ['16', '_erin', '11'],
+                ['23', 'frank', '300'],
+                ['25', 'gina', '12'], ['26', 'gina', '12'],
+                ['29', '12', '34'],
+                ['30', 'hank', '5'], ['31', 'hank', '5'],
+            ]
+
+    def test_ascend_values(self, cmd_tshark, capture_file, test_env):
+        '''WDD called number and chunk, task, lengths, the 128 octet limit,
+        a frame whose header claims fewer octets than its data lines, and
+        time stamps taken from the "time:" fields.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ascend_coverage.txt.gz'),
+                '-Tfields', '-eframe.number', '-eascend.number', '-eascend.chunk',
+                '-eascend.task', '-eframe.len', '-eframe.cap_len',
+                '-eframe.time_relative',
+            ), encoding='utf-8', env=test_env)
+        frames = {int(f[0]): f[1:] for f in
+                  (line.split('\t') for line in stdout.splitlines())}
+        assert len(frames) == 31
+        assert frames[1] == ['5551234567', '0x002515ee', '0x00251790', '66', '66', '0.000000000']
+        assert frames[2] == ['', '0x002515ef', '0x00251790', '42', '42', '0.120000000']
+        assert frames[24][:2] == ['18005550199', '0x002515f0']
+        assert frames[3][2:] == ['0xb02614c0', '8', '8', '1.570000000']
+        # PRI-XMIT-19/1 and /2: 4 + 22 octets in one frame
+        assert frames[19][2:5] == ['0x10216fe0', '26', '26']
+        # ETHER record of 342 octets, the reader keeps 128
+        assert frames[21][3:5] == ['342', '128']
+        # 8 octets claimed, 12 in the data lines
+        assert frames[23][3:5] == ['8', '8']
+        # time: 994969.123456 uses the first two fraction digits
+        assert frames[31][5] == '15.840000000'
+
+    def test_ascend_isdn(self, cmd_tshark, capture_file, test_env):
+        '''PRI records are LAPD with the direction from the record type
+        (PRI-XMIT user to network, 0; PRI-RCV network to user, 1); the
+        frame split over two records is a Q.931 SETUP.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ascend_coverage.txt.gz'),
+                '-Y', 'lapd',
+                '-Tfields', '-eframe.number', '-elapd.direction', '-eq931.message_type',
+                '-eq931.called_party_number.digits',
+            ), encoding='utf-8', env=test_env)
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['17', '0', '', ''], ['18', '1', '', ''],
+            ['19', '0', '0x05', '5551'], ['20', '1', '', ''],
+        ]
+
+
+class TestDissectAsf:
+    def test_asf_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type (and an unknown one) decodes without
+        malformed packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asf_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol', '-easf.type',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.split('\t') for line in stdout.splitlines()]
+        assert [p for p, t in lines].count('ASF') == 40
+        assert [p for p, t in lines].count('RMCP') == 1
+        types = [t for p, t in lines]
+        for t in ('0x80', '0x40', '0x81', '0x41', '0x82', '0x42', '0x10', '0x11',
+                  '0x12', '0x13', '0x83', '0x43', '0x84', '0x44', '0xc0', '0xc1',
+                  '0xc2', '0x55'):
+            assert t in types
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asf_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_asf_open_session(self, cmd_tshark, capture_file, test_env):
+        '''Open Session Request and Response: session IDs, status, and the
+        authentication and integrity algorithm payloads (known, unknown,
+        end of list, empty and unknown payload types).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asf_coverage.pcap.gz'),
+                '-Y', 'frame.number in {11..14}',
+                '-Tfields', '-easf.type', '-easf.len', '-easf.rssp_status_code',
+                '-easf.mgt_console_id', '-easf.client_id', '-easf.payload.type',
+                '-easf.payload.len', '-easf.auth_alg', '-easf.integrity_alg',
+            ), encoding='utf-8', env=test_env)
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['0x83', '20', '', '16909060', '', '1,2', '8,8', '1', '1'],
+            ['0x43', '28', '0', '16909060', '168496141', '1,2', '8,8', '1', '1'],
+            ['0x83', '42', '', '7', '', '1,2,0,9,1,2', '8,7,4,8,4,5', '2', '127,1'],
+            ['0x43', '12', '4', '7', '0', '', '', '', ''],
+        ]
+
+    def test_asf_data_length(self, cmd_tshark, capture_file, test_env):
+        '''Octets after the ASF data length are not dissected as part of
+        the message: frame 29 is a 12 octet Open Session Response followed
+        by octets that look like payloads, frame 30 a 20 octet Open
+        Session Request followed by one more payload. Before the fix the
+        Open Session messages were dissected from the whole RMCP payload.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asf_coverage.pcap.gz'),
+                '-Y', 'frame.number in {29, 30, 41}',
+                '-Tfields', '-easf.len', '-easf.client_id', '-easf.payload.type',
+                '-easf.payload.len',
+            ), encoding='utf-8', env=test_env)
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['12', '34', '', ''],
+            ['20', '', '1,2', '8,8'],
+            ['252', '', '9,0', '244,4'],
+        ]
+
+
+class TestDissectExportedPduTls:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('exported_pdu_tls_coverage.pcapng.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_exported_pdu_tls_protocols(self, cmd_tshark, capture_file, test_env):
+        '''One Exported PDU per heuristic dissector of the "tls" list,
+        named with the heuristic dissector name tag; each decodes as its
+        protocol. They used to be called without a struct tlsinfo and
+        HTTP, HTTP2, WebSphere MQ, FIX and 5G LI crashed.'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-eexported_pdu.heur_prot_name', '-eframe.protocols')
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['http_tls', 'exported_pdu:http'],
+            ['http_tls', 'exported_pdu:http'],
+            ['http2_tls', 'exported_pdu:http2'],
+            ['mq_tls', 'exported_pdu:mq'],
+            ['fix_tls', 'exported_pdu:fix'],
+            ['li5g_tls', 'exported_pdu:li5g'],
+            # aim_tls is disabled by default: the payload goes to data
+            ['aim_tls', 'exported_pdu:data'],
+            ['rpc_tls', 'exported_pdu:rpc'],
+            ['tpkt_tls', 'exported_pdu:tpkt:cotp'],
+            ['smpp_tls', 'exported_pdu:smpp'],
+            ['rtitcp_tls', 'exported_pdu:rtitcp'],
+            ['rdpmt_tls_', 'exported_pdu:rdpmt'],
+            ['rdp_tls', 'exported_pdu:rdp'],
+            ['credssp_tls', 'exported_pdu:credssp:gss-api'],
+        ]
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '--enable-heuristic', 'aim_tls', '-Y', 'aim',
+                '-Tfields', '-eframe.number', '-eaim.channel')
+        assert stdout.splitlines() == ['7\t0x01']
+
+    def test_exported_pdu_tls_clean(self, cmd_tshark, capture_file, test_env):
+        '''No malformed packets or error expert infos in one and two passes.'''
+        for args in ((), ('-2',), ('--enable-heuristic', 'aim_tls'),
+                     ('-2', '--enable-heuristic', 'aim_tls')):
+            stdout = self.run_fields(cmd_tshark, capture_file, test_env, *args,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= error',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_exported_pdu_tls_http(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of the crash (an HTTP response found by http_tls)
+        and an HTTP request with address and port tags.'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'http', '-Tfields', '-eframe.number', '-ehttp.response.code',
+                '-ehttp.request.uri', '-e_ws.col.def_src', '-e_ws.col.def_dst')
+        assert stdout.splitlines() == [
+            '1\t200\t\t\t',
+            '2\t\t/index.html\t192.0.2.1\t192.0.2.2']
+
+    def test_exported_pdu_tls_values(self, cmd_tshark, capture_file, test_env):
+        '''A decoded value from each of the other heuristic dissectors.'''
+        for dfilter, field, value in (
+                ('http2', 'http2.type', '4'),
+                ('mq', 'mq.tsh.type', '0x09'),
+                ('fix', 'fix.MsgType', '0'),
+                ('li5g', 'li5g.type', '3'),
+                ('rpc', 'rpc.program', '100003'),
+                ('cotp', 'cotp.type', '0x0e'),
+                ('smpp', 'smpp.command_id', '0x00000015'),
+                ('rtitcp', 'rtitcp.control.kind', '0x0c01'),
+                ('rdpmt', 'rdpmt.createrequest.requestid', '0x00000001'),
+                ('rdp', 'rdp.fastpath.scancode.keycode', '0x1e'),
+                ('credssp', 'credssp.version', '6')):
+            stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                    '-Y', dfilter, '-Tfields', '-E', 'occurrence=f', '-e' + field)
+            assert stdout.split() == [value], field
+
+
+class TestDissectLi5g:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('li5g_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_li5g_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every PDU type, attribute type and payload format decodes
+        without malformed packets or warnings, in one and two passes.'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.splitlines()
+        assert len(protocols) == 35
+        assert protocols.count('LI5G') == 31
+        for passes in ((), ('-2',)):
+            stdout = self.run_fields(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_li5g_header(self, cmd_tshark, capture_file, test_env):
+        '''PDU types (with an unknown one, which leaves the Info column
+        empty) and several PDUs in one frame.'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number <= 5 || frame.number == 28',
+                '-Tfields', '-eframe.number', '-eli5g.type', '-eli5g.pf', '-eli5g.pd',
+                '-eli5g.hl', '-eli5g.pl', '-e_ws.col.info')
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['1', '1', '2', '2', '412', '21', 'X2 xIRI'],
+            ['2', '2', '5', '3', '46', '64', 'X3 xCC'],
+            ['3', '3', '0', '0', '40', '0', 'Keepalive'],
+            ['4', '4', '0', '0', '40', '0', 'Keepalive Acknowledgement'],
+            ['5', '9', '4', '1', '40', '6', ''],
+            ['28', '2,2,3', '5,9,0', '2,3,0', '40,40,40', '72,268,0', 'X3 xCC'],
+        ]
+
+    def test_li5g_attributes(self, cmd_tshark, capture_file, test_env):
+        '''The conditional attributes: every defined type, the reserved
+        type 0 (frames 6 and 29), which used to fail an assertion for an
+        unregistered field, and unknown types (frame 7), which are skipped.'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {1, 6, 7, 29}', '-Tfields',
+                '-eframe.number', '-eli5g.attrType')
+        assert stdout.splitlines() == [
+            '1\t' + ','.join(str(t) for t in range(1, 23)), '6\t5,8', '7\t7', '29\t17']
+        # each value is in the attribute item and again in its subtree
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {1, 6}', '-Tfields', '-E', 'occurrence=f',
+                '-eframe.number', '-eli5g.sq', '-eli5g.ts',
+                '-eli5g.srcip', '-eli5g.dstip', '-eli5g.srcipv6', '-eli5g.dstipv6',
+                '-eli5g.srcport', '-eli5g.dstport', '-eli5g.ipproto', '-eli5g.did')
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['1', '4242', '2023-11-14T22:13:20.500000000Z', '10.1.2.3', '10.4.5.6',
+             '2001:db8::10', '2001:db8::20', '5060', '443', '17',
+             '6f70657261746f722e6578616d706c65'],
+            ['6', '2', '', '', '', '', '', '', '', '', '646964'],
+        ]
+
+    def test_li5g_supi(self, cmd_tshark, capture_file, test_env):
+        '''IMSIs in the Matched and Other Target Identifier attributes:
+        two in one header, upper case tags, and three that do not match
+        (an NAI, too few digits, not on the first line).'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'li5g.mti || li5g.oti', '-Tfields', '-eframe.number',
+                '-ee212.assoc.imsi')
+        assert stdout.splitlines() == [
+            '1\t001010123456789,310410987654321',
+            '8\t001010123456789,310410987654321',
+            '9\t',
+            '10\t',
+            '29\t001010123456789',
+        ]
+
+    def test_li5g_payload_formats(self, cmd_tshark, capture_file, test_env):
+        '''Each payload format of the li5g.payload table goes to its
+        dissector, the others to data; the addresses of the Exported PDU
+        are restored after an IP payload (frames 2 and 28).'''
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {1, 2, 7, 11..28}', '-Tfields',
+                '-eli5g.pf', '-eframe.protocols', '-e_ws.col.def_src')
+        assert [line.split('\t') for line in stdout.splitlines()] == [
+            ['2', 'exported_pdu:li5g:xiri', '198.51.100.1'],
+            ['5', 'exported_pdu:li5g:ip:udp:syslog', '198.51.100.1'],
+            ['6', 'exported_pdu:li5g:ipv6:udp:syslog', ''],
+            ['0', 'exported_pdu:li5g', ''],
+            ['1', 'exported_pdu:li5g:data', ''],
+            ['3', 'exported_pdu:li5g:data', ''],
+            ['4', 'exported_pdu:li5g:data', ''],
+            ['6', 'exported_pdu:li5g:ipv6:udp:syslog', ''],
+            ['7', 'exported_pdu:li5g:eth:ethertype:ip:udp:syslog', '198.51.100.1'],
+            ['8', 'exported_pdu:li5g:rtp', ''],
+            ['9', 'exported_pdu:li5g:sip', ''],
+            ['10', 'exported_pdu:li5g:dhcp', ''],
+            ['11', 'exported_pdu:li5g:radius', ''],
+            ['12', 'exported_pdu:li5g:gtp:ip:udp:syslog', ''],
+            ['13', 'exported_pdu:li5g:msrp:data-text-lines', ''],
+            ['14', 'exported_pdu:li5g:HI2operations', ''],
+            ['15', 'exported_pdu:li5g:data', ''],
+            ['16', 'exported_pdu:li5g:data', ''],
+            ['17', 'exported_pdu:li5g:data', ''],
+            ['65535', 'exported_pdu:li5g:data', ''],
+            ['5,9,0', 'exported_pdu:li5g:ip:udp:syslog:sip', '198.51.100.1'],
+        ]
+        stdout = self.run_fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {1, 23}', '-Tfields',
+                '-elix2.deregistrationDirection', '-eHI2Operations.lawfulInterceptionIdentifier')
+        assert stdout.splitlines() == ['2\t', '\tLIID-0001']
+
+    def test_li5g_tls_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''The 5G LI over TLS heuristic named in an Exported PDU accepts
+        frames 29-31 and rejects a short PDU, version 2 and PDU types 0
+        and 5, which go to data. It used to crash: it stored its handle
+        through the TLS information, which was NULL.'''
+        for args, li5g_frames in (((), ['29', '30', '31']),
+                                  (('--disable-heuristic', 'li5g_tls'), [])):
+            stdout = self.run_fields(cmd_tshark, capture_file, test_env, *args,
+                    '-Y', 'exported_pdu.heur_prot_name == "li5g_tls"',
+                    '-Tfields', '-eframe.number', '-eframe.protocols')
+            lines = [line.split('\t') for line in stdout.splitlines()]
+            assert [n for n, p in lines] == [str(n) for n in range(29, 36)]
+            assert [n for n, p in lines if p.startswith('exported_pdu:li5g')] == li5g_frames
+            assert [n for n, p in lines if p == 'exported_pdu:data'] == \
+                    [str(n) for n in range(29, 36) if str(n) not in li5g_frames]
