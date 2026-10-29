@@ -8678,3 +8678,5457 @@ class TestDissectLi5g:
             assert [n for n, p in lines if p.startswith('exported_pdu:li5g')] == li5g_frames
             assert [n for n, p in lines if p == 'exported_pdu:data'] == \
                     [str(n) for n in range(29, 36) if str(n) not in li5g_frames]
+
+
+# asphodel_coverage.pcap.gz is synthetic: every packet was generated, to
+# cover as much of the Asphodel dissector as possible. Its UDP heuristic
+# ships disabled; the TCP sessions are found through the conversations
+# that the UDP inquiry and responses set up.
+ASPHODEL_OPTS = ('--enable-heuristic', 'asphodel_inquiry')
+
+
+class TestDissectAsphodel:
+    def test_asphodel_heuristic_disabled_by_default(self, cmd_tshark, capture_file, test_env):
+        '''Nothing is dissected as Asphodel unless the heuristic is enabled.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Y', 'asphodel',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 0
+
+    def test_asphodel_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Inquiries, responses and every TCP message type decode without
+        malformed packets, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('Asphodel') == 43
+        assert protocols.count('TCP') == 13
+        assert protocols.count('UDP') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS, *passes,
+                    '-r', capture_file('asphodel_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_asphodel_remote_param_lengths(self, cmd_tshark, capture_file, test_env):
+        '''The remote parameter lengths of a radio are read from the remote
+        fields, not from the device's own (frame 3: remote 128/64/20,
+        device 400/256/40).'''
+        stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Y', 'asphodel.serial_number',
+                '-Tfields', '-eframe.number', '-easphodel.serial_number',
+                '-easphodel.max_incoming_param_length',
+                '-easphodel.max_outgoing_param_length',
+                '-easphodel.stream_packet_length',
+                '-easphodel.remote_max_incoming_param_length',
+                '-easphodel.remote_max_outgoing_param_length',
+                '-easphodel.remote_stream_packet_length',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[:2] for f in frames] == [
+            ['2', 'WM12345'], ['3', 'WMR99'], ['4', 'WMR0'], ['7', 'WM55']]
+        assert frames[0][2:] == ['400', '256', '32', '', '', '']
+        assert frames[1][2:] == ['400', '256', '40', '128', '64', '20']
+
+    def test_asphodel_bad_param_lengths(self, cmd_tshark, capture_file, test_env):
+        '''Command buffer sizes of 2 or less, of the device and of the
+        remote, get a warning each.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Y', 'asphodel.bad_param_length',
+                '-Tfields', '-eframe.number', '-e_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['4\t' + ','.join(['Bad parameter length'] * 4)]
+
+    def test_asphodel_tcp(self, cmd_tshark, capture_file, test_env):
+        '''The TCP sessions are found from the UDP responses; messages over
+        several segments are reassembled and several messages in one
+        segment are all dissected.'''
+        stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Y', 'asphodel.length',
+                '-Tfields', '-eframe.number', '-easphodel.type', '-easphodel.cmd',
+                '-easphodel.length', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        frames = {f[0]: f[1:] for f in (line.split('\t') for line in stdout.splitlines())}
+        assert len(frames) == 33
+        # No op, a command and a No op, two commands
+        assert frames['28'] == ['0x00|0x00', '0x20|0x21', '3|0|4']
+        assert frames['29'] == ['0x00|0x00', '0x20|0x21', '5|5']
+        # ECHO_RAW of 380 octets over three segments, and over three
+        # segments with the length split
+        assert frames['32'] == ['0x00', '0xfc', '383']
+        assert frames['35'] == ['0x00', '0xfc', '383']
+        stdout = subprocess.check_output((cmd_tshark, *ASPHODEL_OPTS,
+                '-r', capture_file('asphodel_coverage.pcap.gz'),
+                '-Y', 'asphodel.notify || asphodel.cmd_error || asphodel.unknown_type',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '19\tREPLY_ERROR', '21\tREPLY_ERROR', '23\tREPLY_ERROR',
+            '36\tUnknown(05)', '47\tNotify Connect', '51\tREPLY_ERROR',
+            '54\tNotify Disconnect',
+        ]
+
+
+class TestDissectAssaR3:
+    def test_assa_r3_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every command, manufacturing command, response, upstream command
+        and field decodes without malformed packets or error expert infos,
+        in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('R3') == 310
+        assert protocols.count('TCP') == 32
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_assa_r3_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Every value of the command, manufacturing command, response
+        type, upstream command, upstream field, manufacturing field and
+        configuration item tables is present.'''
+        def values(field):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                    '-Tfields', '-e', field, '-E', 'aggregator=,',
+                ), encoding='utf-8', env=test_env)
+            return {int(v, 0) for v in stdout.replace('\n', ',').split(',') if v}
+        assert values('r3.command.command') == set(range(1, 32))
+        assert values('r3.commandmfg.command') == set(range(35))
+        assert values('r3.response.responsetype') == set(range(51))
+        assert values('r3.upstreamcommand.command') == set(range(26))
+        assert values('r3.upstreamfield.type') == set(range(31)) | {254}
+        assert values('r3.mfgfield.field') == set(range(19)) | {255}
+        assert values('r3.configitem') >= set(range(157))
+
+    def test_assa_r3_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A PDU over three segments (the first cut inside the header) and
+        a PDU finished in the segment after two others.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 324 && frame.number <= 330 && r3',
+                '-Tfields', '-eframe.number', '-etcp.segment',
+                '-er3.packetnumber', '-e', 'r3.dpac_attention', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '326\t324|325|326\t1\t',
+            '327\t\t2|3\t',
+            '328\t327|328\t4\t',
+            '329\t\t2|3|4\t',
+            '330\t\t\t~~~ds\\r\\n' + ' ' * 94,
+        ]
+
+    def test_assa_r3_fixed_offsets(self, cmd_tshark, capture_file, test_env):
+        '''The fields whose offsets were fixed: M41T81 register 0x13 from
+        the last register octet (0x50, not 0xa0), checkpoint log entries
+        after the entry pointer, the declined record credential types from
+        octet 8, the bad XOR item on the last octet, and the bad CRC text
+        with the packet CRC first.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 335',
+                '-Tfields', '-eframe.number',
+                '-er3.m41t81.reg13', '-er3.m41t81.reg13.notused',
+                '-er3.checkpointlog.rcon', '-er3.checkpointlog.checkpoint',
+                '-er3.declinedlog.cred1type', '-er3.declinedlog.cred2type',
+                '-er3.xor_bad', '-er3.crc_bad',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines()[:5] == [
+            '335\t0x50\t5\t\t\t\t\t\t',
+            '336\t\t\t0xff\t0x01\t\t\t\t',
+            '337\t\t\t\t\t\t\tTrue\t',
+            '338\t\t\t\t\t\t\t\tTrue',
+            '339\t\t\t\t\t2\t3\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'frame.number == 337 || frame.number == 338',
+                '-O', 'r3',
+            ), encoding='utf-8', env=test_env)
+        assert 'XOR: 0xa3 (incorrect, should be 0xf6)' in stdout
+        assert 'CRC: 0x6a8c (incorrect, should be 0x78b8)' in stdout
+
+    def test_assa_r3_mfg_fields(self, cmd_tshark, capture_file, test_env):
+        '''Checkpoint log reset types, peek/poke results, and the firmware
+        download CRC check.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'frame.number == 299',
+                '-O', 'r3',
+            ), encoding='utf-8', env=test_env)
+        for reset in ('Unknown Reset Type', 'Power-On', 'Software', 'Brown-out',
+                      'MCLR in sleep', 'WDT', 'Normal'):
+            assert reset in stdout
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'r3.peekpoke.operation',
+                '-O', 'r3',
+            ), encoding='utf-8', env=test_env)
+        assert 'Read (32 Bits @ 0x0108 = 0x44444444)' in stdout
+        assert 'Write (24 Bits: 0x777777 @ 0x0124)' in stdout
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('assa_r3_coverage.pcap.gz'),
+                '-Y', 'r3.firmwaredownload.crc',
+                '-Tfields', '-eframe.number', '-er3.firmwaredownload.crc_bad',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['54\t', '56\t', '58\tTrue', '60\t', '62\t', '64\t']
+
+
+# asterix_coverage.pcap.gz is synthetic: every packet was generated, to
+# cover as much of the ASTERIX dissector as possible: a record with every
+# item of every UAP of the default edition of each category, records
+# written item by item, the UAP probe of categories 1 and 7, and TCP.
+# ASTERIX is only dissected when a tree is built (-V, filters, fields).
+
+
+class TestDissectAsterix:
+    def test_asterix_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every category decodes without malformed packets or errors, in
+        one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asterix_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('ASTERIX') == 41
+        assert protocols.count('TCP') == 13
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('asterix_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_asterix_categories(self, cmd_tshark, capture_file, test_env):
+        '''There is a data block of every category the dissector knows.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asterix_coverage.pcap.gz'),
+                '-Tfields', '-easterix.category', '-E', 'aggregator=,',
+            ), encoding='utf-8', env=test_env)
+        categories = {int(c) for c in stdout.replace(',', '\n').split()}
+        assert sorted(categories) == [
+            1, 2, 4, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 23, 25,
+            32, 34, 48, 62, 63, 65, 150, 205, 240, 247]
+
+    def test_asterix_target_reports(self, cmd_tshark, capture_file, test_env):
+        '''Octal Mode-3/A codes, ICAO aircraft identifications (with a
+        character outside the ICAO alphabet), several records in a data
+        block and several data blocks in a datagram, and a spare bit
+        that is set.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asterix_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 4',
+                '-Tfields', '-eframe.number', '-easterix.category',
+                '-easterix.cat_7_datafield_070_MODE3A',
+                '-easterix.cat_48_datafield_240_240',
+                '-easterix.cat_48_datafield_161_TRN',
+                '-easterix.cat_62_datafield_060_MODE3A',
+                '-easterix.cat_62_datafield_245_CHR',
+                '-easterix.spare_error', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t48\t7500|2000\tRYR1234 |DLH4U   \t1234|1235\t\t\t',
+            '2\t34|48\t7500\tTEST 12?\t7\t\t\t',
+            '3\t48\t7500\tRYR1234 \t99\t\t\t1',
+            '4\t62\t\t\t\t1200\tABC 12 9\t',
+        ]
+
+    def test_asterix_uap_probe(self, cmd_tshark, capture_file, test_env):
+        '''Categories 1 and 7 have more than one UAP: every possible
+        interpretation of a data block is shown, unless a UAP is chosen in
+        the preferences.'''
+        def interpretations(*prefs, frames='asterix.category == 1 || asterix.category == 7'):
+            stdout = subprocess.check_output((cmd_tshark, *prefs,
+                    '-r', capture_file('asterix_coverage.pcap.gz'),
+                    '-Y', frames,
+                    '-Tfields', '-eframe.number', '-easterix.possible_interpretation',
+                    '-easterix.record', '-E', 'aggregator=,',
+                ), encoding='utf-8', env=test_env)
+            return [[f[0], f[1].count('1'), f[2].count('1')]
+                    for f in (line.split('\t') for line in stdout.splitlines())]
+        # frame 6: two records that are plot or track (4 interpretations of
+        # 2 records); frame 7: a plot and a track record (3 interpretations)
+        assert interpretations() == [
+            ['6', 4, 8], ['7', 3, 8], ['8', 1, 1], ['9', 1, 1], ['10', 1, 1],
+            ['13', 1, 1], ['14', 1, 1]]
+        # the plot and uplink records (frames 6, 8, 9 and 14) with the
+        # plot and uplink UAPs chosen
+        assert interpretations('-o', 'asterix.1_1_4:plot', '-o', 'asterix.7_1_12:uplink',
+                               frames='frame.number in {6, 8, 9, 14}') == [
+            ['6', 0, 2], ['8', 0, 1], ['9', 0, 1], ['14', 0, 1]]
+
+    def test_asterix_tcp(self, cmd_tshark, capture_file, test_env):
+        '''Data blocks over TCP: two in a segment, one over three segments
+        and one split inside its header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('asterix_coverage.pcap.gz'),
+                '-Y', 'tcp.port == 8600 && asterix.category',
+                '-Tfields', '-eframe.number', '-easterix.category',
+                '-easterix.cat_48_datafield_161_TRN', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '41\t48|34\t500', '45\t48\t501', '48\t48\t502', '50\t48\t503']
+
+
+class TestDissectAtalk:
+    def test_atalk_protocols(self, cmd_tshark, capture_file, test_env):
+        '''LLAP, short and long DDP over LocalTalk, EtherTalk, gatewayed
+        LLAP, DLT_NULL, PPP, Cisco HDLC and Exported PDU; NBP, RTMP, ZIP,
+        ATP, ASP with AFP, PAP, ADSP and MacIP decode without malformed
+        packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atalk_coverage.pcapng.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 135
+        expected = {
+            'ADSP': 17, 'AFP': 6, 'ASP': 15, 'ATP': 12, 'DDP': 8, 'EIGRP': 1,
+            'ICMP': 2, 'LLAP': 5, 'MacIP GP': 7, 'NBP': 13, 'PAP': 11,
+            'RTMP': 11, 'ZIP': 22,
+            '': 5,   # Exported PDUs the AppleTalk dissectors reject
+        }
+        for protocol, count in expected.items():
+            assert protocols.count(protocol) == count, protocol
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atalk_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_atalk_ddp_short(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU naming "ddp_short" has no LLAP node addresses
+        and is rejected (it used to crash), and the reserved bits of the
+        short DDP length word are not taken as part of the length.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atalk_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {12, 123}',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-eddp.len', '-enbp.object',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '12\tllap:ddp:nbp\t28\t=',
+            '123\texported_pdu:data\t\t',
+        ]
+
+    def test_atalk_atp_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''ATP replies in several packets are reassembled: a PAP Data reply,
+        an ASP GetStatus reply carrying the AFP server status and an ASP
+        Command reply carrying an AFP GetSrvrParms reply. With reassembly
+        off each packet of a reply is dissected on its own.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atalk_coverage.pcapng.gz'),
+                '-Y', 'atp.reassembled.length',
+                '-Tfields', '-eframe.number', '-eatp.reassembled.length',
+                '-e_ws.col.protocol', '-eafp.server_name', '-eafp.vol_name',
+                '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '21\t62\tPAP\t\t',
+            '70\t107\tASP\tSynthetic Server\t',
+            '77\t41\tAFP\t\tMacintosh HD|Public|Projects',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atalk_coverage.pcapng.gz'),
+                '-o', 'atp.desegment:FALSE',
+                '-Y', 'atp.reassembled.length || frame.number in {19..21}',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '19\tData  ID: 42', '20\tData  ID: 42', '21\tData  ID: 42',
+        ]
+
+    def test_atalk_asp_transactions(self, cmd_tshark, capture_file, test_env):
+        '''ASP replies are decoded with the function of their request, and
+        a reply to a transaction that was never requested is left to ATP
+        (ASP used to set its columns before rejecting it).'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atalk_coverage.pcapng.gz'),
+                    '-Y', 'atp.function == 2 && ddp.src_socket == 0x82',
+                    '-Tfields', '-eframe.number', '-easp.function',
+                    '-e_ws.col.protocol',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '75\t\tATP', '76\t\tATP', '77\t2\tAFP', '80\t2\tAFP',
+                '84\t6\tAFP', '86\t5\tASP', '91\t9\tASP',
+                '92\t\tATP', '93\t\tATP', '95\t1\tASP',
+            ]
+
+
+class TestDissectAt:
+    def test_at_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every command in the table, in every form and role, decodes
+        through the USB bulk heuristic without malformed packets, in one
+        and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert protocols.count('USB/AT') == 271
+        assert protocols.count('GSM SMS') == 8
+        assert protocols.count('GSM SIM') == 4
+        # Transfers the heuristic rejects
+        assert protocols.count('USB') == 5
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('at_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_at_ciev_missing_index(self, cmd_tshark, capture_file, test_env):
+        '''+CIEV whose first parameter starts with CR has no indicator
+        index. It used to be dereferenced; now it is an expert info.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-eat.cmd', '-eat.ciev.indicator_index',
+                '-e', 'at.expert.ciev.indicator', '-e_ws.malformed',
+                '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        cmd, index, expert, malformed = stdout.rstrip('\n').split('\t')
+        assert cmd == '+CIEV'
+        assert index == ''
+        assert expert != ''
+        assert malformed == ''
+
+    def test_at_cmux_port_speed(self, cmd_tshark, capture_file, test_env):
+        '''The +CMUX port speed is decoded from its digits.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_coverage.pcap.gz'),
+                '-Y', 'at.cmd == "+CMUX" && at.port_speed',
+                '-Tfields', '-eframe.number', '-eat.port_speed',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '2\t5', '3\t123456', '199\t5', '200\t6', '204\t5', '205\t4']
+
+    def test_at_sms_pdu(self, cmd_tshark, capture_file, test_env):
+        '''+CMGL and +CMGR PDU lines go to GSM SMS without the 8 octets
+        the dissector skips, including several in one transfer and a PDU
+        that arrives in the transfer after its +CMGR/+CMGL line.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('at_coverage.pcap.gz'),
+                    '-Y', 'gsm_sms',
+                    '-Tfields', '-eframe.number', '-egsm_sms.tp-oa',
+                    '-e', 'gsm_sms.sms_text', '-e', 'gsm_sms.tp.user_data_length',
+                    '-E', 'aggregator=|',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '7\t31641600986\tHow are you?\t12',
+                '178\t31641600986|31641600986\tHow are you?\t12|4',
+                '179\t31641600986\tHow are you?\t12',
+                '185\t31641600986\tHow are you?\t12',
+                '187\t31641600986\tHow are you?\t12',
+                '189\t31641600986\t\t4',
+                '196\t31641600986\tHow are you?\t12',
+                '288\t31641600986\tHow are you?\t12',
+            ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_coverage.pcap.gz'),
+                '-Y', 'frame.number == 187', '-x',
+            ), encoding='utf-8', env=test_env)
+        assert 'GSM SMS payload (30 bytes)' in stdout
+
+    def test_at_roles(self, cmd_tshark, capture_file, test_env):
+        '''USB OUT transfers are the DTE and IN transfers the DCE; the
+        "Sent is DCE" preference swaps them.'''
+        for prefs, dte, dce in (((), 151, 132), (('-o', 'at.role:dce'), 132, 151)):
+            stdout = subprocess.check_output((cmd_tshark, *prefs,
+                    '-r', capture_file('at_coverage.pcap.gz'),
+                    '-Y', 'at', '-Tfields', '-eat.role',
+                ), encoding='utf-8', env=test_env)
+            roles = stdout.split()
+            assert roles.count('2') == dte
+            assert roles.count('1') == dce
+
+
+class TestDissectAth:
+    def test_ath_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Tomcat 6 and Tomcat 7/8 heartbeats decode without malformed
+        packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 18
+        assert protocols.count('ATH') == 17
+        # A datagram to port 45564 without the begin mark is not ATH
+        assert protocols.count('UDP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ath_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        # Every heartbeat is decoded up to the end mark
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Y', 'ath.end == "TRIBES-E"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 17
+
+    def test_ath_ipv6_host(self, cmd_tshark, capture_file, test_env):
+        '''A 16 octet host is decoded as an IPv6 address and shown in the
+        Info column. It used to be an "invalid IP length" error.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Y', 'frame.number == 3',
+                '-Tfields', '-e_ws.col.info', '-eath.hlen', '-eath.ipv6',
+                '-eath.domain', '-eath.end',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == 'Heartbeat from 2001:db8::7 to domain dom\t16\t2001:db8::7\tdom\tTRIBES-E\n'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Y', 'ath.ipv6 == 2001:db8::7',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['3', '4', '8', '12', '13', '17']
+
+    def test_ath_info(self, cmd_tshark, capture_file, test_env):
+        '''The Info column for the default and a named domain, and for the
+        BABY-ALEX (shutdown) command, in both Tomcat versions.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Y', 'ath',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        info = stdout.splitlines()
+        assert info[0] == 'Heartbeat from 192.0.2.7 to domain cluster-a'
+        assert info[1] == 'Heartbeat from 192.0.2.8 to default domain'
+        assert info[7] == '2001:db8::7 is leaving domain dom'
+        assert info[8] == '192.0.2.8 is leaving default domain'
+        assert info[15] == '192.0.2.7 is leaving domain cluster-6'
+        assert info[16] == '2001:db8::7 is leaving default domain'
+        # Tomcat 7/8 heartbeats have the padding and the UDP port, Tomcat 6
+        # ones do not
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ath_coverage.pcap.gz'),
+                '-Y', 'ath.uport',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [str(n) for n in range(1, 10)]
+
+
+class TestDissectAtLdf:
+    def test_at_ldf_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Loop detection frames decode without malformed packets or error
+        expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_ldf_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 6
+        assert protocols.count('AT LDF') == 5
+        # An LLC TEST frame to another address is not a loop detection frame
+        assert protocols.count('LLC') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('at_ldf_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_at_ldf_port(self, cmd_tshark, capture_file, test_env):
+        '''The Info column shows the whole four octet source port. A port
+        above 65535 used to be shown as its low 16 bits.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_ldf_coverage.pcap.gz'),
+                '-Y', 'atldf',
+                '-Tfields', '-e_ws.col.info', '-eatldf.vlan', '-eatldf.port',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Source VLAN: 10, Port: 65541\t10\t65541',
+            'Source VLAN: 1, Port: 1\t1\t1',
+            'Source VLAN: 4094, Port: 4294967295\t4094\t4294967295',
+            'Source VLAN: 100, Port: 131075\t100\t131075',
+            'Source VLAN: 0, Port: 0\t0\t0',
+        ]
+
+    def test_at_ldf_fields(self, cmd_tshark, capture_file, test_env):
+        '''The version, TTL, identifier and text, including a 64 octet text
+        without a terminating null, and a frame with an 802.1Q tag.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_ldf_coverage.pcap.gz'),
+                '-Y', 'atldf',
+                '-Tfields', '-eatldf.version', '-eatldf.ttl', '-eatldf.id',
+                '-eatldf.info', '-evlan.id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t8\t0x0011111111111111\tloop detect\t',
+            '1\t1\t0x000123456789abcd\tloop detect\t',
+            '2\t255\t0x00ffffffffffffff\t' + 'L' * 64 + '\t',
+            '1\t8\t0x0000a1b2c3d4e5f6\tloop detect\t100',
+            '1\t0\t0x0000000000000000\t\t',
+        ]
+
+
+# MPLS labels 100-102 carry ATM pseudowires; MPLS has no default for them.
+ATM_OPTS = ('-d', 'mpls.label==100,mplspwatm11_or_aal5pdu',
+            '-d', 'mpls.label==101,mplspwatmaal5sdu',
+            '-d', 'mpls.label==102,mplspwatmn1cw')
+
+
+class TestDissectAtm:
+    def atm_fields(self, cmd_tshark, capture_file, test_env, capture, dfilter, *fields, extra=()):
+        args = [cmd_tshark, *ATM_OPTS, *extra, '-r', capture_file(capture), '-Tfields']
+        if dfilter:
+            args += ['-Y', dfilter]
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [line.split('\t') for line in stdout.splitlines()]
+
+    def test_atm_protocols(self, cmd_tshark, capture_file, test_env):
+        '''SunATM, ERF, Exported PDU, L2TPv3 and MPLS pseudowire frames,
+        and the DOS Sniffer cells and PDUs, decode without malformed
+        packets or errors, in one and two passes.'''
+        for capture, counts in (
+                ('atm_coverage.pcapng.gz', {'ATM': 12, 'ATM LANE': 35, 'DISCARD': 25, 'ILMI': 4,
+                                            'L2TPv3': 2, 'MPLS PW ATM N:1 CW': 2, 'OAM AAL': 20,
+                                            'SSCOP': 5, '': 6}),
+                ('atm_coverage_sniffer.enc.gz', {'AAL1': 17, 'AAL3/4': 6, 'ATM': 21, 'ATM LANE': 3,
+                                                 'DISCARD': 16, 'ILMI': 1, 'OAM AAL': 3, 'SSCOP': 2})):
+            protocols = [f[0] for f in self.atm_fields(cmd_tshark, capture_file, test_env, capture,
+                                                       None, '_ws.col.protocol')]
+            assert {p: protocols.count(p) for p in set(protocols)} == counts
+            for passes in ((), ('-2',)):
+                frames = self.atm_fields(cmd_tshark, capture_file, test_env, capture,
+                                         '_ws.malformed || _ws.expert.severity == error',
+                                         'frame.number', extra=passes)
+                assert frames == []
+
+    def test_atm_no_pseudo_header(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU that calls the LANE dissector through the
+        "atm.aal5.type" table, or an ATM dissector by name, gives it no
+        pseudo-header. LANE used to dereference it, and the named ATM
+        dissectors failed an assertion; now they reject the packet.'''
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'exported_pdu', 'frame.number', 'frame.protocols')
+        assert frames == [
+            ['94', 'exported_pdu'],
+            ['95', 'exported_pdu:data'], ['96', 'exported_pdu:data'], ['97', 'exported_pdu:data'],
+            ['98', 'exported_pdu:data'], ['99', 'exported_pdu:data'],
+            ['100', 'exported_pdu:ilmi'], ['101', 'exported_pdu:oamaal'],
+        ]
+
+    def test_atm_aal5_trailer(self, cmd_tshark, capture_file, test_env):
+        '''The AAL5 trailer is found, checked and removed; AAL5 PDUs shorter
+        than the 8-octet trailer (68, 69) are passed on whole instead of
+        being cut at a bogus trailer.'''
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'frame.number >= 58 && frame.number <= 71', 'frame.number',
+                                 'atm.cells', 'atm.aal5t_len', 'atm.aal5t_crc', 'sscop.type', 'udp.length')
+        assert frames == [
+            ['58', '2', '48', '0x0016c1c5', '', '20'],
+            ['59', '2', '48', '0x59c61d66', '', '20'],
+            ['60', '2', '88', '0x82190f44', '', '60'],
+            ['61', '', '', '', '', '20'],          # trailer length 0: no trailer
+            ['62', '', '', '', '', '20'],          # trailer length too large
+            ['63', '', '', '', '', '20'],          # more than 47 octets of padding
+            ['64', '3', '108', '0xbf01ce5d', '', ''],
+            ['65', '2', '56', '0x2e1714b1', '', '20'],
+            ['66', '2', '41', '0x8b47b4ce', '', ''],
+            ['67', '1', '16', '0x47f0ac25', '0x01', ''],
+            ['68', '', '', '', '0x03', ''],
+            ['69', '', '', '', '0x03', ''],
+            ['70', '2', '48', '0x5c60f8fd', '', '20'],
+            ['71', '2', '', '', '', '48'],         # cut short by the snapshot length
+        ]
+        stdout = subprocess.check_output((cmd_tshark, *ATM_OPTS,
+                '-r', capture_file('atm_coverage.pcapng.gz'), '-V',
+                '-Y', 'atm.aal5t_crc || atm.aal_oamcell.crc || atm.aal3_4.crc',
+            ), encoding='utf-8', env=test_env)
+        crc_lines = [line.strip() for line in stdout.splitlines()
+                     if line.strip().startswith(('AAL5 CRC:', '.... ..'))
+                     and ('correct)' in line)]
+        assert sum(1 for line in crc_lines if line.endswith(' (correct)')) == 30
+        assert sum(1 for line in crc_lines if line.endswith(' (incorrect)')) == 3
+
+    def test_atm_le_control(self, cmd_tshark, capture_file, test_env):
+        '''Every LE Control opcode, and every TLV type in one frame.'''
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'atm.le_control.opcode', 'atm.le_control.opcode')
+        opcodes = [f[0] for f in frames]
+        assert len(opcodes) == 35
+        assert sorted(set(opcodes)) == [
+            '0x0001', '0x0002', '0x0003', '0x0004', '0x0005', '0x0006', '0x0007', '0x0008',
+            '0x0009', '0x000a', '0x00fe', '0x0101', '0x0102', '0x0103', '0x0104', '0x0105',
+            '0x0106', '0x0107', '0x010a', '0x01fe']
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'frame.number == 2', 'atm.le_control.tlv_type',
+                                 'atm.le_configure_join_frame.elan_name', extra=('-E', 'aggregator=,'))
+        tlvs, name = frames[0]
+        assert tlvs.split(',') == ['0x00a03e%02x' % i for i in list(range(1, 0x14)) + [0x2b, 0x2c, 0x2d]] + ['0x00abcdef']
+        assert bytes.fromhex(name) == b'engineering'
+
+    def test_atm_oam_and_pseudowires(self, cmd_tshark, capture_file, test_env):
+        '''OAM cells from ERF, from an Exported PDU, over L2TPv3 (the
+        session's pseudowire type and ATM sublayer come from the ICRQ) and
+        over MPLS N:1 and AAL5 SDU pseudowires.'''
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'oamaal', 'frame.number', 'atm.aal_oamcell.type',
+                                 extra=('-E', 'aggregator=,'))
+        assert [f[0] for f in frames] == [str(n) for n in list(range(74, 90)) + [93, 101, 104, 109, 110, 111]]
+        assert frames[-1] == ['111', '8,1']
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage.pcapng.gz',
+                                 'l2tp.sid != 0', 'frame.number', 'frame.protocols')
+        assert frames == [['104', 'eth:ethertype:ip:l2tp:oamaal'],
+                          ['105', 'eth:ethertype:ip:l2tp:llc:ip:udp:discard']]
+
+    def test_atm_sniffer_cells(self, cmd_tshark, capture_file, test_env):
+        '''Raw cells with a HEC (correct, single-bit errors, uncorrectable),
+        AAL1 and AAL3/4 cells, and every traffic subtype from the DOS
+        Sniffer pseudo-header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atm_coverage_sniffer.enc.gz'), '-V',
+            ), encoding='utf-8', env=test_env)
+        hec = [line.strip() for line in stdout.splitlines() if 'Header Error Check:' in line]
+        assert len(hec) == 29
+        assert sorted(h.split('(')[1] for h in hec if 'error' in h) == [
+            'error in bit 0)', 'error in bit 19)', 'error in bit 31)', 'error in bit 32)',
+            'error in bit 39)', 'error in bit 7)', 'error in bit 8)', 'uncorrectable error)']
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage_sniffer.enc.gz',
+                                 'aal3_4', 'atm.aal3_4.seg_type', 'atm.aal3_4.seq_num')
+        assert frames == [['2', '0'], ['0', '1'], ['0', '2'], ['1', '3'], ['3', '4'], ['3', '9']]
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage_sniffer.enc.gz',
+                                 'atm.traffic.vcmx || atm.traffic.lane || atm.traffic.ipsilon',
+                                 'atm.traffic.vcmx', 'atm.traffic.lane', 'atm.traffic.ipsilon')
+        assert sorted(int(f[0]) for f in frames if f[0]) == [0, 0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13]
+        assert sorted(int(f[1]) for f in frames if f[1]) == [0, 0, 1, 2, 3, 4, 5]
+        assert sorted(int(f[2]) for f in frames if f[2]) == [0, 0, 1, 2, 3]
+        # AAL5 trailer fields from the pseudo-header
+        frames = self.atm_fields(cmd_tshark, capture_file, test_env, 'atm_coverage_sniffer.enc.gz',
+                                 'atm.aal5t_crc', 'frame.number', 'atm.cells', 'atm.aal5t_len', 'atm.aal5t_crc')
+        assert frames == [['30', '2', '36', '0xdeadbeef']]
+
+
+class TestDissectAtmtcp:
+    def test_atmtcp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Control and data messages decode without malformed packets or
+        error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atmtcp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 28
+        assert protocols.count('ATMTCP') == 11
+        assert protocols.count('TCP') == 17
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atmtcp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_atmtcp_messages(self, cmd_tshark, capture_file, test_env):
+        '''A length of 0xffffffff is a control message, anything else data;
+        the VPI, VCI and length are decoded and the rest is data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atmtcp_coverage.pcap.gz'),
+                '-Y', 'atmtcp',
+                '-Tfields', '-eframe.number', '-e_ws.col.info', '-eatmtcp.vpi',
+                '-eatmtcp.vci', '-eatmtcp.length', '-edata.len',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '4\tATMTCP Command\t0\t32\t4294967295\t104',
+            '6\tATMTCP Command\t0\t32\t4294967295\t104',
+            '8\tATMTCP Data\t0\t32\t40\t40',
+            '10\tATMTCP Data\t0\t32\t68\t68',
+            '12\tATMTCP Data\t0\t32\t0\t',
+            '14\tATMTCP Command\t4095\t65535\t4294967295\t104',
+            '16\tATMTCP Command\t4095\t65535\t4294967295\t104',
+            '18\tATMTCP Data\t4095\t65535\t1428\t1428',
+            '20\tATMTCP Data\t4095\t65535\t48\t48',
+            '22\tATMTCP Command\t0\t32\t4294967295\t104',
+            '24\tATMTCP Command\t0\t32\t4294967295\t104',
+        ]
+
+
+class TestDissectAtnCm:
+    def test_atn_cm_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every CM uplink and downlink message decodes without malformed
+        packets, in one and two passes, with the same frames handed to
+        ATN-CM both times.'''
+        layers = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.protocols',
+                ), encoding='utf-8', env=test_env)
+            protocols = [p.split(':cotp:')[1] for p in stdout.split()]
+            assert len(protocols) == 105
+            assert protocols.count('atn-ulcs:atn-cm') == 97
+            assert protocols.count('atn-ulcs') == 8
+            layers.append(protocols)
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        assert layers[0] == layers[1]
+
+    def test_atn_cm_messages(self, cmd_tshark, capture_file, test_env):
+        '''Every alternative of CMAircraftMessage and CMGroundMessage, every
+        abort reason (and an extension value) and forward response, and
+        unknown extension alternatives.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                '-Tfields', '-eatn-cm.CMAircraftMessage', '-eatn-cm.CMGroundMessage',
+                '-eatn-cm.cmAbortReason', '-eatn-cm.cmForwardResponse',
+                '-eatn-cm.cmContactResponse',
+            ), encoding='utf-8', env=test_env)
+        rows = [line.split('\t') for line in stdout.splitlines()]
+        air = [r[0] for r in rows if r[0]]
+        ground = [r[1] for r in rows if r[1]]
+        assert len(air) == 39
+        assert len(ground) == 53
+        assert sorted(set(air)) == ['0', '1', '2']
+        assert sorted(set(ground)) == ['0', '1', '2', '3', '4', '5']
+        assert set(r[2] for r in rows if r[2]) == {str(v) for v in range(11)}
+        assert set(r[3] for r in rows if r[3]) == {'0', '1', '2'}
+        assert set(r[4] for r in rows if r[4]) == {'0', '1'}
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                '-Y', '_ws.expert.message contains "in extension"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['19', '44', '64', '89']
+
+    def test_atn_cm_logon(self, cmd_tshark, capture_file, test_env):
+        '''A logon request with every optional field, carried in the
+        user-information of an AARQ.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-eatn-cm.aircraftFlightIdentification',
+                '-eatn-cm.facilityDesignation', '-eatn-cm.airportDeparture',
+                '-eatn-cm.airportDestination', '-eatn-cm.year', '-eatn-cm.month',
+                '-eatn-cm.day', '-eatn-cm.hours', '-eatn-cm.minutes',
+                '-eatn-cm.aeQualifier', '-eatn-cm.apAddress', '-eatn-cm.aRS',
+                '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.rstrip('\n').split('\t') == [
+            'KLM1234', 'EHAAZXYZ', 'EHAM', 'LFPG', '2026', '10', '29', '23', '59',
+            '2|22|3|1|255', '0|1|1', '000099|abcdef|010203']
+
+    def test_atn_cm_conversations(self, cmd_tshark, capture_file, test_env):
+        '''CM found through the AARQ AE qualifier, through the heuristic in
+        DT, CR (AARQ) and CC (AARE) user data, and not between two ground
+        systems or for data of another application.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('atn_cm_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 90',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-eatn-cm.CMAircraftMessage', '-eatn-cm.CMGroundMessage',
+            ), encoding='utf-8', env=test_env)
+        frames = {}
+        for line in stdout.splitlines():
+            number, protocols, air, ground = line.split('\t')
+            frames[int(number)] = (protocols.endswith(':atn-cm'), air, ground)
+        assert frames == {
+            90: (False, '', ''),       # AARQ without an AE qualifier
+            91: (True, '1', ''),       # heuristic, marks the connection CM
+            92: (True, '0', ''),
+            93: (True, '2', ''),
+            94: (True, '0', ''),       # CR, AARQ user-information
+            95: (True, '', '0'),       # CC, AARE user-information
+            96: (True, '1', ''),
+            97: (True, '', '2'),
+            98: (False, '', ''),       # CR, AARQ without user-information
+            99: (True, '', '0'),       # CC, heuristic
+            100: (True, '', '5'),
+            101: (False, '', ''),      # ground to ground AARQ, CM AE qualifier
+            102: (True, '', ''),       # neither uplink nor downlink
+            103: (False, '', ''),      # ground to ground, heuristic declines
+            104: (False, '', ''),      # neither CPDLC nor CM
+            105: (False, '', ''),
+        }
+
+
+class TestDissectAtnCpdlc:
+    def test_atn_cpdlc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Plain and protected mode CPDLC decode without malformed packets
+        or warnings, in one and two passes, with the same frames handed to
+        ATN-CPDLC both times; the protocol item makes "atn-cpdlc" match.'''
+        layers = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.protocols',
+                ), encoding='utf-8', env=test_env)
+            protocols = [p.split(':cotp:')[1] for p in stdout.split()]
+            assert len(protocols) == 363
+            assert protocols.count('atn-ulcs:atn-cpdlc') == 340
+            assert protocols.count('atn-ulcs:atn-cm') == 3
+            assert protocols.count('atn-ulcs') == 20
+            layers.append(protocols)
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                    '-Y', 'atn-cpdlc',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 340
+        assert layers[0] == layers[1]
+
+    def test_atn_cpdlc_elements(self, cmd_tshark, capture_file, test_env):
+        '''Every uplink (uM0..uM237, uM237 an extension addition) and
+        downlink (dM0..dM113) message element, in plain and protected
+        messages, and route clearances in the constrained data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Tfields', '-eatn-cpdlc.ATCUplinkMsgElementId',
+                '-eatn-cpdlc.ATCDownlinkMsgElementId',
+                '-E', 'aggregator=,',
+            ), encoding='utf-8', env=test_env)
+        up, down = [], []
+        for line in stdout.splitlines():
+            u, d = line.split('\t')
+            up += [int(v) for v in u.split(',') if v]
+            down += [int(v) for v in d.split(',') if v]
+        assert set(up) == set(range(238))
+        assert set(down) == set(range(114))
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Y', 'atn-cpdlc.routeClearanceData',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 13
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Y', '_ws.expert.message contains "in extension"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['68', '192', '245', '325']
+
+    def test_atn_cpdlc_pdus(self, cmd_tshark, capture_file, test_env):
+        '''Every alternative of the four PDU types, every abort reason
+        (and an extension value) and forward response.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Tfields', '-eatn-cpdlc.AircraftPDUs', '-eatn-cpdlc.GroundPDUs',
+                '-eatn-cpdlc.ProtectedAircraftPDUs', '-eatn-cpdlc.ProtectedGroundPDUs',
+                '-eatn-cpdlc.abortUser', '-eatn-cpdlc.abortProvider',
+                '-eatn-cpdlc.pmcpdlcuserabortreason',
+                '-eatn-cpdlc.pmcpdlcproviderabortreason',
+                '-eatn-cpdlc.forwardresponse', '-eatn-cpdlc.forwardMessage',
+            ), encoding='utf-8', env=test_env)
+        cols = list(zip(*[line.split('\t') for line in stdout.splitlines()]))
+        values = [set(v for v in col if v) for col in cols]
+        assert values[0] == {'0', '1', '2', '3'}
+        assert values[1] == {'0', '1', '2', '3', '4', '5'}
+        assert values[2] == {'0', '1', '2', '3'}
+        assert values[3] == {'0', '1', '2', '3', '4', '5'}
+        assert values[4] == {str(v) for v in range(8)}
+        assert values[5] == {str(v) for v in range(9)}
+        assert values[6] == {str(v) for v in range(14)}
+        assert values[7] == {str(v) for v in range(9)}
+        assert values[8] == {'0', '1', '2', '3'}
+        assert values[9] == {'0', '1'}
+
+    def test_atn_cpdlc_algorithm_identifier(self, cmd_tshark, capture_file, test_env):
+        '''The algorithmIdentifier is a PER RELATIVE-OID, and the
+        protectedMessage and integrityCheck after it are decoded from the
+        right place (frames 269-270 are the fixed reproducer).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Y', 'frame.number in {221, 269, 270, 272}',
+                '-Tfields', '-eframe.number', '-eatn-cpdlc.algorithmIdentifier',
+                '-eatn-cpdlc.integrityCheck', '-eatn-cpdlc.ATCUplinkMsgElementId',
+                '-eatn-cpdlc.ATCDownlinkMsgElementId',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '221\t.9.1\ta5a50ff0\t\t2',
+            '269\t.1\taa\t\t',
+            '270\t.1\taa\t1\t',
+            '272\t.128\ta5a50ff0\t5,6,7,8,9\t',
+        ]
+
+    def test_atn_cpdlc_conversations(self, cmd_tshark, capture_file, test_env):
+        '''ATN-CPDLC reached through the AE qualifier and through its
+        heuristic in DT, CR and CC user data (plain and protected, uplink
+        and downlink); data without an ATN conversation goes to ATN-CM
+        (the heuristic no longer claims it); data that is not CPDLC goes
+        to ATN-CM; two ground systems; a DT with destination reference
+        0.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('atn_cpdlc_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 326',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-eatn-cpdlc.AircraftPDUs', '-eatn-cpdlc.GroundPDUs',
+                '-eatn-cpdlc.ProtectedAircraftPDUs', '-eatn-cpdlc.ProtectedGroundPDUs',
+            ), encoding='utf-8', env=test_env)
+        frames = {}
+        for line in stdout.splitlines():
+            number, protocols, *pdus = line.split('\t')
+            last = protocols.split(':')[-1]
+            kinds = ['A', 'G', 'PA', 'PG']
+            frames[int(number)] = (last, ''.join(k + v for k, v in zip(kinds, pdus) if v))
+        assert frames == {
+            326: ('atn-ulcs', ''), 327: ('atn-ulcs', ''),  # AARQ, AARE
+            328: ('atn-cm', ''),         # CM data, both CPDLC decodes fail
+            329: ('atn-ulcs', ''), 330: ('atn-ulcs', ''),
+            331: ('atn-cpdlc', 'A2'),    # heuristic, plain downlink
+            332: ('atn-cpdlc', 'A3'),
+            333: ('atn-ulcs', ''), 334: ('atn-ulcs', ''),
+            335: ('atn-cpdlc', 'G2'),    # heuristic, plain uplink
+            336: ('atn-cpdlc', 'G3'),
+            337: ('atn-ulcs', ''), 338: ('atn-ulcs', ''),
+            339: ('atn-cpdlc', 'PA3'),   # heuristic, protected downlink
+            340: ('atn-cpdlc', 'PA3'),
+            341: ('atn-ulcs', ''), 342: ('atn-ulcs', ''),
+            343: ('atn-cpdlc', 'PG3'),   # heuristic, protected uplink
+            344: ('atn-cpdlc', 'PG3'),
+            345: ('atn-ulcs', ''), 346: ('atn-ulcs', ''),
+            347: ('atn-cm', ''),         # CM data, both CPDLC decodes fail
+            348: ('atn-cpdlc', 'A2'),    # CR, AARQ with the cpdlc qualifier
+            349: ('atn-cpdlc', 'G2'),    # CC, AARE
+            350: ('atn-cpdlc', 'A3'),
+            351: ('atn-cpdlc', 'PA3'),   # CR, heuristic
+            352: ('atn-cpdlc', 'PG2'),   # CC, direct
+            353: ('atn-ulcs', ''),       # CR, AARQ without user data
+            354: ('atn-cpdlc', 'G2'),    # CC, heuristic
+            355: ('atn-cm', ''),         # no conversation: not CPDLC
+            356: ('atn-ulcs', ''),       # ground to ground, pmcpdlc
+            357: ('atn-cpdlc', 'PA3'),
+            358: ('atn-ulcs', ''),       # ground to ground, cpdlc
+            359: ('atn-cpdlc', 'A3'),
+            360: ('atn-ulcs', ''),       # ground to ground, heuristic declines
+            361: ('atn-ulcs', ''),
+            362: ('atn-cpdlc', 'PG3'),   # empty protectedMessage
+            363: ('atn-ulcs', ''),       # dst-ref 0: no conversation
+        }
+
+
+class TestDissectAtnSl:
+    # ATN SL is reached only through Decode As of the CLNP security option.
+    decode_as = ('-d', 'osi.opt_security,atn_sl')
+
+    def test_atn_sl_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every label decodes without malformed packets or warnings, in one
+        and two passes, with the same output both times.'''
+        outputs = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes, *self.decode_as,
+                    '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.protocols', '-eatn_sl.tt', '-eatn_sl.sc',
+                ), encoding='utf-8', env=test_env)
+            protocols = [line.split('\t')[0] for line in stdout.splitlines()]
+            assert len(protocols) == 51
+            assert protocols.count('eth:llc:osi:clnp:atn_sl:data') == 50
+            assert protocols.count('eth:llc:osi:clnp:data') == 1
+            outputs.append(stdout)
+            stdout = subprocess.check_output((cmd_tshark, *passes, *self.decode_as,
+                    '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        assert outputs[0] == outputs[1]
+
+    def test_atn_sl_values(self, cmd_tshark, capture_file, test_env):
+        '''Every traffic type and security classification, alone and
+        together, and unknown values.'''
+        stdout = subprocess.check_output((cmd_tshark, *self.decode_as,
+                '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                '-Tfields', '-eatn_sl.tt', '-eatn_sl.sc', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        rows = [line.split('\t') for line in stdout.splitlines()]
+        assert [r[0] for r in rows[:21]] == [
+            '1', '16', '17', '18', '19', '20', '21', '22', '23', '33', '34',
+            '35', '36', '37', '38', '39', '40', '41', '48', '96', '153']
+        assert [r[1] for r in rows[21:27]] == ['1', '2', '3', '4', '5', '119']
+        assert rows[27] == ['16', '5']
+        assert rows[28] == ['35', '2']
+        assert rows[29] == ['33|96', '']
+        stdout = subprocess.check_output((cmd_tshark, *self.decode_as,
+                '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                '-Y', 'frame.number == 29', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'Security classification: restricted' in stdout
+        assert 'Traffic Type and Routing: AOC VHF only' in stdout
+
+    def test_atn_sl_security_info_end(self, cmd_tshark, capture_file, test_env):
+        '''Frame 31: security information length 7 with two tags in the
+        option. Only the first tag lies inside the security information;
+        the second must not be decoded from the octets after it.'''
+        stdout = subprocess.check_output((cmd_tshark, *self.decode_as,
+                '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                '-Y', 'frame.number == 31',
+                '-Tfields', '-eatn_sl.tt', '-eatn_sl.sc', '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '16\t\n'
+
+    def test_atn_sl_rejected(self, cmd_tshark, capture_file, test_env):
+        '''Labels that the dissector rejects (bad registration, length or
+        tag) stop the decoding at the bad tag without an error.'''
+        stdout = subprocess.check_output((cmd_tshark, *self.decode_as,
+                '-r', capture_file('atn_sl_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 32 && frame.number <= 50',
+                '-Tfields', '-eframe.number', '-eatn_sl.tt', '-eatn_sl.sc',
+            ), encoding='utf-8', env=test_env)
+        decoded = {}
+        for line in stdout.splitlines():
+            number, tt, sc = line.split('\t')
+            if tt or sc:
+                decoded[int(number)] = (tt, sc)
+        assert decoded == {
+            39: ('17', ''),     # SI length 5: one tag, then a partial one
+            40: ('', '1'),      # SI length 6
+            41: ('18', ''),     # SI length 7
+            43: ('19', ''),     # bad tag name length in the second tag
+            46: ('20', ''),     # bad SC set length in the second tag
+            48: ('', '4'),      # unknown second tag
+        }
+
+
+class TestDissectAtnUlcs:
+    def test_atn_ulcs_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame decodes without malformed packets or errors, in one
+        and two passes, with the same frames handed to ATN-CM and
+        ATN-CPDLC both times.'''
+        layers = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.protocols',
+                ), encoding='utf-8', env=test_env)
+            protocols = [p.split(':cotp:')[1] for p in stdout.split()]
+            assert len(protocols) == 81
+            assert protocols.count('atn-ulcs') == 52
+            assert protocols.count('atn-ulcs:atn-cm') == 19
+            assert protocols.count('atn-ulcs:atn-cpdlc') == 8
+            assert protocols.count('data') == 2
+            layers.append(protocols)
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        assert layers[0] == layers[1]
+
+    def test_atn_ulcs_spdu_protocol_item(self, cmd_tshark, capture_file, test_env):
+        '''The session/presentation (SPDU/PPDU) path adds an atn-ulcs
+        protocol item, so the display filter "atn-ulcs" matches those
+        frames too (frame 81 is the reproducer: a DT with SCN+CP).'''
+        spdu = [1, 2, 7, 8, 28, 29, 30, 31, 34] + list(range(44, 63)) + [69, 70, 73, 81]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'atn-ulcs.ses.type',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert [int(n) for n in stdout.split()] == spdu
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'atn-ulcs',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        frames = [int(n) for n in stdout.split()]
+        assert len(frames) == 79
+        assert set(spdu) <= set(frames)
+        assert 77 not in frames and 78 not in frames
+
+    def test_atn_ulcs_session(self, cmd_tshark, capture_file, test_env):
+        '''SCN, SCNC, SAC, SACC, SRF and SRFC SPDUs, every SRF/SRFC
+        parameter combination and every CPR error code.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'atn-ulcs.ses.type',
+                '-Tfields', '-eatn-ulcs.ses.type', '-eatn-ulcs.ses.parameter-indication',
+                '-eatn-ulcs.ses.srf-b2', '-eatn-ulcs.ses.srf-b1', '-eatn-ulcs.pres.cpr-error',
+            ), encoding='utf-8', env=test_env)
+        rows = [line.split('\t') for line in stdout.splitlines()]
+        assert set(r[0] for r in rows) == {'0x1d', '0x1f', '0x1e', '0x1b', '0x1c', '0x14'}
+        refuse = [r for r in rows if r[0] in ('0x1c', '0x14')]
+        assert len(refuse) == 16
+        for spdu_type in ('0x1c', '0x14'):
+            params = [tuple(r[1:4]) for r in refuse if r[0] == spdu_type]
+            assert len(set(params)) == 8
+            assert sorted(int(r[4], 16) for r in refuse if r[0] == spdu_type) == list(range(8))
+        assert all(r[1:] == ['', '', '', ''] for r in rows if r not in refuse)
+
+    def test_atn_ulcs_aarq(self, cmd_tshark, capture_file, test_env):
+        '''An AARQ with every optional field, with the CM logon request in
+        its user-information.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-eatn-ulcs.application_context_name',
+                '-eatn-ulcs.ap_title_form2', '-eatn-ulcs.ae_qualifier_form2',
+                '-eatn-ulcs.called_AP_invocation_identifier',
+                '-eatn-ulcs.called_AE_invocation_identifier', '-eatn-ulcs.calling_AP_title',
+                '-eatn-ulcs.calling_AP_invocation_identifier',
+                '-eatn-ulcs.calling_AE_invocation_identifier',
+                '-eatn-ulcs.sender_acse_requirements', '-eatn-ulcs.mechanism_name',
+                '-eatn-ulcs.charstring', '-eatn-ulcs.Application_context_name',
+                '-eatn-ulcs.implementation_information', '-eatn-ulcs.direct_reference',
+                '-eatn-ulcs.indirect_reference', '-eatn-ulcs.data_value_descriptor',
+                '-eatn-cm.aircraftFlightIdentification',
+                '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.rstrip('\n').split('\t') == [
+            '1.3.27.3.1', '1.3.27.0.0.152.1', '1|1', '1234', '-5', '1', '70000', '0',
+            'c0', '1.3.27.3.0.5', '736563726574', '1.3.27.3.1|1.3.27.3.2',
+            '554c43532d746573742d312e30', '1.3.27.3.10', '3', 'CM logon', 'KLM1234']
+
+    def test_atn_ulcs_acse(self, cmd_tshark, capture_file, test_env):
+        '''AARE results and diagnostics, release and abort PDUs,
+        authentication value alternatives and EXTERNALt encodings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Tfields', '-eatn-ulcs.ACSE_apdu', '-eatn-ulcs.result',
+                '-eatn-ulcs.acse_service_user', '-eatn-ulcs.acse_service_provider',
+                '-eatn-ulcs.rlrq_apdu_request_reason', '-eatn-ulcs.rlre_apdu_response_reason',
+                '-eatn-ulcs.abort_source', '-eatn-ulcs.abort_diagnostic',
+                '-eatn-ulcs.calling_authentication_value',
+                '-eatn-ulcs.responding_authentication_value', '-eatn-ulcs.encoding',
+                '-eatn-ulcs.user_information',
+                '-E', 'aggregator=|',
+            ), encoding='utf-8', env=test_env)
+        rows = [line.split('\t') for line in stdout.splitlines()]
+        col = lambda i: set(v for r in rows for v in r[i].split('|') if v)
+        assert col(0) == {'0', '1', '2', '3', '4'}
+        assert col(1) == {'0', '1', '2'}
+        assert col(2) == {str(v) for v in range(15)}
+        assert col(3) == {'0', '1', '2'}
+        assert col(4) == {'1'}
+        assert col(5) == {'1'}
+        assert col(6) == {'0', '1'}
+        assert col(7) == {'3'}
+        assert col(8) | col(9) == {'0', '1', '2', '3'}
+        assert col(10) == {'0', '1', '2'}
+        assert col(11) == {'0', '1', '2'}
+
+    def test_atn_ulcs_auth_other(self, cmd_tshark, capture_file, test_env):
+        '''other-mechanism-value is a PER open type: it is not handed to
+        BER, nothing is malformed, and the field after it (frame 79) is
+        decoded at the right offset.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                    '-Y', 'atn-ulcs.other_mechanism_name',
+                    '-Tfields', '-eframe.number', '-eframe.protocols',
+                    '-eatn-ulcs.implementation_information', '-e_ws.malformed',
+                ), encoding='utf-8', env=test_env)
+            rows = [line.split('\t') for line in stdout.splitlines()]
+            assert [r[0] for r in rows] == ['12', '79', '80']
+            for r in rows:
+                assert r[1].endswith(':cotp:atn-ulcs')
+                assert r[3] == ''
+            assert rows[1][2] == b'after-auth'.hex()
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'frame.number in {12, 79, 80}', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'BER' not in stdout
+        assert stdout.count('other-mechanism-name: 1.3.27.3') == 3
+
+    def test_atn_ulcs_conversations(self, cmd_tshark, capture_file, test_env):
+        '''User data is handed to ATN-CM or ATN-CPDLC by the AE qualifier
+        of the AARQ (CR, CC, DT and ED), or to the heuristic list when the
+        qualifier is not CM or CPDLC, when there is no conversation, and
+        when an AARE created a conversation without AARQ data.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+            ), encoding='utf-8', env=test_env)
+        last = {}
+        for line in stdout.splitlines():
+            number, protocols = line.split('\t')
+            last[int(number)] = protocols.split(':')[-1]
+        expected = {
+            1: 'atn-cm', 2: 'atn-cm', 3: 'atn-cm', 4: 'atn-cm',       # CR/CC, qualifier 1
+            6: 'atn-cm',                                               # RLRE user-information
+            7: 'atn-cpdlc', 8: 'atn-cpdlc', 9: 'atn-cpdlc', 10: 'atn-cpdlc',
+            11: 'atn-cpdlc',                                           # ABRT user-information
+            14: 'atn-cpdlc', 15: 'atn-cpdlc', 16: 'atn-cpdlc',         # PM-CPDLC, DT and ED
+            19: 'atn-ulcs',                                            # qualifier 0, rejected
+            20: 'atn-cm', 21: 'atn-cm',                                # heuristic, then direct
+            22: 'atn-cm',                                              # qualifier 3, heuristic
+            26: 'atn-cm', 27: 'atn-ulcs',                              # no conversation
+            28: 'atn-cm',                                              # AARQ in a CC
+            30: 'atn-ulcs', 31: 'atn-ulcs',                            # unknown application
+            35: 'atn-cm',                                              # CC found the DT AARQ
+            40: 'atn-cm',                                              # second AARQ pending
+            42: 'atn-cm',                                              # AARE without AARQ data
+            43: 'atn-ulcs',                                            # AARE without any AARQ
+            71: 'atn-cm',                                              # COTP over TPKT
+            74: 'atn-ulcs',                                            # mixed NSAP lengths
+            77: 'data', 78: 'data',                                    # not ATN-ULCS
+        }
+        assert {n: last[n] for n in expected} == expected
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('atn_ulcs_coverage.pcap.gz'),
+                '-Y', 'frame.number == 43',
+                '-Tfields', '-eatn-ulcs.ACSE_apdu', '-eatn-ulcs.result',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.rstrip('\n').split('\t') == ['1', '']
+
+
+class TestDissectAtRl:
+    def test_at_rl_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frames sent to 01:00:cd:fa:1b:ac decode as AT RL, padded,
+        unpadded, with a trailer and VLAN tagged, without malformed
+        packets, in one and two passes. Frames to other addresses are
+        rejected.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_rl_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert protocols.count('AT RL') == 15
+        assert protocols.count('0xfbac') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('at_rl_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_at_rl_fields(self, cmd_tshark, capture_file, test_env):
+        '''The fields, including the maximum values, and the 18 octet
+        frame length: the rest is the Ethernet padding or trailer.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_rl_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1, 10, 11, 14}',
+                '-Tfields', '-eframe.number', '-eatrl.sequence',
+                '-eatrl.master', '-eatrl.padding', '-eatrl.vcsid',
+                '-eeth.padding', '-eeth.trailer', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t1\t00:00:cd:00:00:01\t0000\t7\t' + '00' * 28 + '\t\tSeq: 1, VCS-ID: 7',
+            '10\t7\t00:00:cd:00:00:02\t0000\t7\t\t' + 'ff' * 10 + '\tSeq: 7, VCS-ID: 7',
+            '11\t8\t00:00:cd:00:00:02\t0000\t7\t\t\tSeq: 8, VCS-ID: 7',
+            '14\t4294967295\tff:ff:ff:ff:ff:ff\tdead\t65535\t' + '00' * 28 + '\t\tSeq: 4294967295, VCS-ID: 65535',
+        ]
+
+    def test_at_rl_role_change(self, cmd_tshark, capture_file, test_env):
+        '''The last role change time (Unix seconds, compared as epoch so
+        the test does not depend on the time zone) moves when switch 2
+        becomes the active master.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_rl_coverage.pcap.gz'),
+                '-Y', 'atrl.role_change == 1700000110',
+                '-Tfields', '-eframe.number', '-eatrl.master',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['7', '8', '9', '10', '11', '12', '15']
+        assert all(f[1] == '00:00:cd:00:00:02' for f in frames)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('at_rl_coverage.pcap.gz'),
+                '-Y', 'atrl.role_change == 1700000000',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['1', '2', '3', '4', '5', '6']
+
+
+class TestDissectDnsLlq:
+    def test_llq_setup_request(self, cmd_tshark, capture_file, test_env):
+        '''LLQ Setup request is decoded correctly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dns_llq.pcap'),
+                '-Y', 'frame.number == 1',
+                '-Tfields',
+                '-e', 'dns.opt.code',
+                '-e', 'dns.opt.llq.version',
+                '-e', 'dns.opt.llq.opcode',
+                '-e', 'dns.opt.llq.error',
+                '-e', 'dns.opt.llq.lease',
+            ), encoding='utf-8', env=test_env)
+        assert '1' in stdout   # option code
+        assert '7200' in stdout  # lease
+
+    def test_llq_setup_response(self, cmd_tshark, capture_file, test_env):
+        '''LLQ Setup response with assigned ID is decoded correctly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dns_llq.pcap'),
+                '-Y', 'frame.number == 2',
+                '-Tfields',
+                '-e', 'dns.opt.code',
+                '-e', 'dns.opt.llq.id',
+                '-e', 'dns.opt.llq.lease',
+            ), encoding='utf-8', env=test_env)
+        assert '1' in stdout         # option code
+        assert '0x0000000000bc614e' in stdout  # LLQ ID = 12345678
+        assert '3600' in stdout      # lease
+
+
+class TestDissectAutoRp:
+    def test_auto_rp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Announcements and mappings decode without malformed packets or
+        expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['Auto-RP'] * 11
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_auto_rp_trailing_data(self, cmd_tshark, capture_file, test_env):
+        '''Data after the last RP is shown as trailing junk inside the
+        Auto-RP tree, also when the RP count is 0.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Y', 'auto_rp.trailing_junk',
+                '-Tfields', '-eframe.number', '-eauto_rp.trailing_junk',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['9\tcafebabe00', '10\t0a01000702010008e5000000']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 9', '-O', 'auto_rp', '-V',
+            ), encoding='utf-8', env=test_env)
+        tree = stdout[stdout.index('Cisco Auto-RP\n'):].rstrip('\n').splitlines()
+        assert tree[-1] == '    Trailing junk: cafebabe00'
+        assert all(line.startswith('    ') for line in tree[1:])
+
+    def test_auto_rp_maps(self, cmd_tshark, capture_file, test_env):
+        '''RP maps and encoded groups: every PIM version, both signs (with
+        the reserved bits masked off), RPs with no groups and a 16 RP
+        mapping with 128 groups.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Tfields', '-eauto_rp.rp_count', '-eauto_rp.holdtime',
+                '-eauto_rp.rp_addr', '-eauto_rp.pim_ver', '-eauto_rp.group_num',
+                '-eauto_rp.prefix_sign', '-eauto_rp.mask_len', '-eauto_rp.group_prefix',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert frames[3] == ['3', '181', '10.1.0.1,10.1.0.3,10.1.0.2', '0,1,2', '3,0,1',
+                             '0,1,0,0', '4,16,8,32',
+                             '224.0.0.0,239.1.0.0,232.0.0.0,239.255.255.250']
+        assert frames[4] == ['0', '65535', '', '', '', '', '', '']
+        assert frames[7][3:6] == ['2', '2', '0,1']
+        assert frames[10][0] == '16'
+        assert len(frames[10][7].split(',')) == 128
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        info = stdout.splitlines()
+        assert info[0] == 'RP announcement (v1 or 1+) for 1 RP'
+        assert info[3] == 'RP mapping (v1 or 1+) for 3 RPs'
+        assert info[5] == 'Unknown (v1 or 1+) for 1 RP'
+        assert info[6] == 'Unknown (vUnknown) for 1 RP'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('auto_rp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 2', '-O', 'auto_rp', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert '    Holdtime: 1 second\n' in stdout
+        assert '        Group 239.0.0.0/8 (Negative group prefix)\n' in stdout
+
+
+# The I-PduM dissector decodes only what its UATs describe. These are the
+# files mkautosar_ipdum.py writes to cfg/.
+AUTOSAR_IPDUM_UATS = {
+    # Message ID, number of PDUs, position, PDU ID, name, start bit,
+    # bit length, update bit (65535 = none)
+    'AUTOSAR_IPDUM_Messages': (
+        '"1","3","0","100","Pdu_A","0","16","65535"\n'
+        '"1","3","1","101","Pdu_B","16","12","63"\n'
+        '"1","3","2","102","Pdu_C","32","24","62"\n'
+        # Positions 0 and 2 of message 2 are not configured
+        '"2","4","1","200","Pdu_D","8","8","65535"\n'
+        '"2","4","3","201","Pdu_E","24","16","0"\n'
+        # Another PDU count for message 2: ignored
+        '"2","5","4","2ff","Pdu_Ignored","0","8","65535"\n'
+        '"3","1","0","300","Pdu_Long","32","64","65535"\n'
+        '"4","1","0","400","Pdu_IsoTp","0","64","65535"\n'
+    ),
+    # CAN ID (bit 31 = extended), bus ID, message ID
+    'AUTOSAR_IPDUM_Binding_CAN': (
+        '"101","0","1"\n'
+        '"80012345","0","2"\n'
+        '"102","2","3"\n'
+        '"103","0","10"\n'
+        '"104","0","4"\n'
+    ),
+    # Channel, frame ID, cycle, message ID
+    'AUTOSAR_IPDUM_Binding_FlexRay': (
+        '"0","10","0","1"\n'
+        '"1","20","5","2"\n'
+    ),
+    # Frame ID, bus ID, message ID
+    'AUTOSAR_IPDUM_Binding_LIN': (
+        '"10","0","1"\n'
+        '"11","3","2"\n'
+    ),
+    # PDU ID, message ID
+    'AUTOSAR_IPDUM_Binding_PDU_Transport': (
+        '"1000","1"\n'
+        '"1001","10"\n'
+        '"1002","4"\n'
+        '"1003","3"\n'
+    ),
+    # Interface ID, interface name, bus ID
+    'CAN_interface_mapping': '"ffffffff","can1","2"\n',
+    'LIN_interface_mapping': '"ffffffff","lin1","3"\n',
+}
+
+AUTOSAR_IPDUM_OPTS = (
+    '-o', 'pdu_transport.udp.port:50000',
+    '-o', 'iso15765.ipdum.pdu.id:1024',     # PDU 0x400
+)
+
+
+class TestDissectAutosarIpdum:
+    @pytest.fixture
+    def ipdum_env(self, conf_path, test_env):
+        for name, contents in AUTOSAR_IPDUM_UATS.items():
+            with open(os.path.join(conf_path, name), 'w') as f:
+                f.write(contents)
+        return test_env
+
+    def ipdum_fields(self, cmd_tshark, capture_file, env, *fields, passes=()):
+        args = []
+        for field in fields:
+            args += ['-e', field]
+        stdout = subprocess.check_output((cmd_tshark, *AUTOSAR_IPDUM_OPTS, *passes,
+                '-r', capture_file('autosar_ipdum_coverage.pcapng.gz'),
+                '-Tfields', '-E', 'aggregator=|', '-eframe.number', *args,
+            ), encoding='utf-8', env=env)
+        return {int(line.split('\t')[0]): line.split('\t')[1:] for line in stdout.splitlines()}
+
+    def test_autosar_ipdum_protocols(self, cmd_tshark, capture_file, ipdum_env):
+        '''I-PduM messages over CAN, CAN FD, FlexRay, LIN and PDU Transport
+        decode without malformed packets, in one and two passes.'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env, '_ws.col.protocol')
+        protocols = [f[0] for f in frames.values()]
+        assert len(protocols) == 27
+        assert protocols.count('AUTOSAR I-PduM') == 16
+        assert protocols.count('CAN') == 3
+        assert protocols.count('FLEXRAY') == 1
+        assert protocols.count('LIN') == 1
+        assert protocols.count('ISO15765') == 1
+        assert protocols.count('PDU Transport') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *AUTOSAR_IPDUM_OPTS, *passes,
+                    '-r', capture_file('autosar_ipdum_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=ipdum_env)
+            assert count_output(stdout) == 0
+
+    def test_autosar_ipdum_pdus(self, cmd_tshark, capture_file, ipdum_env):
+        '''PDUs are shown when their update bit is set (or they have none),
+        at their configured position and length, cut to the frame.'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env,
+                                   'ipdum.pdu.name', 'ipdum.pdu', 'ipdum.unparsed')
+        # Update bits for Pdu_B and Pdu_C in the last octet; Pdu_B ends
+        # in the middle of an octet
+        assert frames[1] == ['Pdu_A|Pdu_B|Pdu_C', '1122|3344|556677', '']
+        assert frames[2] == ['Pdu_A', '1122', '']
+        assert frames[3] == ['Pdu_A|Pdu_B', '1122|3344', '']
+        # CAN FD, FlexRay, LIN and PDU Transport
+        for frame in (11, 14, 21):
+            assert frames[frame][0] == 'Pdu_A|Pdu_B|Pdu_C'
+        assert frames[17][0] == 'Pdu_A|Pdu_B'
+        assert frames[15][0] == 'Pdu_D|Pdu_E'
+        # 64 bit PDU from bit 32 of an 8 octet frame and of a 6 octet PDU
+        assert frames[7] == ['Pdu_Long', '05060708', '']
+        assert frames[22][:2] == ['Pdu_IsoTp|Pdu_Long', '0322f19000000000|0506']
+        # Message 0x10 is bound but not in the message list
+        assert frames[9] == ['', '', 'deadbeef']
+        assert frames[21][2] == 'cafe'
+        # Not bound: CAN 0x102 on bus 0, an RTR frame, an unknown CAN ID,
+        # FlexRay cycle 1, LIN 0x11 on bus 0, PDU Transport ID 0x1004
+        for frame in (8, 10, 13, 16, 20, 23):
+            assert frames[frame] == ['', '', '']
+
+    def test_autosar_ipdum_unconfigured_position(self, cmd_tshark, capture_file, ipdum_env):
+        '''Positions that are not in the message list are skipped. Frames
+        5, 15 and 19 have octet 0 bit 0 set, the update bit of Pdu_E, and
+        used to show an extra PDU without a name and with ID 0 for the
+        unconfigured position 0 of message 2.'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env,
+                                   'ipdum.pdu.name', 'ipdum.pdu.id')
+        for frame in (5, 15, 19):
+            assert frames[frame] == ['Pdu_D|Pdu_E', '0x00000200|0x00000201']
+        assert frames[6] == ['Pdu_D', '0x00000200']
+        stdout = subprocess.check_output((cmd_tshark, *AUTOSAR_IPDUM_OPTS,
+                '-r', capture_file('autosar_ipdum_coverage.pcapng.gz'),
+                '-Y', 'ipdum.pdu.id == 0 || ipdum.pdu.id == 0x2ff',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=ipdum_env)
+        assert count_output(stdout) == 0
+
+    def test_autosar_ipdum_bus_id(self, cmd_tshark, capture_file, ipdum_env):
+        '''A binding for one bus applies only there; a binding for bus 0
+        applies to every bus.'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env,
+                                   'can.bus_id', 'lin.bus_id', 'ipdum.pdu.name')
+        # can1 is bus 2: the bus 0 binding of 0x101, the bus 2 binding of 0x102
+        assert frames[4] == ['0x00000002', '', 'Pdu_A|Pdu_C']
+        assert frames[7] == ['0x00000002', '', 'Pdu_Long']
+        assert frames[8] == ['', '', '']
+        # lin1 is bus 3: the bus 0 binding of 0x10, the bus 3 binding of 0x11
+        assert frames[18] == ['', '0x0003', 'Pdu_A|Pdu_C']
+        assert frames[19] == ['', '0x0003', 'Pdu_D|Pdu_E']
+        assert frames[20] == ['', '', '']
+
+    def test_autosar_ipdum_subdissector(self, cmd_tshark, capture_file, ipdum_env):
+        '''A PDU is handed to the dissector registered for its PDU ID.'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env,
+                                   'iso15765.message_type', 'iso15765.data_length_4bit')
+        assert frames[12] == ['0x00', '3']
+        assert frames[22] == ['0x00', '3']
+
+    def test_autosar_ipdum_no_data(self, cmd_tshark, capture_file, ipdum_env):
+        '''Exported PDUs naming the four I-PduM handles, which then get no
+        CAN, FlexRay, LIN or PDU Transport information, are left to the
+        data dissector. They used to hit DISSECTOR_ASSERT(data).'''
+        frames = self.ipdum_fields(cmd_tshark, capture_file, ipdum_env,
+                                   'exported_pdu.prot_name', 'frame.protocols')
+        assert [frames[f] for f in range(24, 28)] == [
+            ['ipdu_multiplexer_over_can', 'exported_pdu:data'],
+            ['ipdu_multiplexer_over_flexray', 'exported_pdu:data'],
+            ['ipdu_multiplexer_over_lin', 'exported_pdu:data'],
+            ['ipdu_multiplexer_over_pdu_transport', 'exported_pdu:data'],
+        ]
+
+
+# AUTOSAR NM and PDU Transport have no default UDP port
+AUTOSAR_NM_OPTS = ('-d', 'udp.port==30500,autosar-nm',
+                   '-o', 'pdu_transport.udp.port:30501',
+                   '-o', 'autosar-nm.pdu_transport.ids:0x4e4d0001')
+
+
+class TestDissectAutosarNm:
+    def test_autosar_nm_protocols(self, cmd_tshark, capture_file, test_env):
+        '''AUTOSAR NM over CAN (heuristic, CAN ID 0), CAN FD, UDP, PDU
+        Transport and Exported PDU decodes without malformed packets, in
+        one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark, *AUTOSAR_NM_OPTS,
+                '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                '-Tfields', '-e', 'frame.protocols',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('can:autosar-nm') == 16
+        assert protocols.count('can:data') == 2
+        assert protocols.count('can') == 2
+        assert protocols.count('eth:ethertype:ip:udp:autosar-nm') == 4
+        assert protocols.count('eth:ethertype:ip:udp:pdu_transport') == 3
+        assert protocols.count('exported_pdu:autosar-nm') == 3
+        assert protocols.count('exported_pdu:data') == 1
+        for opts in ((), AUTOSAR_NM_OPTS):
+            for passes in ((), ('-2',)):
+                stdout = subprocess.check_output((cmd_tshark, *opts, *passes,
+                        '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                        '-Y', '_ws.malformed || _ws.expert.severity == error',
+                        '-Tfields', '-e', 'frame.number',
+                    ), encoding='utf-8', env=test_env)
+                assert count_output(stdout) == 0
+
+    def test_autosar_nm_can_no_data(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU naming autosar-nm.can carries no CAN info. The
+        dissector rejects it (it used to assert) and the payload is data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                '-Y', 'frame.number == 31',
+                '-Tfields', '-e', 'frame.protocols', '-e', 'exported_pdu.prot_name',
+                '-e', 'data.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == 'exported_pdu:data\tautosar-nm.can\t0102030405060708'
+
+    def test_autosar_nm_fields(self, cmd_tshark, capture_file, test_env):
+        '''Control Bit Vector and Source Node Identifier, two NM PDUs in
+        one PDU Transport datagram.'''
+        stdout = subprocess.check_output((cmd_tshark, *AUTOSAR_NM_OPTS,
+                '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {10, 16, 26}',
+                '-Tfields', '-e', 'autosar-nm.ctrl', '-e', 'autosar-nm.src',
+                '-e', 'autosar-nm.ctrl.pni', '-e', 'autosar-nm.user_data',
+                '-e', '_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0xff\t25\tTrue\t112233445566\tNM (CBV: 0xff, SNI: 0x19)',
+            '0x48\t35\tTrue\t' + bytes(range(62)).hex() + '\tNM (CBV: 0x48, SNI: 0x23)',
+            '0x01,0x20\t66,67\tFalse,False\t112233445566,aabb\tNM (CBV: 0x01, SNI: 0x42), NM (CBV: 0x20, SNI: 0x43)',
+        ]
+
+    def test_autosar_nm_can_id(self, cmd_tshark, capture_file, test_env):
+        '''The default CAN ID 0 matches the standard and extended ID 0
+        frames (not RTR or error frames); another ID matches only its
+        frame.'''
+        for opts, frames in (((), list(range(1, 17))),
+                             (('-o', 'autosar-nm.can_id:0x123'), [17])):
+            stdout = subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                    '-Y', 'can && autosar-nm',
+                    '-Tfields', '-e', 'frame.number',
+                ), encoding='utf-8', env=test_env)
+            assert [int(n) for n in stdout.split()] == frames
+
+    def test_autosar_nm_prefs(self, cmd_tshark, capture_file, test_env):
+        '''CBV version and CBV / SNI positions.'''
+        def fields(*opts):
+            return subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                    '-Y', 'frame.number == 3',
+                    '-Tfields', '-e', 'autosar-nm.ctrl', '-e', 'autosar-nm.src',
+                    '-e', 'autosar-nm.ctrl.pn_shutdown_request',
+                    '-e', 'autosar-nm.ctrl.nm_coord_id', '-e', 'autosar-nm.user_data',
+                    '-e', '_ws.col.info',
+                ), encoding='utf-8', env=test_env).rstrip('\n')
+        assert fields('-o', 'autosar-nm.cbv_version:20-11') == \
+            '0x02\t18\tTrue\t\t112233445566\tNM (CBV: 0x02, SNI: 0x12)'
+        assert fields('-o', 'autosar-nm.cbv_version:3.2') == \
+            '0x02\t18\t\t1\t112233445566\tNM (CBV: 0x02, SNI: 0x12)'
+        assert fields('-o', 'autosar-nm.cbv_position:1', '-o', 'autosar-nm.sni_position:0') == \
+            '0x12\t2\t\t\t112233445566\tNM (CBV: 0x12, SNI: 0x02)'
+        assert fields('-o', 'autosar-nm.cbv_position:off') == \
+            '\t18\t\t\t112233445566\tNM (SNI: 0x12)'
+        assert fields('-o', 'autosar-nm.cbv_position:off', '-o', 'autosar-nm.sni_position:off') == \
+            '\t\t\t\t0212112233445566\tNM ()'
+
+    def test_autosar_nm_user_data_fields(self, cmd_tshark, capture_file, test_env):
+        '''User data fields from the UAT, with a masked bit below the
+        field; a field longer than the frame is left out.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'uat:NM_user_data_fields:"wakeup","Wakeup reason","2","2","0",""',
+                '-o', 'uat:NM_user_data_fields:"wakeup","Wakeup bit","2","2","0100","pnc"',
+                '-o', 'uat:NM_user_data_fields:"tail","Last octets","56","8","0",""',
+                '-r', capture_file('autosar_nm_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {2, 13, 16}',
+                '-Tfields', '-e', 'autosar-nm.user_data.wakeup',
+                '-e', 'autosar-nm.user_data.wakeup.pnc', '-e', 'autosar-nm.user_data.tail',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1122\tTrue\t',
+            '\t\t',
+            '0001\tFalse\t363738393a3b3c3d',
+        ]
+
+
+class TestDissectAvsp:
+    def test_avsp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every AVSP subtype and version, over Ethernet and GRE and nested
+        in AVSP, decodes without malformed packets, in one and two passes.
+        The only warning is the nesting limit in frame 29.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('avsp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 31
+        assert protocols.count('AVSP') == 10
+        assert protocols.count('DISCARD') == 19
+        assert protocols.count('0x1234') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('avsp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || (_ws.expert.severity >= warning && !avsp.too_deep)',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_avsp_nesting_limit(self, cmd_tshark, capture_file, test_env):
+        '''300 nested AVSP timestamp headers stop with avsp.too_deep
+        instead of failing an assertion at the layer limit.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('avsp_coverage.pcap.gz'),
+                    '-Y', 'avsp.too_deep',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == ['29']
+
+    def test_avsp_greent_samples(self, cmd_tshark, capture_file, test_env):
+        '''Each GREENT (Postcard) sample header is read after the previous
+        sample's data, so the second sample of frame 13 is decoded right.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('avsp_coverage.pcap.gz'),
+                '-Y', 'avsp.greent.hdr',
+                '-Tfields', '-eframe.number', '-eavsp.greent.sample_count',
+                '-eavsp.greent.sample.len', '-eavsp.greent.sample.ingress',
+                '-eavsp.greent.sample.egress',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '12\t1\t51\t101\t102',
+            '13\t2\t36,36\t1111,2222\t1112,2223',
+            '14\t0\t\t\t',
+            '15\t3\t43,48,30\t201,203,205\t202,204,206',
+        ]
+
+    def test_avsp_info_and_ids(self, cmd_tshark, capture_file, test_env):
+        '''GRE TAP UTC shows "48bit UTC timestamp" in Info and the DzGRE
+        timestamped header shows its IDs in decimal.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('avsp_coverage.pcap.gz'),
+                '-Y', 'avsp.greentap.ver && frame.number >= 30',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '30\t48bit UTC timestamp',
+            '31\t48bit TAI timestamp',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('avsp_coverage.pcap.gz'),
+                '-Y', 'avsp.dzgre_ts.hdr',
+                '-O', 'avsp',
+            ), encoding='utf-8', env=test_env)
+        assert 'Switch ID: 101, Port ID: 202, Policy ID: 303' in stdout
+        assert 'Switch ID: 102, Port ID: 203, Policy ID: 304' in stdout
+        assert '0x' not in ''.join(l for l in stdout.splitlines() if 'Switch ID:' in l)
+
+    def test_avsp_tgen(self, cmd_tshark, capture_file, test_env):
+        '''TGen payload lengths that fit, leave a trailer and run past the
+        end of the frame, and the FCS inverted bit.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('avsp_coverage.pcap.gz'),
+                '-Y', 'avsp.tgen.hdr',
+                '-Tfields', '-eframe.number', '-eavsp.tgen.hdr.payload_len',
+                '-eavsp.tgen.hdr.ctrl.fcs_inverted', '-eeth.trailer',
+                '-e', 'avsp.tgen.payload.data',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['20', '21', '22', '23', '27']
+        assert [f[1] for f in frames] == ['48', '4', '1000', '1', '8']
+        assert [f[2] for f in frames] == ['False', 'True', 'True', 'False', 'False']
+        assert frames[1][4] == '41424344'
+        assert len(frames[2][4]) == 46 * 2
+        assert frames[4][4] == b'GRE-TGEN'.hex()
+
+
+class TestDissectAwdl:
+    def test_awdl_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every AWDL TLV and the data frame header decode without
+        malformed packets or error expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('awdl_coverage.pcap.gz'),
+                '-Tfields', '-eawdl.type', '-eawdl_data.seq',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 24
+        assert sum(1 for l in lines if l.split('\t')[0]) == 16
+        assert sum(1 for l in lines if l.split('\t')[1]) == 8
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('awdl_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_awdl_ht_capabilities_zero_mcs(self, cmd_tshark, capture_file, test_env):
+        '''HT capabilities whose first Rx MCS octet is zero decode, and
+        the Version TLV after them is not lost. The zero octet used to be
+        the item length of a 32-bit field, which threw.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('awdl_coverage.pcap.gz'),
+                '-Y', 'frame.number == 9',
+                '-Tfields', '-eawdl.tag.number', '-eawdl.ht.mcsset.rxbitmask.0to7',
+                '-eawdl.version', '-eawdl.version.device_class',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip().split('\t') == ['7,21', '0x00000000', '0x10,0x3e', '1']
+
+    def test_awdl_channel_sequence(self, cmd_tshark, capture_file, test_env):
+        '''The channel sequence in the channel number, legacy and
+        operating class encodings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('awdl_coverage.pcap.gz'),
+                '-Y', 'awdl.channelseq.channel_list',
+                '-Tfields', '-eframe.number', '-eawdl.channelseq.encoding',
+                '-eawdl.channelseq.channel.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t0\t6,6,6,6,44,44,44,44,149,149,149,149,6,6,6,6',
+            '2\t1\t6,6,44,149',
+            '3\t3\t6,44,149',
+            '16\t0\t149',
+        ]
+
+    def test_awdl_service_response(self, cmd_tshark, capture_file, test_env):
+        '''Service responses (TXT, SRV, PTR) and service parameters.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('awdl_coverage.pcap.gz'),
+                '-Y', 'frame.number == 5 || frame.number == 7',
+                '-Tfields', '-eawdl.dns.type', '-eawdl.dns.txt',
+                '-eawdl.dns.port', '-eawdl.serviceparams.bitmask',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '16,33,12\ttxtvers=1,model=MacBookPro,\t8770\t',
+            '\t\t\t0x80000005,0x00000002',
+        ]
+
+    def test_awdl_data_frames(self, cmd_tshark, capture_file, test_env):
+        '''AWDL data frames with the short and long header hand the
+        payload to the ethertype table; the long header has TLVs.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('awdl_coverage.pcap.gz'),
+                '-Y', 'awdl_data',
+                '-Tfields', '-eawdl_data.seq', '-eawdl_data.ethertype',
+                '-eawdl.tag.number', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t0x0800\t\tIPv4',
+            '2\t0x86dd\t\tIPv6',
+            '3\t0x88b5\t\tAWDL Data',
+            '4\t0x86dd\t\tIPv6',
+            '5\t0x0800\t21,20,1\tIPv4',
+            '6\t0x88b5\t12\tAWDL Data',
+            '7\t0x86dd\t\tIPv6',
+            '8\t0x86dd\t7\tIPv6',
+        ]
+
+
+class TestDissectAx25:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax25_coverage.pcap.gz'),
+                '-Tfields', *args,
+            ), encoding='utf-8', env=test_env)
+        return [line.split('\t') for line in stdout.splitlines()]
+
+    def test_ax25_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Command, response and version 1 frames, up to nine digipeaters,
+        every S and U frame type, an I frame for each PID and AX.25 over
+        IPv4 and IPv6 (IP protocol 93) decode without malformed packets,
+        in one and two passes.'''
+        protocols = [f[0] for f in self.run_fields(cmd_tshark, capture_file, test_env,
+                                                   '-e_ws.col.protocol')]
+        assert len(protocols) == 68
+        assert protocols.count('AX.25') == 38
+        assert protocols.count('AX.25-NoL3') == 25
+        for p in ('X.25', 'ECHO', 'ARP', 'Flexnet', 'NET/ROM'):
+            assert protocols.count(p) == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ax25_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_ax25_unprintable_address(self, cmd_tshark, capture_file, test_env):
+        '''Address octets that shift to NUL, 0x01 and a carriage return
+        are shown as periods, and a callsign ends at its first space. The
+        FT_AX25 string used to hold the control characters themselves.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 64',
+                                 '-eax25.dst', '-eax25.src')
+        assert frames == [['...', 'NOCALL'], ['AB', 'N0SRC'],
+                          ['ABCDEF-15', '123456-15'], ['abc-!', 'x_y'],
+                          ['', 'N0SRC']]
+
+    def test_ax25_digipeaters(self, cmd_tshark, capture_file, test_env):
+        '''Eight digipeaters are shown; a ninth is skipped.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 12 && frame.number <= 13',
+                                 *['-eax25.via%d' % i for i in range(1, 9)],
+                                 '-e_ws.col.info')
+        vias = ['DIGI1'] + ['DIGI%d-%d' % (i + 1, i) for i in range(1, 8)]
+        assert frames == [vias + ['Text'], vias + ['Text']]
+
+    def test_ax25_control(self, cmd_tshark, capture_file, test_env):
+        '''S and U frames show the command or response modifier from the
+        C bits, and only I and UI frames (without the P bit) have a PID.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 14 && frame.number <= 43',
+                                 '-e_ws.col.info', '-eax25.ctl.u_cmd',
+                                 '-eax25.ctl.u_resp', '-eax25.pid')
+        assert [f[0] for f in frames[:3]] == ['S, func=RR, N(R)=0', 'S P, func=RR, N(R)=1',
+                                              'S F, func=RR, N(R)=2']
+        assert [f[0] for f in frames[3:12:3]] == ['S, func=RNR, N(R)=3', 'S, func=REJ, N(R)=6',
+                                                  'S, func=SREJ, N(R)=1']
+        # SABM, SABME and DISC commands, UA and DM responses
+        # (the modifier bits are shown shifted down by two)
+        assert [f[1:3] for f in frames[12:22]] == [['0x0b', '']] * 2 + [['0x1b', '']] * 2 + \
+            [['0x10', '']] * 2 + [['', '0x18']] * 2 + [['', '0x03']] * 2
+        # XID and TEST as command and as response
+        assert [f[1:3] for f in frames[23:27]] == [['0x2b', ''], ['', '0x2b'],
+                                                   ['0x38', ''], ['', '0x38']]
+        assert frames[22][0] == 'U, func=FRMR'
+        assert frames[23][0] == 'U, func=XID'
+        assert frames[25][0] == 'U, func=TEST'
+        # UI with the P bit: no PID; a UI response has one
+        assert frames[27] == ['U P, func=UI', '0x00', '', '']
+        assert frames[28][2:] == ['0x00', '0xf0']
+        assert all(f[3] == '' for f in frames[:28])
+
+    def test_ax25_pids(self, cmd_tshark, capture_file, test_env):
+        '''The I frames go to the dissector registered for the PID or to
+        data, and AX.25 is carried over IPv4 and IPv6 as IP protocol 93.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 44 && frame.number <= 63',
+                                 '-eax25.pid', '-e_ws.col.protocol', '-e_ws.col.info')
+        assert [f[0] for f in frames[:15]] == ['0x01', '0x06', '0x07', '0x08', '0xc3', '0xc4',
+                                               '0xca', '0xcb', '0xcc', '0xcd', '0xce', '0xcf',
+                                               '0xf0', '0xff', '0x55']
+        assert [f[1] for f in frames[:15]] == ['X.25'] + ['AX.25'] * 7 + \
+            ['ECHO', 'ARP', 'Flexnet', 'NET/ROM', 'AX.25-NoL3', 'AX.25', 'AX.25']
+        assert frames[1][2] == 'I, N(R)=0, N(S)=1, RFC1144 (compressed)'
+        assert frames[14][2] == 'I, N(R)=1, N(S)=6, Unknown (0x55)'
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'ip.proto == 93 || ipv6.nxt == 93',
+                                 '-eframe.number', '-eax25.src', '-eax25.dst', '-eax25.via1')
+        assert frames == [['62', 'N0SRC,AXIP-5', 'N0DST,CQ', ''],
+                          ['63', 'N0SRC,N1SRC', 'N0DST,N1DST', 'RELAY-1']]
+
+
+class TestDissectAx25Kiss:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax25_kiss_coverage.pcap.gz'),
+                '-Tfields', *args,
+            ), encoding='utf-8', env=test_env)
+        return [line.split('\t') for line in stdout.splitlines()]
+
+    def test_ax25_kiss_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every KISS frame type, known and unknown, decodes without
+        malformed packets, in one and two passes and in checksum mode.'''
+        protocols = [f[0] for f in self.run_fields(cmd_tshark, capture_file, test_env,
+                                                   '-e_ws.col.protocol')]
+        assert len(protocols) == 25
+        assert protocols.count('AX.25 KISS') == 17
+        assert protocols.count('AX.25') == 3
+        assert protocols.count('AX.25-NoL3') == 5
+        for opts in ((), ('-2',), ('-o', 'ax25_kiss.showcksum:TRUE')):
+            stdout = subprocess.check_output((cmd_tshark, *opts,
+                    '-r', capture_file('ax25_kiss_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == error',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_ax25_kiss_data_ack(self, cmd_tshark, capture_file, test_env):
+        '''The ack ID of a data frame with ack request is two octets and
+        the AX.25 frame follows it. Only the first octet used to be read.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'ax25_kiss.cmd == 12',
+                                 '-eframe.number', '-eax25_kiss.data_ack',
+                                 '-eax25.dst', '-eax25.src', '-eax25.ctl')
+        assert frames == [['14', '4660', 'NOCALL', 'N0CALL-1', '0x03'],
+                          ['15', '65534', 'NOCALL', 'N0CALL-1', '0x00'],
+                          ['16', '1', 'NOCALL', 'N0CALL-1', '0x01']]
+
+    def test_ax25_kiss_commands(self, cmd_tshark, capture_file, test_env):
+        '''The parameter of each command frame and the Info column.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 5 && frame.number <= 13',
+                                 '-eax25_kiss.txdelay', '-eax25_kiss.persistence',
+                                 '-eax25_kiss.slottime', '-eax25_kiss.txtail',
+                                 '-eax25_kiss.fullduplex', '-eax25_kiss.sethardware',
+                                 '-e_ws.col.info')
+        # (frame 13, Set hardware without parameter octets, is left out:
+        # tshark shows its empty item as <MISSING>)
+        assert [[v for v in f[:6] if v] for f in frames[:8]] == [
+            ['50'], ['63'], ['10'], ['5'], ['0'], ['1'], ['255'], ['01020304']]
+        assert [f[6] for f in frames] == [
+            'Tx delay 50, Port 0', 'Persistence 63, Port 0', 'Slot time 10, Port 0',
+            'Tx tail 5, Port 0', 'Full duplex 0, Port 0', 'Full duplex 1, Port 3',
+            'Tx delay 255, Port 2', 'Set hardware 0, Port 0', 'Set hardware, Port 4']
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 '-Y', 'frame.number >= 17 && frame.number <= 24',
+                                 '-e_ws.col.info')
+        assert [f[0] for f in frames] == [
+            'Poll mode, Port 0', 'Return, Port 15', 'Unknown (7), Port 7',
+            'Unknown (8), Port 8', 'Unknown (9), Port 9', 'Unknown (10), Port 10',
+            'Unknown (11), Port 11', 'Unknown (13), Port 13']
+
+
+AX25_NOL3_DX_OPTS = ('-o', 'ax25_nol3.showcluster:TRUE')  # DX cluster decoding is off by default
+
+
+class TestDissectAx25Nol3:
+    def run_fields(self, cmd_tshark, capture_file, test_env, *args):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax25_nol3_coverage.pcap.gz'),
+                '-Tfields', *args,
+            ), encoding='utf-8', env=test_env)
+        return [line.split('\t') for line in stdout.splitlines()]
+
+    def test_ax25_nol3_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Text, DX cluster spots and APRS-looking frames decode without
+        malformed packets, in one and two passes, with each combination
+        of the DX cluster and APRS preferences.'''
+        protocols = [f[0] for f in self.run_fields(cmd_tshark, capture_file, test_env,
+                                                   '-e_ws.col.protocol', '-e_ws.col.info')]
+        assert protocols == ['AX.25-NoL3'] * 16
+        for prefs in ((), AX25_NOL3_DX_OPTS, APRS_OPTS, (*AX25_NOL3_DX_OPTS, *APRS_OPTS)):
+            for passes in ((), ('-2',)):
+                stdout = subprocess.check_output((cmd_tshark, *prefs, *passes,
+                        '-r', capture_file('ax25_nol3_coverage.pcap.gz'),
+                        '-Y', '_ws.malformed || _ws.expert.severity == error',
+                        '-Tfields', '-eframe.number',
+                    ), encoding='utf-8', env=test_env)
+                assert count_output(stdout) == 0
+
+    def test_ax25_nol3_dx_cluster(self, cmd_tshark, capture_file, test_env):
+        '''With the DX cluster preference, information fields that start
+        with "DX", in UI and I frames, are DX reports; the Info column
+        shows the first 15 octets.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env, *AX25_NOL3_DX_OPTS,
+                                 '-e_ws.col.protocol', '-e_ws.col.info', '-eax25_nol3.dx')
+        assert [f[0] for f in frames] == ['AX.25-NoL3'] * 3 + ['DX'] * 5 + ['AX.25-NoL3'] * 8
+        assert frames[4] == ['DX', 'DX de G4AAA:   ',
+                             'DX de G4AAA:      7074.0  JA1BBB       FT8 -12 dB         0815Z FN42\\r']
+        assert frames[5][1] == 'DX de VK2CC:   '      # an I frame
+        assert frames[6][1:] == ['DX de N0CALL: 1', 'DX de N0CALL: 1']
+        assert all(f[1] == 'Text' and f[2] == '' for f in frames[8:])
+
+    def test_ax25_nol3_aprs_and_dx(self, cmd_tshark, capture_file, test_env):
+        '''With both preferences, only UI frames with an APRS data type
+        indicator go to APRS (an I frame with the same text stays text),
+        and DX reports are still found.'''
+        frames = self.run_fields(cmd_tshark, capture_file, test_env,
+                                 *AX25_NOL3_DX_OPTS, *APRS_OPTS, '-e_ws.col.protocol')
+        assert [f[0] for f in frames] == ['AX.25-NoL3'] * 3 + ['DX'] * 5 + ['AX.25-NoL3'] * 4 + \
+            ['APRS', 'AX.25-NoL3', 'APRS', 'AX.25-NoL3']
+        # Without the DX preference the DX reports are text
+        frames = self.run_fields(cmd_tshark, capture_file, test_env, *APRS_OPTS,
+                                 '-e_ws.col.protocol', '-eax25_nol3.dx')
+        assert [f[0] for f in frames] == ['AX.25-NoL3'] * 12 + \
+            ['APRS', 'AX.25-NoL3', 'APRS', 'AX.25-NoL3']
+        assert all(f[1] == '' for f in frames)
+
+
+class TestDissectAx4000:
+    def test_ax4000_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Test blocks over IP protocol 173, UDP and TCP port 3357 decode
+        without malformed packets or warnings, in one and two passes.
+        The TCP connection has two test blocks.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax4000_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('AX4000') == 14
+        assert protocols.count('TCP') == 7
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ax4000_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_ax4000_fields(self, cmd_tshark, capture_file, test_env):
+        '''Fill type and index share an octet; timestamp and sequence number
+        are little-endian.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax4000_coverage.pcap.gz'),
+                '-Y', 'ax4000',
+                '-Tfields', '-eframe.number', '-eip.proto', '-eax4000.port',
+                '-eax4000.chassis', '-eax4000.fill', '-eax4000.index',
+                '-eax4000.timestamp', '-eax4000.seq', '-eax4000.crc',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == [str(n) for n in (*range(1, 13), 16, 18)]
+        assert [f[4] for f in frames[:4]] == ['0', '1', '2', '3']
+        assert frames[4] == ['5', '173', '255', '255', '3', '4095',
+                             '0xffffffff', '0xffffffff', '0xffff']
+        assert frames[6] == ['7', '17', '2', '3', '1', '291', '0x0001e240', '0x00010000', '0xbeef']
+        assert frames[12] == ['16', '6', '8', '9', '1', '900', '0x000dbba0', '0x0a0b0c0d', '0x0102']
+
+    def test_ax4000_info(self, cmd_tshark, capture_file, test_env):
+        '''The Info column shows the timestamp in milliseconds.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ax4000_coverage.pcap.gz'),
+                '-Y', 'frame.number in {5, 7}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        info = stdout.splitlines()
+        # The timestamp is printed with the locale's decimal separator
+        assert info[0] in ('Chss:255 Prt:255 Idx:4095 Seq:0xffffffff TS:42949.672950[msec]',
+                           'Chss:255 Prt:255 Idx:4095 Seq:0xffffffff TS:42949,672950[msec]')
+        assert info[1] in ('Chss:3 Prt:2 Idx:291 Seq:0x00010000 TS:1.234560[msec]',
+                           'Chss:3 Prt:2 Idx:291 Seq:0x00010000 TS:1,234560[msec]')
+
+
+class TestDissectAyiya:
+    def test_ayiya_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every operation code, identity type, hash and authentication
+        method decodes, and forwarded IPv6 and IPv4 is dissected, without
+        malformed packets in one and two passes. The only expert info of
+        warning or error severity is the nesting limit in frame 20.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ayiya_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 20
+        assert protocols.count('AYIYA') == 13
+        assert protocols.count('ICMPv6') == 4
+        assert protocols.count('ICMP') == 2
+        assert protocols.count('DISCARD') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ayiya_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['20\tPayload nested too deep, not dissected']
+
+    def test_ayiya_fields(self, cmd_tshark, capture_file, test_env):
+        '''Header fields and the forwarded payloads.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ayiya_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 19',
+                '-Tfields', '-eayiya.opcode', '-eayiya.idtype', '-eayiya.hashmethod',
+                '-eayiya.authmethod', '-eayiya.nextheader',
+                '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        opcodes = [int(f[0], 16) for f in frames]
+        assert opcodes == [0, 0, 1, 1, 1, 1, 1, 1, 2, 3, 4, 5, 6, 7, 0, 8, 15, 1, 1]
+        assert {int(f[1], 16) for f in frames} == {0, 1, 2, 3}
+        assert {int(f[2], 16) for f in frames} == {0, 1, 2, 3}
+        assert {int(f[3], 16) for f in frames} == {0, 1, 2, 3}
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ayiya_coverage.pcap.gz'),
+                '-Y', 'frame.number in {6, 16, 17}',
+                '-Tfields', '-eayiya.identity', '-eayiya.signature',
+            ), encoding='utf-8', env=test_env)
+        ident, sig = zip(*(line.split('\t') for line in stdout.splitlines()))
+        # 4 octet identity with an MD5 signature, then 16 and 256 octet
+        # identities with 20 and 60 octet signatures
+        assert ident[0] == '0a000002'
+        assert [len(s) // 2 for s in sig] == [16, 20, 60]
+        assert len(ident[2]) // 2 == 256
+        # Echo Request and Forward does not dissect its payload; Forward
+        # with an unregistered next header neither
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ayiya_coverage.pcap.gz'),
+                '-Y', 'frame.number in {8, 10, 18}',
+                '-Tfields', '-eframe.protocols',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'eth:ethertype:ip:udp:ayiya',
+            'eth:ethertype:ip:udp:ayiya',
+            'eth:ethertype:ip:udp:ayiya:ip:udp:ayiya:ipv6:icmpv6:data',
+        ]
+
+    def test_ayiya_too_deep(self, cmd_tshark, capture_file, test_env):
+        '''AYIYA nested 200 times stops before the layer limit with a
+        warning instead of failing an assertion.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ayiya_coverage.pcap.gz'),
+                '-Y', 'ayiya.expert.too_deep && _ws.expert.severity == "Warning"',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['20']
+        layers = frames[0][1].split(':')
+        assert layers.count('ayiya') == 161
+        assert layers[-1] == 'ayiya'
+
+
+class TestDissectBabel:
+    def test_babel_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every Babel message type, address encoding and sub-TLV, packet
+        trailers and two jumbograms larger than 64 KiB decode without
+        malformed packets or expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 19
+        assert protocols.count('Babel') == 19
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('babel_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_babel_hello_flags(self, cmd_tshark, capture_file, test_env):
+        '''"Unicast" comes from the U bit (0x8000) of each Hello's own
+        flags, not from the packet header: set in frames 2, 4, 15 and the
+        body Hello of 19, clear with the other flag bits set in frame 3.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Y', 'babel.message.type == 4',
+                '-O', 'babel',
+            ), encoding='utf-8', env=test_env)
+        unicast = {}
+        frame = None
+        for line in stdout.splitlines():
+            if line.startswith('Frame '):
+                frame = int(line.split()[1].rstrip(':'))
+            elif line.strip().startswith('Unicast : '):
+                unicast.setdefault(frame, []).append(line.strip()[len('Unicast : '):])
+        assert unicast == {
+            1: ['0'], 2: ['1'], 3: ['0'], 4: ['1'], 6: ['0'], 14: ['0'],
+            15: ['1'], 18: ['0'], 19: ['1', '0'],
+        }
+
+    def test_babel_long_trailer(self, cmd_tshark, capture_file, test_env):
+        '''A packet trailer longer than 255 octets (298 in frame 15) is
+        decoded whole: its PC, PadN, Pad1 and MAC messages.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Y', 'frame.number == 15',
+                '-O', 'babel',
+            ), encoding='utf-8', env=test_env)
+        assert 'Packet Trailer (298)' in stdout
+        trailer = stdout[stdout.index('Packet Trailer (298)'):]
+        assert 'Index: 4000000000' in trailer
+        assert 'Message hmac (16)' in trailer
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Y', 'frame.number == 15',
+                '-Tfields', '-e_ws.col.info', '-ebabel.message.length',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == 'Babel hello pc padn pad1 hmac\t6,4,255,32'
+
+    def test_babel_subtlvs_past_64k(self, cmd_tshark, capture_file, test_env):
+        '''Sub-TLV offsets are not cut to 16 bits: the reproducer of the
+        16-bit wrap (frame 18) stops after its last Hello's one sub-TLV,
+        and in frame 19 the diversity sub-TLV at offset 65536 and the
+        trailer timestamp past 64 KiB decode at the right place.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('babel_coverage.pcap.gz'),
+                    '-Y', 'frame.number >= 18',
+                    '-Tfields', '-eframe.number', '-ebabel.subtlv.type',
+                    '-ebabel.subtlv.length', '-ebabel.subtlv.diversity.channel',
+                    '-ebabel.message.index',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '18\t1\t100\t\t',
+                '19\t2,3\t1,4\t7\t77',
+            ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Y', 'frame.number == 19',
+                '-O', 'babel',
+            ), encoding='utf-8', env=test_env)
+        assert 'Packet Trailer (20)' in stdout
+        assert 'Timestamp : 123.456789s' in stdout
+
+    def test_babel_messages(self, cmd_tshark, capture_file, test_env):
+        '''Prefixes and addresses of every address encoding, including
+        IPv4 and IPv6 updates that omit octets of the previous default
+        prefix, and timestamp and diversity sub-TLVs. The sub-TLV length
+        is shown as a number, not as a sub-TLV name.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('babel_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 17',
+                '-O', 'babel',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.strip() for line in stdout.splitlines()]
+        prefixes = [l for l in lines if l.startswith(('Prefix: ', 'Address: ', 'NH: '))]
+        assert prefixes == [
+            'Address: ::', 'Address: 192.0.2.1', 'Address: 2001:db8:0:1::1',
+            'Address: fe80::2',
+            'Address: fe80::2', 'Address: ::',
+            'NH: 192.0.2.1', 'NH: 2001:db8:0:1::1', 'NH: fe80::2',
+            'Prefix: 198.51.100.0/24', 'Prefix: 198.51.100.7/32', 'Prefix: ::/0',
+            'Prefix: 2001:db8:0:1::/64', 'Prefix: 2001:db8:0:1::1/128',
+            'Prefix: fe80::2/128', 'Prefix: 10.1.0.0/16',
+            'Prefix: ::/0', 'Prefix: 198.51.100.0/24', 'Prefix: 2001:db8::/48',
+            'Prefix: fe80::2/128', 'Prefix: 2001:db8:0:1::1/128',
+            'Prefix: 192.0.2.1/32', 'Prefix: 2001:db8:0:1::/64',
+        ]
+        assert 'Timestamp : 1234.567890s' in lines
+        assert 'Timestamp origin : 1.000000s' in lines
+        assert 'Timestamp receive: 2.500000s' in lines
+        assert 'Bogus' in lines
+        assert 'Mandatory' in lines
+        assert [l for l in lines if l.startswith('Sub-TLV Length: ')] == [
+            'Sub-TLV Length: 4',
+            'Sub-TLV Length: 2', 'Sub-TLV Length: 3', 'Sub-TLV Length: 3',
+            'Sub-TLV Length: 2',
+            'Sub-TLV Length: 8', 'Sub-TLV Length: 8',
+            'Sub-TLV Length: 2', 'Sub-TLV Length: 4',
+        ]
+
+
+class TestDissectBacapp:
+    def test_bacapp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every APDU type, the confirmed and unconfirmed services with their
+        ACKs and errors, segmented messages and the property value decoders
+        decode without malformed packets or expert infos of warning or error
+        severity, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol', '-ebacapp.type',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert len(frames) == 848
+        assert all(f[0] == 'BACnet-APDU' for f in frames)
+        types = [int(f[1]) for f in frames]
+        assert [types.count(t) for t in range(8)] == [156, 24, 15, 603, 9, 14, 13, 14]
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bacapp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bacapp_services(self, cmd_tshark, capture_file, test_env):
+        '''All confirmed services 0-34 and unconfirmed services 0-14 are
+        present, plus an unknown service of each kind.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'bacapp.type == 0',
+                '-Tfields', '-ebacapp.confirmed_service',
+            ), encoding='utf-8', env=test_env)
+        assert sorted(set(int(s) for s in stdout.split())) == list(range(35)) + [99]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'bacapp.type == 1',
+                '-Tfields', '-ebacapp.unconfirmed_service',
+            ), encoding='utf-8', env=test_env)
+        assert sorted(set(int(s) for s in stdout.split())) == list(range(15)) + [99]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'bacapp.type == 6 || bacapp.type == 7',
+                '-Tfields', '-ebacapp.reject_reason', '-ebacapp.abort_reason',
+            ), encoding='utf-8', env=test_env)
+        reasons = [line.split('\t') for line in stdout.splitlines()]
+        assert [r[0] for r in reasons if r[0]] == ['0', '1', '2', '3', '4', '5', '6', '7', '8',
+                                                   '9', '10', '40', '70']
+        assert [r[1] for r in reasons if r[1]] == ['0', '1', '2', '3', '4', '5', '6', '7', '8',
+                                                   '9', '10', '11', '40', '70']
+
+    def test_bacapp_tree_depth(self, cmd_tshark, capture_file, test_env):
+        '''520 repeated monitoredPropertyIdentifier parameters of a
+        SubscribeCOVProperty request (frame 1) are added side by side in the
+        request's tree, not nested one level deeper each time, so the
+        maximum tree depth is not exceeded.'''
+        proc = subprocess.run((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1', '-V',
+            ), encoding='utf-8', env=test_env, capture_output=True, check=True)
+        assert 'Dissector bug' not in proc.stdout + proc.stderr
+        assert 'Malformed' not in proc.stdout
+        indents = [line[:len(line) - len(line.lstrip())] for line in proc.stdout.splitlines()
+                   if line.strip() == 'monitoredPropertyIdentifier']
+        assert len(indents) == 520
+        assert indents == [indents[0]] * 520
+
+    def test_bacapp_stale_state(self, cmd_tshark, capture_file, test_env):
+        '''Frame 2 omits the objectIdentifier, so its present-value is
+        decoded as a plain enumeration, the same in one and two passes
+        (it used to take the object type access-door of frame 3 in the
+        second pass).'''
+        outputs = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bacapp_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 2 || frame.number == 3', '-O', 'bacapp',
+                ), encoding='utf-8', env=test_env)
+            outputs.append(stdout)
+            frame2, frame3 = stdout.split('\n\n')[:2]
+            assert 'Present Value (enum index): 1' in frame2
+            assert 'access-door' not in frame2
+            assert 'Present Value (enum value): ' in frame3
+        assert outputs[0] == outputs[1]
+
+    def test_bacapp_priority_index(self, cmd_tshark, capture_file, test_env):
+        '''The priority-array index 200 of frame 4 is not truncated to a
+        char (it was shown as priority-array[-56]).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 4', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'priority-array[200]: NULL' in stdout
+        assert '[-56]' not in stdout
+
+    def test_bacapp_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A segmented ReadPropertyMultiple-ACK, a segmented
+        WritePropertyMultiple request, and an AtomicReadFile-ACK in 258
+        segments whose sequence number wraps past 255 (with a retransmitted
+        segment 255 after segment 256) are reassembled, in one and two
+        passes.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bacapp_coverage.pcap.gz'),
+                    '-Y', 'bacapp.reassembled.length',
+                    '-Tfields', '-eframe.number', '-ebacapp.reassembled.length',
+                    '-ebacapp.fragment.count',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['581\t361\t4', '585\t141\t2', '847\t4137\t259']
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bacapp_coverage.pcap.gz'),
+                    '-Y', 'frame.number >= 844 && frame.number <= 847',
+                    '-Tfields', '-e_ws.col.info',
+                ), encoding='utf-8', env=test_env)
+            assert [line.rsplit('(', 1)[1] for line in stdout.splitlines()] == [
+                'Message fragment 255)', 'Message fragment 256)',
+                'Message fragment 255)', 'Message Reassembled)']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 581',
+                '-Tfields', '-ebacapp.object_name', '-ebacapp.instance_number',
+                '-E', 'occurrence=a',
+            ), encoding='utf-8', env=test_env)
+        name, instances = stdout.rstrip('\n').split('\t')
+        assert name == 'Segmented Device'
+        assert instances.split(',') == ['5'] + [str(i) for i in range(40)]
+
+    def test_bacapp_values(self, cmd_tshark, capture_file, test_env):
+        '''Some decoded values: errors, vendor IDs, I-Am, Who-Is limits.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'bacapp.type == 5 && bacapp.error_class',
+                '-Tfields', '-ebacapp.confirmed_service', '-ebacapp.error_class',
+                '-ebacapp.error_code', '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        errors = stdout.splitlines()
+        assert '8\t5\t9' in errors
+        assert '34\t9\t200' in errors
+        assert '12\t64\t300' in errors
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'),
+                '-Y', 'bacapp.unconfirmed_service == 0 || bacapp.unconfirmed_service == 8',
+                '-Tfields', '-ebacapp.vendor_identifier', '-ebacapp.who_is.low_limit',
+                '-ebacapp.who_is.high_limit',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['8\t\t', '260\t\t', '\t\t', '\t0\t4194303']
+
+    def test_bacapp_stats(self, cmd_tshark, capture_file, test_env):
+        '''The BACnet statistics trees count every packet.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacapp_coverage.pcap.gz'), '-q',
+                '-z', 'bacapp_ip,tree', '-z', 'bacapp_service,tree',
+                '-z', 'bacapp_objectid,tree', '-z', 'bacapp_instanceid,tree',
+            ), encoding='utf-8', env=test_env)
+        counts = {}
+        for line in stdout.splitlines():
+            columns = [c.strip() for c in line.split('  ') if c.strip()]
+            if line.startswith('BACnet Packets by') or line.startswith(' readProperty (ComplexAck) '):
+                counts[columns[0]] = int(columns[1])
+        assert counts == {
+            'BACnet Packets by IP': 848,
+            'BACnet Packets by Service': 848,
+            'BACnet Packets by Object Type': 848,
+            'BACnet Packets by Instance ID': 848,
+            'readProperty (ComplexAck)': 320,
+        }
+
+
+class TestDissectBacnet:
+    def test_bacnet_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every network layer message, address variant and security
+        message, over BVLC/IPv4, BVLC/IPv6, 802.2 LLC and MS/TP, decodes
+        without malformed packets or warnings, the same in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 97
+        assert protocols.count('BACnet-NPDU') == 62
+        assert protocols.count('BACnet-APDU') == 35
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bacnet_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        one_pass = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'), '-V',
+            ), encoding='utf-8', env=test_env)
+        two_pass = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('bacnet_coverage.pcap.gz'), '-V',
+            ), encoding='utf-8', env=test_env)
+        assert one_pass == two_pass
+
+    def test_bacnet_long_mac(self, cmd_tshark, capture_file, test_env):
+        '''A DLEN or SLEN of 7 or more is stepped over, so the hop count
+        and the APDU after it are read from the right place (frame 13 is
+        the DLEN 7 reproducer).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.dlen >= 7 || bacnet.slen >= 7',
+                '-Tfields', '-eframe.number', '-ebacnet.dlen',
+                '-ebacnet.dadr_tmp', '-ebacnet.slen', '-ebacnet.sadr_tmp',
+                '-ebacnet.hopc', '-ebacapp.unconfirmed_service',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '13\t7\taaaaaaaaaaaaaa\t\t\t255\t8',
+            '14\t18\t0102030405060708090a0b0c0d0e0f101112\t\t\t7\t8',
+            '20\t\t\t7\tbbbbbbbbbbbbbb\t\t0',
+            '22\t8\td1d1d1d1d1d1d1d1\t9\t515151515151515151\t3\t8',
+        ]
+
+    def test_bacnet_security_payload(self, cmd_tshark, capture_file, test_env):
+        '''The Security-Payload length counts from the payload, so the
+        APDU inside is decoded (frame 55 is the reproducer, a Who-Is),
+        a network message inside is dissected as an NPDU, nested wrappers
+        work and encrypted payloads are left as data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.mesgtyp == 0x0b',
+                '-Tfields', '-eframe.number', '-ebacnet.security_message_length',
+                '-ebacnet.wrapper_auth_data', '-ebacnet.dnet',
+                '-ebacapp.unconfirmed_service', '-ebacnet.wrapper_encrypted_data',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == [str(n) for n in range(55, 63)]
+        assert frames[0][1:5] == ['2', '', '', '8']
+        assert frames[1][1:5] == ['14', '', '', '0']
+        assert frames[3][1:5] == ['2', b'authd'.hex(), '', '8']
+        assert frames[4][1:5] == ['5', '', '100', '']
+        assert frames[5][1:5] == ['47,2', '', '', '8']
+        assert frames[6][5] == 'e5' * 20
+        assert frames[7][5] == 'e5' * 20
+
+    def test_bacnet_network_messages(self, cmd_tshark, capture_file, test_env):
+        '''The network layer message type of every network message, and
+        the routing table and reject fields.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.control_net == 1 && frame.number < 52',
+                '-Tfields', '-ebacnet.mesgtyp',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [
+            '0x00', '0x00', '0x01', '0x02'] + ['0x03'] * 8 + [
+            '0x04', '0x04', '0x05', '0x06', '0x06', '0x07', '0x07', '0x08',
+            '0x09', '0x12', '0x13', '0x13', '0x14', '0x7f', '0x80', '0xff',
+            '0x00']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.rportnum',
+                '-Tfields', '-eframe.number', '-ebacnet.rportnum',
+                '-ebacnet.dnet', '-ebacnet.portid', '-ebacnet.pinfolen',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '38\t0\t\t\t',
+            '39\t2\t70,71\t0x01,0x02\t0,3',
+            '40\t1\t72\t0x03\t2',
+            '41\t3\t73\t0x04\t0',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.rejectreason',
+                '-Tfields', '-ebacnet.rejectreason',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [str(n) for n in range(8)]
+
+    def test_bacnet_security_messages(self, cmd_tshark, capture_file, test_env):
+        '''Security-Response parameters for each response code and the
+        Update-Keyset key sets.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.security_response_code',
+                '-Tfields', '-eframe.number', '-ebacnet.security_response_code',
+                '-ebacnet.security_response_key_algorithm',
+                '-ebacnet.security_response_key_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '63\t0\t\t', '64\t6\t\t', '65\t7\t1\t2', '66\t14\t1,2\t3,4',
+            '67\t15\t3\t4', '68\t21\t\t', '69\t22\t\t', '70\t23\t5\t6',
+            '71\t24\t\t', '72\t25\t\t', '73\t64\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet.update_control',
+                '-Tfields', '-eframe.number', '-ebacnet.update_control',
+                '-ebacnet.security_set1_key_id', '-ebacnet.security_set1_key_data',
+                '-ebacnet.security_set2_key_id', '-ebacnet.security_set2_key_data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '77\t0xd8\t1,2\t%s,%s\t3,4\t%s,%s' % (b'K1-one'.hex(), b'K1-two'.hex(),
+                                               b'K2-one'.hex(), b'K2-2'.hex()),
+            '78\t0x25\t\t\t\t',
+            '79\t0x42\t5\t00112233\t\t',
+            '80\t0x90\t\t\t\t',
+        ]
+
+    def test_bacnet_parents(self, cmd_tshark, capture_file, test_env):
+        '''NPDUs in BVLC/IPv6, 802.2 LLC and MS/TP (Cimetrics), including
+        a COBS-encoded extended MS/TP frame.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bacnet_coverage.pcap.gz'),
+                '-Y', 'bacnet && !ip',
+                '-Tfields', '-eframe.number', '-eframe.protocols',
+                '-ebacnet.snet', '-ebacnet.sadr_tmp',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '89\teth:ethertype:ipv6:udp:bvlc:bacnet:bacapp\t\t',
+            '90\teth:ethertype:ipv6:udp:bvlc:bacnet:bacapp\t\t',
+            '91\teth:ethertype:ipv6:udp:bvlc:bacnet\t\t',
+            '92\teth:ethertype:ipv6:udp:bvlc:bacnet:bacapp\t\t',
+            '93\teth:llc:bacnet:bacapp\t\t',
+            '94\teth:llc:bacnet\t\t',
+            '95\teth:llc:cimetrics:bacnet:bacapp\t\t',
+            '96\teth:llc:cimetrics:bacnet:bacapp\t\t',
+            '97\teth:llc:cimetrics:bacnet:bacapp\t257\t0000010000',
+        ]
+
+
+class TestDissectBanana:
+    BANANA = ('-d', 'tcp.port==8787,banana')
+
+    def test_banana_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every element type decodes without malformed packets or error
+        expert infos, in one and two passes. Banana adds its expert infos
+        without a tree item, so they are checked with the expert tap.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 18
+        assert protocols.count('Banana') == 14
+        assert protocols.count('TCP') == 4
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                    '-q', '-z', 'expert,warn',
+                ), encoding='utf-8', env=test_env)
+            assert 'Banana' not in stdout
+
+    def test_banana_pb_at_start(self, cmd_tshark, capture_file, test_env):
+        '''A pb element at the start of the data has no value octet before
+        it, so only the second pb element of frame 7 has a pb Profile Value
+        (not the last octet of the data).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                '-Y', 'frame.number == 7',
+                '-Tfields', '-ebanana.pb', '-ebanana.int', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '0x01\t3\tFirst element: pb Profile'
+
+    def test_banana_large_integers(self, cmd_tshark, capture_file, test_env):
+        '''The large integer fields are named "Large Integer" and "Large
+        Negative Integer" (they were "Float").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                '-Y', 'frame.number == 9',
+                '-O', 'banana',
+            ), encoding='utf-8', env=test_env)
+        assert 'Large Integer: 010203040506070885' in stdout
+        assert 'Large Negative Integer: 0286' in stdout
+        assert 'Large Integer: 85' in stdout
+        assert 'Large Negative Integer: 86' in stdout
+        assert 'Float' not in stdout
+
+    def test_banana_values(self, cmd_tshark, capture_file, test_env):
+        '''Integer limits, floats, a PB call and its answer, nested and
+        short lists, and the Info column when no type tag is in the first
+        eight octets.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                '-Y', 'banana && frame.number < 18',
+                '-Tfields', '-eframe.number', '-ebanana.int', '-ebanana.neg_int',
+                '-ebanana.string', '-ebanana.pb', '-ebanana.list', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        frames = {l.split('\t')[0]: l.split('\t')[1:] for l in stdout.splitlines()}
+        assert frames['5'] == ['1,0', '', 'root,echo,hi', '0x1a,0x0b,0x05', '7,2,1', 'First element: List']
+        assert frames['6'] == ['1', '', 'hi', '0x1b', '3', 'First element: List']
+        assert frames['8'][:2] == ['2147483647,0,300', '-2147483647,0,-16641']
+        assert frames['11'][4] == '4,0,1,1'
+        assert frames['12'][4] == '5'
+        assert frames['9'][5] == 'First element: Unknown type: 8'
+        assert frames['14'][0] == '1'
+        assert frames['14'][5] == 'First element: Unknown type: 1'
+        assert frames['15'][5] == 'First element: Unknown type: 6'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('banana_coverage.pcap.gz'), *self.BANANA,
+                '-Y', 'frame.number == 10',
+                '-Tfields', '-ebanana.float',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '-1024,0,1e+100'
+
+
+class TestDissectBatadv:
+    def test_batadv_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every B.A.T.M.A.N. Advanced packet type of versions 5 to 15
+        decodes without malformed packets or errors, in one and two
+        passes. The only warnings are the empty TT VLAN in frame 111 and
+        the nesting limit in frame 123.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 123
+        expected = {
+            'BATADV_BATMAN': 12, 'BATADV_ICMP': 18, 'BATADV_UNICAST': 3,
+            'BATADV_UNICAST_4ADDR': 3, 'BATADV_BCAST': 5, 'BATADV_VIS': 11,
+            'BATADV_UNICAST_FRAG': 8, 'BATADV_TT_QUERY': 6,
+            'BATADV_ROAM_ADV': 3, 'BATADV_???': 3, 'BATADV_IV_OGM': 5,
+            'BATADV_OGM2': 5, 'BATADV_UNICAST_TVLV': 5, 'BATADV_CODED': 3,
+            'BATADV_ELP': 3, 'DISCARD': 29, 'Ethernet': 1,
+        }
+        for proto, count in expected.items():
+            assert protocols.count(proto) == count, proto
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('batadv_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '111\tBATADV Warn: empty VLAN',
+                '123\tPayload nested too deep, not dissected',
+            ]
+
+    def test_batadv_two_pass(self, cmd_tshark, capture_file, test_env):
+        '''Two passes give the same tree as one, apart from the
+        "Reassembled in" link a single pass cannot know.'''
+        out = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('batadv_coverage.pcap.gz'),
+                    '-V',
+                ), encoding='utf-8', env=test_env)
+            out.append([l for l in stdout.splitlines() if '[Reassembled in: ' not in l])
+        assert out[0] == out[1]
+
+    def test_batadv_nesting_limit(self, cmd_tshark, capture_file, test_env):
+        '''200 nested unicast/Ethernet layers stop with batadv.too_deep
+        instead of failing an assertion at the layer limit.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('batadv_coverage.pcap.gz'),
+                    '-Y', 'batadv.too_deep || _ws.malformed || _ws.expert.severity >= error',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['123\tPayload nested too deep, not dissected']
+
+    def test_batadv_tvlv(self, cmd_tshark, capture_file, test_env):
+        '''The TVLVs of IV OGM, OGM2 and unicast TVLV packets are decoded:
+        every type, with the length read from each TVLV header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Y', 'batadv.tvlv.len',
+                # batadv.tvlv.length is the TVLV type field
+                '-Tfields', '-eframe.number', '-e_ws.col.protocol',
+                '-ebatadv.tvlv.length', '-ebatadv.tvlv.version', '-ebatadv.tvlv.len',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '101\tBATADV_IV_OGM\t0x01\t0x01\t8',
+            '102\tBATADV_IV_OGM\t0x01,0x02,0x03,0x04,0x05,0x06,0x07\t'
+            '0x01,0x01,0x01,0x01,0x01,0x01,0x01\t8,0,0,36,8,4,4',
+            '103\tBATADV_IV_OGM\t0x06\t0x02\t4',
+            '108\tBATADV_OGM2\t0x01,0x04,0x06,0x01\t0x01,0x01,0x01,0x01\t8,4,4,8',
+            '109\tBATADV_UNICAST_TVLV\t0x04\t0x01\t4',
+            '110\tBATADV_UNICAST_TVLV\t0x04\t0x01\t80',
+            '111\tBATADV_UNICAST_TVLV\t0x04\t0x01\t24',
+            '112\tBATADV_UNICAST_TVLV\t0x04,0x05\t0x01,0x01\t24,8',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Y', 'frame.number == 102',
+                '-Tfields', '-ebatadv.tvlv.gw.dl_speed', '-ebatadv.tvlv.gw.ul_speed',
+                '-ebatadv.tvlv.tt.flags', '-ebatadv.tvlv.tt.change.addr',
+                '-ebatadv.tvlv.roam.vid', '-ebatadv.tvlv.mcast.flags',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == ('1000\t205\t0x01\t'
+                                  '02:00:00:00:00:b0,02:00:00:00:00:b1\t0x8005\t0x1f')
+
+    def test_batadv_tt_vlan_crc(self, cmd_tshark, capture_file, test_env):
+        '''A full table TT response verifies each VLAN's CRC over the
+        entries of that VLAN; frame 110 has two VLANs whose CRCs match.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Y', 'batadv.tvlv.tt.vlan.crc',
+                '-Tfields', '-eframe.number', '-ebatadv.tvlv.tt.vlan.vid',
+                '-ebatadv.tvlv.tt.vlan.crc', '-ebatadv.tvlv.tt.vlan.crc.status',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '102\t0x8001\t0x01020304\t',
+            '110\t0x8001,0x0000\t0x8a35749a,0x1bfa6455\t1,1',
+            '111\t0x8002\t0x00000000\t1',
+            '112\t0x8001\t0xdeadbeef\t',
+        ]
+
+    def test_batadv_ogm2(self, cmd_tshark, capture_file, test_env):
+        '''Each aggregated OGM2 takes its TVLV length from its own header,
+        so a large throughput does not swallow the next OGM2.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Y', 'batadv.ogm2.seq',
+                '-Tfields', '-eframe.number', '-ebatadv.ogm2.seq',
+                '-ebatadv.ogm2.tvlv_len', '-ebatadv.ogm2.throughput',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '105\t1\t0\t65536',
+            '106\t2,3\t0,0\t100,100',
+            '107\t4,5\t0,0\t327680,100',
+            '108\t6,7\t28,12\t327680,12345',
+        ]
+
+    def test_batadv_icmp_uid(self, cmd_tshark, capture_file, test_env):
+        '''The ICMP v7 and v14 UID is read after the sequence number.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('batadv_coverage.pcap.gz'),
+                '-Y', 'batadv.icmp.version in {7, 14}',
+                '-Tfields', '-eframe.number', '-ebatadv.icmp.seq', '-ebatadv.icmp.uid',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['15\t11\t90', '22\t18\t165', '23\t19\t51']
+
+    def test_batadv_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Unicast fragments of v12, v13, v14 (Ethernet inside) and v15
+        (batadv unicast inside) are reassembled, in either order.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('batadv_coverage.pcap.gz'),
+                    '-Y', 'batadv.msg.reassembled.length',
+                    '-Tfields', '-eframe.number', '-ebatadv.unicast_frag.version',
+                    '-ebatadv.msg.reassembled.length', '-ebatadv.unicast.version',
+                    '-eudp.srcport',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '78\t12\t68\t\t40060',
+                '80\t13\t68\t\t40061',
+                '82\t14\t68\t\t40062',
+                '84\t15\t78\t15\t40063',
+                '86\t15\t78\t15\t40064',
+            ]
+
+
+class TestDissectBat:
+    def test_bat_protocols(self, cmd_tshark, capture_file, test_env):
+        '''B.A.T.M.A.N. originator (v5, aggregated, with HNAs, unsupported
+        versions), gateway and vis (v22, v23) packets decode without
+        malformed packets or expert infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bat_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 29
+        assert protocols.count('BAT_BATMAN') == 9
+        assert protocols.count('BAT_GW') == 8
+        assert protocols.count('DISCARD') == 2
+        assert protocols.count('BAT_VIS') == 10
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bat_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bat_vis_trailing(self, cmd_tshark, capture_file, test_env):
+        '''A partial last VIS entry is shown as trailing data rather than
+        dissected as a whole entry, and v23 entries are 6 octets, so all
+        three entries of frame 23 are decoded.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bat_coverage.pcap.gz'),
+                '-Y', 'bat.vis.version',
+                '-Tfields', '-eframe.number', '-ebat.vis.version',
+                '-ebat.vis.data_type', '-ebat.vis.data_ip', '-edata.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '20\t22\t1,2,3,7\t192.0.2.10,192.0.2.11,10.9.0.0,192.0.2.12\t',
+            '21\t22\t\t\t',
+            '22\t22\t1\t192.0.2.10\tdeadbe',
+            '23\t23\t1,1,1\t192.0.2.10,192.0.2.11,192.0.2.12\t',
+            '24\t23\t1,2,3,9\t192.0.2.20,192.0.2.21,10.8.0.0,192.0.2.22\t0102030405',
+            '25\t23\t\t\t',
+            '26\t23\t\t\t07',
+            '27\t22\t1,2\t192.0.2.10,192.0.2.11\t000000000000',
+        ]
+
+    def test_bat_batman_aggregation(self, cmd_tshark, capture_file, test_env):
+        '''Aggregated originator messages and their HNAs, and the gateway
+        speeds derived from the gateway flags.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bat_coverage.pcap.gz'),
+                '-Y', 'frame.number == 3',
+                '-Tfields', '-ebat.batman.seq', '-ebat.batman.orig',
+                '-ebat.batman.hna_len', '-ebat.batman.hna_network',
+                '-ebat.batman.hna_netmask', '-ebat.batman.gwflags.dl_speed',
+                '-ebat.batman.gwflags.ul_speed',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split('\t') == [
+            '10,11,12', '192.0.2.4,192.0.2.5,192.0.2.6', '1,0,2',
+            '10.4.0.0,10.6.0.0,10.6.1.0', '16,16,24', '1024,64,96',
+            '256,8,12\n',
+        ]
+
+    def test_bat_gw(self, cmd_tshark, capture_file, test_env):
+        '''Gateway types, the IP at offset 13 for IP_INVALID, and the
+        tunnelled IPv4 packet of a DATA message.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bat_coverage.pcap.gz'),
+                '-Y', 'bat.gw.type',
+                '-Tfields', '-eframe.number', '-ebat.gw.type', '-ebat.gw.ip',
+                '-eudp.dstport',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '10\t1\t\t4306,9',
+            '11\t2\t\t4306',
+            '12\t2\t169.254.0.10\t4306',
+            '13\t3\t169.254.0.11\t4306',
+            '14\t3\t\t4306',
+            '15\t4\t169.254.0.12\t4306',
+            '16\t5\t169.254.0.12\t4306',
+            '17\t9\t169.254.0.13\t4306',
+            '18\t1\t\t4306,9',
+            '19\t2\t\t4306',
+        ]
+
+
+class TestDissectBblog:
+    def test_bblog_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Netflix BBLog event and skip custom blocks and packets with the
+        TCP info option decode without malformed packets or error expert
+        infos, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_coverage.pcapng.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 140
+        assert protocols.count('BBLog') == 128
+        # The two skip blocks (frames 1 and 130) have no data, so the BBLog
+        # dissector returns 0 and the frame shows them as a custom block.
+        assert protocols.count('PCAPNG') == 2
+        assert protocols.count('DISCARD') == 10
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bblog_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bblog_events(self, cmd_tshark, capture_file, test_env):
+        '''Every event identifier, the timer and PRU event Info texts, and
+        the buffer fields only when their event flags are set.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_coverage.pcapng.gz'),
+                '-Y', 'bblog',
+                '-Tfields', '-ebblog.event_id', '-ebblog.event_flags',
+            ), encoding='utf-8', env=test_env)
+        events = [line.split('\t') for line in stdout.splitlines()]
+        assert sorted({int(e[0]) for e in events}) == list(range(72)) + [200]
+        assert {int(e[1], 16) for e in events} == set(range(32))
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {71, 73, 100, 101, 126, 127, 128}',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '71\tProcessing Retransmission timer',
+            '73\tStarting Retransmission timer: 202 ms',
+            '100\tUnknown operation (0x07) for Unknown (0x09) timer',
+            '101\tPRU: ATTACH',
+            '126\tPRU: FLUSH',
+            '127\tPRU: UNKNOWN (0x7f)',
+            '128\tUnknown (flex1 0x11223344, flex2 0x556677880)',
+        ]
+        for flag, field in ((1, 'bblog.rxb_acc'), (2, 'bblog.txb_acc')):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('bblog_coverage.pcapng.gz'),
+                    '-Y', field,
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 61
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('bblog_coverage.pcapng.gz'),
+                    '-Y', 'bblog && ((bblog.event_flags & {}) ^^ {})'.format(flag, field),
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_coverage.pcapng.gz'),
+                '-Y', 'frame.number == 3',
+                '-Tfields', '-ebblog.rxb_acc', '-ebblog.rxb_ccc',
+                '-ebblog.rxb_spare', '-ebblog.errno', '-ebblog.state',
+                '-ebblog.snd_shift', '-ebblog.rcv_shift',
+                '-ebblog.payload_length',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '102\t202\t302\t54\t2\t2\t9\t20\n'
+
+    def test_bblog_packet_option(self, cmd_tshark, capture_file, test_env):
+        '''The TCP info custom option on Enhanced Packet Blocks, inbound,
+        outbound and without a direction; a short TCP info and an option
+        of another Netflix type add nothing.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_coverage.pcapng.gz'),
+                '-Y', 'frame.number >= 131',
+                '-Tfields', '-eframe.number', '-eframe.p2p_dir',
+                '-eframe.bblog.event_id', '-eframe.bblog.event_flags',
+                '-eframe.bblog.t_flags', '-eframe.bblog.t_flags2',
+                '-eframe.bblog.snd_shift', '-eframe.bblog.rcv_shift',
+                '-eframe.bblog.errno', '-eframe.bblog.payload_length',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '131\t1\t1\t0x0000\t0x00000060\t0x00000000\t7\t6\t0\t0',
+            '132\t0\t2\t0x0000\t0x00000060\t0x00000000\t7\t6\t0\t0',
+            '133\t\t2\t0x001f\t0x00000060\t0x00000000\t7\t6\t0\t18',
+            '134\t\t1\t0x0000\t0x00000060\t0x00000000\t7\t6\t0\t0',
+            '135\t0\t2\t0x0000\t0x00000000\t0x00000000\t0\t0\t0\t0',
+            '136\t0\t2\t0x0000\t0x00000020\t0x00000000\t0\t0\t0\t0',
+            '137\t1\t\t\t\t\t\t\t\t',
+            '138\t0\t\t\t\t\t\t\t\t',
+            '139\t1\t1\t0x001f\t0xffffffff\t0x000003ff\t14\t2\t-1\t0',
+            '140\t\t\t\t\t\t\t\t\t',
+        ]
+
+    def test_bblog_exported_pdu(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU naming the "bblog" dissector on an ordinary
+        packet record is left to the data dissector instead of crashing
+        on the missing custom block data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bblog_exported_pdu.pcap.gz'),
+                '-Tfields', '-eframe.protocols', '-eexported_pdu.prot_name',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == 'exported_pdu:data\tbblog\n'
+
+
+class TestDissectBctp:
+    def test_bctp_frames(self, cmd_tshark, capture_file, test_env):
+        '''BCTP tunnelled in the H.248 Q.1950 bearer control tunnelling
+        package, in Notify events and Modify signals, decodes without
+        malformed packets or expert infos in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bctp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 9
+        assert protocols.count('H.248/SDP') == 3
+        assert protocols.count('H.248') == 6
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bctp_coverage.pcap.gz'),
+                '-Y', 'bctp',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert count_output(stdout) == 9
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bctp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bctp_header(self, cmd_tshark, capture_file, test_env):
+        '''The version and tunnelled protocol indicators of every BCTP PDU,
+        including the error indicators and reserved bits.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bctp_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-ebctp.bvei', '-ebctp.bvi',
+                '-ebctp.tpei', '-ebctp.tpi',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t0x0000\t0x0001\t0x0000\t0x0020',
+            '2\t0x0000\t0x0001\t0x0000\t0x0020',
+            '3\t0x0000\t0x0001\t0x0000\t0x0000',
+            '4\t0x0000,0x0000,0x0000\t0x0001,0x0001,0x0001\t0x0000,0x0000,0x0000\t0x0017,0x0018,0x0022',
+            '5\t0x0000\t0x0001\t0x0000\t0x0023',
+            '6\t0x0000,0x0000\t0x0001,0x0001\t0x0000,0x0000\t0x0021,0x003f',
+            '7\t0x0001\t0x001f\t0x0001\t0x0020',
+            '8\t0x0000\t0x0001\t0x0000\t0x0000',
+            '9\t0x0000\t0x0001\t0x0000\t0x0023',
+        ]
+
+    def test_bctp_tunnelled_protocol(self, cmd_tshark, capture_file, test_env):
+        '''TPI 0x20 goes to SDP (IPBCP), other TPIs up to 0x22 to data and
+        higher TPIs to data-text-lines.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bctp_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-esdp.ipbcp.command',
+                '-edata.data', '-eframe.protocols',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[1] for f in frames] == ['Request', 'Accepted', '', '', '', '', 'Request', '', '']
+        assert frames[2][2] == '01020304'
+        assert frames[3][2] == 'aabb,ccddee,00'
+        assert frames[5][2] == b'spare text'.hex()
+        assert frames[3][3].endswith('h248:bctp:data:bctp:data:bctp:data')
+        assert frames[4][3].endswith('h248:bctp:data-text-lines')
+        assert frames[5][3].endswith('h248:bctp:data:bctp:data-text-lines')
+        assert frames[7][3].endswith('h248:bctp')
+        assert frames[8][3].endswith('h248:bctp:data-text-lines')
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bctp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 9',
+                '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'masked bits\\n' in stdout
+
+
+BEEP_FIELDS = (
+    '-Tfields', '-eframe.number', '-ebeep.command', '-ebeep.more',
+    '-ebeep.channel', '-ebeep.msgno', '-ebeep.seqno', '-ebeep.size',
+    '-ebeep.ansno', '-ebeep.seq.ackno', '-ebeep.seq.window',
+    '-ebeep.mime_header', '-ebeep.payload', '-ebeep.crlf_terminator',
+)
+
+
+class TestDissectBeep:
+    def test_beep_protocols(self, cmd_tshark, capture_file, test_env):
+        '''MSG, RPY, ERR, ANS, NUL and SEQ frames, MIME headers and
+        payloads spanning frames decode without malformed packets or
+        expert infos, and one and two passes give the same BEEP fields.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('beep_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 27
+        assert protocols.count('BEEP') == 27
+        fields = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('beep_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            fields.append(subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('beep_coverage.pcap.gz'),
+                    *BEEP_FIELDS,
+                ), encoding='utf-8', env=test_env))
+        assert fields[0] == fields[1]
+        assert len(fields[0].splitlines()) == 27
+
+    def test_beep_commands(self, cmd_tshark, capture_file, test_env):
+        '''Commands, more flags, MIME headers, ANS numbers and SEQ.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('beep_coverage.pcap.gz'),
+                *BEEP_FIELDS, '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[1] for f in frames] == [
+            'RPY', 'RPY', 'MSG', 'RPY', 'MSG', 'ERR', 'MSG', 'MSG', '', 'MSG',
+            'ANS', 'ANS', 'NUL', 'MSG', '', 'MSG', 'RPY', 'RPY', 'RPY', '',
+            'MSG', 'RPY', 'MSG', 'RPY', 'RPY', 'MSG', '',
+        ]
+        # Intermediate messages from the client (7) and the server (24):
+        # the frame completing each has no MIME header
+        assert [f[0] for f in frames if f[2] == "'*'"] == ['7', '24']
+        assert [f[0] for f in frames if f[10]] == ['1', '3', '7', '21', '24']
+        assert frames[6][10] == frames[23][10] == 'Content-Type: text/plain'
+        assert frames[7][11] == 'second part'
+        # ANS numbers and the SEQ frame
+        assert [f[7] for f in frames[10:12]] == ['0', '1']
+        assert frames[8][3] == '1' and frames[8][8:10] == ['128', '4096']
+        # Two messages in one frame
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('beep_coverage.pcap.gz'),
+                '-Y', 'frame.number == 16',
+                '-Tfields', '-ebeep.payload', '-ebeep.msgno', '-E', 'occurrence=a',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == 'abc,def\t4,4,5,5'
+
+    def test_beep_payload_spanning_frames(self, cmd_tshark, capture_file, test_env):
+        '''A payload continuing from the previous frame is stepped over in
+        one pass as well as in two (it used to be parsed from its first
+        octet on the first pass), and is shown under BEEP. The dissector
+        counts the size without the MIME header's CRLF: in the reproducer
+        (frames 26-27) 3 + 17 octets are payload and "D\\r\\n" is left.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('beep_coverage.pcap.gz'),
+                    '-Y', 'frame.number in {14, 15, 26, 27}',
+                    '-Tfields', '-eframe.number', '-ebeep.payload',
+                    '-ebeep.crlf_terminator', '-E', 'occurrence=a',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '14\t0123456789\t1,1',
+                '15\tabcdefghijABCDEFGHIJ\t1',
+                '26\tABC\t1,1',
+                '27\tDEFGHIJKLMNOPQREN,D\\r\\n\t',
+            ]
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('beep_coverage.pcap.gz'),
+                    '-Y', 'frame.number in {15, 27}', '-O', 'beep',
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            assert '    Payload: abcdefghijABCDEFGHIJ' in lines
+            assert '    Payload: DEFGHIJKLMNOPQREN' in lines
+            assert not [l for l in lines if l.startswith('Payload')]
+
+
+class TestDissectBencode:
+    def test_bencode_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Bencode strings, integers, lists and dictionaries carried in
+        Bazaar and BitTorrent decode without malformed packets or expert
+        infos of warning or error severity, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bencode_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 17
+        assert protocols.count('BZR') == 15
+        assert protocols.count('BitTorrent') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bencode_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bencode_list_depth(self, cmd_tshark, capture_file, test_env):
+        '''600 empty lists inside a list (frame 15) decode as 601 lists:
+        each list that ends with "e" restores the dissection depth, so
+        the depth limit is not hit.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bencode_coverage.pcap.gz'),
+                    '-Y', 'count(bencode.list) == 601 && !bencode.truncated_data '
+                          '&& !_ws.expert && !_ws.malformed',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == ['15']
+
+    def test_bencode_values(self, cmd_tshark, capture_file, test_env):
+        '''Strings and integers, including the int64 limits, the nesting
+        limit (11 lists, 10 dictionaries), and the BitTorrent extension
+        handshakes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bencode_coverage.pcap.gz'),
+                '-Y', 'frame.number in {1, 2, 7, 16, 17}',
+                '-Tfields', '-eframe.number', '-ebencode.str.length', '-ebencode.int',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t4,0,12,8\t',
+            '2\t\t42,0,-17,9223372036854775807,-9223372036854775808',
+            '7\t4,1,1,1,1,1,1,1,1,1,1\t10',
+            '16\t1,11,6,1,4,1,13,6,4\t1,2,6881,250',
+            '17\t1,6,13,1,13\t1,31235',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bencode_coverage.pcap.gz'),
+                '-Y', 'count(bencode.list) == 21 && count(bencode.dict) == 10',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['7']
+
+    def test_bencode_dict_entries(self, cmd_tshark, capture_file, test_env):
+        '''Dictionary entries show their key and a string or integer
+        value.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bencode_coverage.pcap.gz'),
+                '-Y', 'frame.number == 5',
+                '-O', 'bzr',
+            ), encoding='utf-8', env=test_env)
+        entries = [l.strip() for l in stdout.splitlines() if 'Entry Key:' in l]
+        assert entries == [
+            'Entry Key: bar  Value: spam',
+            'Entry Key: foo  Value: 42',
+            'Entry Key: neg  Value: -1',
+            'Entry Key: list',
+            'Entry Key: sub',
+            'Entry Key: x  Value: 1',
+            'Entry Key: empty  Value:',
+        ]
+
+    def test_bencode_truncated(self, cmd_tshark, capture_file, test_env):
+        '''Values cut short (digits without a colon, an integer, list or
+        dictionary without its end, an empty value) are shown as
+        Truncated Data without an error.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bencode_coverage.pcap.gz'),
+                '-Y', 'bencode.truncated_data',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['10', '11', '12', '14']
+
+
+class TestDissectBer:
+    '''The generic BER helpers (packet-ber.c) through the unknown BER
+    decoder, the BER file dissector, X.509, Glow, INAP, LDAP, SNMP,
+    GOOSE and Kerberos. ber_coverage.pcap.gz uses the Exported PDU link
+    type; ber_coverage.ber.gz is a raw BER file.'''
+
+    def test_ber_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts per protocol, and no malformed packets or error
+        expert infos in one and two passes. The only warnings are the
+        REAL overflow (frame 36) and the size constraint checks (37-40).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 40
+        assert protocols.count('BER') == 8
+        assert protocols.count('') == 3          # PKIX certificates
+        assert protocols.count('PKIX-CRL') == 1
+        assert protocols.count('Glow') == 4
+        assert protocols.count('INAP') == 1
+        assert protocols.count('LDAP') == 13
+        assert protocols.count('SNMP') == 7
+        assert protocols.count('GOOSE') == 1
+        assert protocols.count('KRB5') == 2
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('ber_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                    '-E', 'aggregator=|',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '36\tBER Error: REAL overflow',
+                '37\tSize constraint: value too small: 100 (484 .. 2147483647)|'
+                'Size constraint: string too long: 33 (1 .. 32)',
+                '38\tSize constraint: string too short: 0 (1 .. 32)',
+                '39\tSize constraint: value too small: 0 (1 .. 127)',
+                '40\tSize constraint: value too big: 200 (1 .. 127)',
+            ]
+
+    def test_ber_unknown(self, cmd_tshark, capture_file, test_env):
+        '''The unknown BER decoder: universal types, other classes, long
+        tags and lengths, indefinite lengths. Frame 4 is the reproducer
+        of a NULL with contents, which are skipped (they used to be
+        decoded as an INTEGER 7).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 6',
+                '-Tfields', '-eframe.number', '-eber.unknown.INTEGER',
+                '-eber.unknown.OID', '-eber.unknown.relative_OID', '-eber.null_tag',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t5,-129,0,9223372036854775807,-1\t1.3.6.1.4.1.37411.2.1.1,2.5.4.3\t.1.2.300.70000\t1',
+            '2\t1,7,8,9,10\t\t\t',
+            '3\t1\t1.2.3\t\t1',
+            '4\t\t\t\t1',
+            '5\t\t\t\t',
+            '6\t123456\t\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-eber.unknown.UTF8String', '-eber.unknown.BMPString',
+                '-eber.unknown.UniversalString', '-eber.unknown.TeletexString',
+                '-eber.64bit_uint_as_bytes', '-eber.unknown.BITSTRING', '-eber.bitstring.empty',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'grüße €\tBMP é\tUniv\tTeletex é\t0102030405060708090a0b0c\ta8,00,5aa5\t0']
+        # REAL values (compared in a filter, not printed: locale independent)
+        for flt in ('ber.unknown.REAL == 0.15625', 'ber.unknown.REAL == -196608',
+                    'ber.unknown.REAL == -42', 'ber.unknown.REAL == 12.5',
+                    'ber.unknown.REAL == -inf'):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('ber_coverage.pcap.gz'),
+                    '-Y', flt, '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['1'], flt
+
+    def test_ber_file_without_data(self, cmd_tshark, capture_file, test_env):
+        '''"ber_file" named by an Exported PDU has no file data; it used
+        to dereference a NULL pointer.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'frame.number == 7',
+                '-Tfields', '-e_ws.col.info', '-eber.unknown.INTEGER', '-eber.unknown.UTF8String',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == 'Unknown BER\t1\tfile\n'
+
+    def test_ber_real_overflow(self, cmd_tshark, capture_file, test_env):
+        '''A REAL with a 264 octet mantissa is an overflow, not a small
+        finite value.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'ber.error.overflow.real && ber.unknown.REAL == inf',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '36\n'
+
+    def test_ber_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Constructed OCTET STRINGs: three segments, indefinite length,
+        and (frame 24) an LDAP AttributeValue of two segments, which LDAP
+        dissects with hf_id -1 and which used to fail an assertion.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'ber.octet_string.fragment.count',
+                '-Tfields', '-eframe.number', '-eldap.name', '-eldap.baseObject',
+                '-eldap.AttributeValue', '-eber.octet_string.fragment.count',
+                '-eber.octet_string.reassembled.length',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '17\tcn=admin,dc=example,dc=com\t\t\t3\t26',
+            '21\t\tdc=example,dc=com\t\t2\t17',
+            '24\t\t\t61626364\t2\t4',
+        ]
+
+    def test_ber_times(self, cmd_tshark, capture_file, test_env):
+        '''UTCTime with Z and with a +hhmm/-hhmm offset (a valid offset
+        used to be reported as malformed), GeneralizedTime.'''
+        for flt, frames in (
+                ('x509af.notAfterTime == "2025-12-31 23:00:00Z"', ['8']),
+                ('x509af.notBeforeTime == "2025-01-01 01:30:00Z"', ['10']),
+                ('x509af.notAfterTime == "2050-12-31 22:59:59.5Z"', ['9']),
+                ('x509ce.notAfter == "2025-12-31 23:59:59Z"', ['8']),
+                ('kerberos.till == "2037-09-13 02:48:05Z"', ['34'])):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('ber_coverage.pcap.gz'),
+                    '-Y', flt, '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == frames, flt
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'x509af.utcTime || cms.utcTime',
+                '-Tfields', '-eframe.number', '-ex509af.utcTime', '-ecms.utcTime',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t\t25-06-01 12:00:00Z',
+            '11\t2025-02-01T00:00:00.000000000Z,2025-02-28T18:30:00.000000000Z,'
+            '2025-02-03T04:05:00.000000000Z,2025-02-03T04:05:06.000000000Z,'
+            '2025-02-03T12:05:00.000000000Z\t',
+        ]
+
+    def test_ber_external(self, cmd_tshark, capture_file, test_env):
+        '''EXTERNAL (X.509 statusReferrals INSTANCE OF) with every
+        encoding alternative, and an INAP EMBEDDED PDV.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'ber.encoding',
+                '-Tfields', '-eframe.number', '-eber.direct_reference', '-eber.indirect_reference',
+                '-eber.encoding', '-eber.octet_aligned', '-eber.arbitrary',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t2.5.4.3,2.5.4.14,2.5.4.10,1.3.6.1.4.1.32473.7,1.3.6.1.4.1.32473.7,'
+            '1.3.6.1.4.1.32473.7\t3\t0,0,1,1,2,0\t010203\ta0',
+            '16\t1.3.6.1.4.1.32473.9\t\t1\t0a0b0c\t',
+        ]
+        # the searchGuide reached through the EXTERNAL is a SET
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'x509sat.objectClass',
+                '-Tfields', '-eframe.number', '-ex509sat.objectClass', '-ex509sat.criteria',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '8\t2.5.6.6\t2\n'
+
+    def test_ber_glow_goose(self, cmd_tshark, capture_file, test_env):
+        '''REAL, RELATIVE-OID and SET in Glow; implicitly tagged REAL,
+        BOOLEAN and OBJECT IDENTIFIER in GOOSE.'''
+        for flt, frames in (
+                ('glow.real == -6.5 && glow.real == -96', ['12']),
+                ('glow.real == 6', ['13']),
+                ('glow.real == 0.25', ['15']),
+                ('goose.real == 12 && goose.boolean == 1 && goose.objId == 1.0.61850.7.2', ['33'])):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('ber_coverage.pcap.gz'),
+                    '-Y', flt, '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == frames, flt
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-Y', 'frame.number == 12',
+                '-Tfields', '-eglow.path', '-eglow.templateReference',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '.1.2.3,.1.2\t.1.1.5,.7\n'
+
+    def test_ber_internals(self, cmd_tshark, capture_file, test_env):
+        '''With ber.show_internals the identifier and length octets are
+        shown: a long-form tag and long-form lengths.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.pcap.gz'),
+                '-o', 'ber.show_internals:TRUE',
+                '-Y', 'frame.number == 2',
+                '-Tfields', '-eber.id.tag', '-eber.length_octets',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '0,2,3,5,3,7,1000,200\t2,1,2,3\n'
+
+    def test_ber_file(self, cmd_tshark, capture_file, test_env):
+        '''A raw BER file (indefinite length, gzipped) opens as the BER
+        file type and is decoded as unknown BER.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('ber_coverage.ber.gz'),
+                '-Tfields', '-eframe.protocols', '-e_ws.col.info', '-eber.unknown.INTEGER',
+                '-eber.unknown.UTF8String', '-eber.unknown.OID',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == 'ber\tUnknown BER\t2025\tBER file\t1.3.6.1.4.1.32473.7\n'
+
+
+class TestDissectBfcp:
+    def test_bfcp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The UDP flow is set up by the SIP/SDP offer and answer
+        (m=application 5070 UDP/BFCP) and decodes without preferences; the
+        TCP flow on port 5071 needs Decode As or the bfcp_tcp heuristic.
+        No malformed packets and no warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfcp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 68
+        assert protocols.count('BFCP') == 46
+        assert protocols.count('SIP/SDP') == 2
+        assert protocols.count('UDP') == 5
+        assert protocols.count('TCP') == 15
+        for tcp_opts in (('-d', 'tcp.port==5071,bfcp'),
+                         ('--enable-heuristic', 'bfcp_tcp')):
+            stdout = subprocess.check_output((cmd_tshark, *tcp_opts,
+                    '-r', capture_file('bfcp_coverage.pcap.gz'),
+                    '-Tfields', '-e_ws.col.protocol',
+                ), encoding='utf-8', env=test_env)
+            protocols = stdout.split()
+            assert protocols.count('BFCP') == 55
+            assert protocols.count('TCP') == 6
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-d', 'tcp.port==5071,bfcp',
+                    '-r', capture_file('bfcp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bfcp_zero_padding(self, cmd_tshark, capture_file, test_env):
+        '''A zero padding octet is stepped over, so the BENEFICIARY-ID and
+        USER-URI after the padding in frames 4 and 5 are decoded (frame 5
+        has a payload length of 65535).'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bfcp_coverage.pcap.gz'),
+                    '-Y', 'frame.number <= 5 && bfcp',
+                    '-Tfields', '-eframe.number', '-ebfcp.payload_length',
+                    '-ebfcp.floor_id', '-ebfcp.beneficiary_id',
+                    '-ebfcp.user_uri',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '3\t4\t5\t7\tsip:a',
+                '4\t5\t5\t7\tsip:a',
+                '5\t65535\t5\t7\tsip:a',
+            ]
+
+    def test_bfcp_grouped_attributes(self, cmd_tshark, capture_file, test_env):
+        '''FLOOR-REQUEST-INFORMATION with OVERALL-REQUEST-STATUS,
+        FLOOR-REQUEST-STATUS, BENEFICIARY-INFORMATION and
+        REQUESTED-BY-INFORMATION nested in it, with padded strings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfcp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 10',
+                '-Tfields', '-ebfcp.attribute_type', '-ebfcp.request_status',
+                '-ebfcp.queue_pos', '-ebfcp.user_disp_name', '-ebfcp.user_uri',
+                '-ebfcp.req_by_i', '-ebfcp.priority', '-ebfcp.part_prov_info_text',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '15,18,5,9,17,5,9,14,12,13,16,12,13,4,8\t1,1\t2,1\t'
+            'Bob Smith ,Chair Carl\tsip:bob@b.org,sip:carl@c.org\t9\t4\tplease!!!!',
+        ]
+
+    def test_bfcp_errors(self, cmd_tshark, capture_file, test_env):
+        '''Every ERROR-CODE, with and without error specific details, and
+        ERROR-INFO.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfcp_coverage.pcap.gz'),
+                '-Y', 'bfcp.error_code',
+                '-Tfields', '-eframe.number', '-ebfcp.error_code',
+                '-ebfcp.error_specific_details', '-ebfcp.error_info_text',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert lines[:14] == ['%d\t%d\t\t' % (22 + code, code) for code in range(1, 15)]
+        assert lines[14:] == [
+            '37\t4\t282a\tunknown mandatory attr',
+            '38\t4\t282a2c2e30\tx',
+            '39\t3\t2a\tUnknown primitive',
+        ]
+
+    def test_bfcp_fragments(self, cmd_tshark, capture_file, test_env):
+        '''BFCPv2 fragments (F bit) show the fragment offset and length and
+        the attributes in each fragment.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfcp_coverage.pcap.gz'),
+                '-Y', 'bfcp.hdr_f_bit == 1',
+                '-Tfields', '-eframe.number', '-ebfcp.primitive',
+                '-ebfcp.hdr_r_bit', '-ebfcp.payload_length',
+                '-ebfcp.fragment_offset', '-ebfcp.fragment_length',
+                '-ebfcp.floor_id', '-ebfcp.user_uri',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '44\t6\tTrue\t41\t0\t11\t\tsip:bobby@example.com.',
+            '45\t6\tTrue\t41\t11\t29\t5\tsip:bob@b.org,sip:carl@c.org',
+            '46\t6\tTrue\t41\t40\t1\t5\t',
+            '47\t7\tFalse\t3\t0\t2\t5,6\t',
+            '48\t7\tFalse\t3\t2\t1\t7\t',
+        ]
+
+    def test_bfcp_tcp(self, cmd_tshark, capture_file, test_env):
+        '''BFCPv1 over TCP, one message per segment.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-d', 'tcp.port==5071,bfcp',
+                '-r', capture_file('bfcp_coverage.pcap.gz'),
+                '-Y', 'tcp && bfcp',
+                '-Tfields', '-eframe.number', '-ebfcp.ver',
+                '-ebfcp.hdr_r_bit', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '57\t1\tFalse\tHello',
+            '58\t1\tTrue\tHelloAck',
+            '59\t1\tFalse\tFloorRequest',
+            '60\t1\tTrue\tFloorRequestStatus',
+            '61\t1\tFalse\tFloorRequestStatusAck',
+            '62\t1\tFalse\tFloorRelease',
+            '63\t1\tTrue\tFloorRequestStatus',
+            '64\t1\tFalse\tGoodbye',
+            '65\t1\tTrue\tGoodbyeAck',
+        ]
+
+
+class TestDissectBfd:
+    def test_bfd_protocols(self, cmd_tshark, capture_file, test_env):
+        '''BFD Control over UDP (IPv4 and IPv6), the G-ACh (BFD CC and CV)
+        and VCCV, BFD Echo and MPLS-TP Lock Instruct decode without
+        malformed packets or errors in one and two passes. The only
+        warnings are the invalid authentication sections of frames 49-56.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 77
+        assert protocols.count('BFD Control') == 70
+        assert protocols.count('BFD Echo') == 3
+        assert protocols.count('MPLS-TP LI') == 4
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bfd_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '49\tLength of authentication section (20) is invalid for Authentication Type: Keyed MD5',
+                '50\tLength of authentication section (16) is invalid for Authentication Type: Meticulous Keyed MD5',
+                '51\tLength of authentication section (24) is invalid for Authentication Type: Keyed SHA1',
+                '52\tLength of authentication section (27) is invalid for Authentication Type: Meticulous Keyed SHA1',
+                '53\tAuthentication: Length of the BFD frame is invalid (4)',
+                '54\tLength of authentication section (2) is invalid for Authentication Type: Simple Password',
+                '55\tLength of authentication section (1) is invalid for Authentication Type: Simple Password',
+                '56\tAuthentication: Length of the BFD frame is invalid (26)',
+            ]
+
+    def test_bfd_header(self, cmd_tshark, capture_file, test_env):
+        '''Versions 0 and 1, every state, diagnostic and flag.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'bfd',
+                '-Tfields', '-ebfd.version', '-ebfd.diag', '-ebfd.sta', '-ebfd.flags',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert len(frames) == 70
+        assert {f[0] for f in frames} == {'0', '1', '2', '7'}
+        v1 = [f for f in frames if f[0] != '0']
+        v0 = [f for f in frames if f[0] == '0']
+        assert len(v0) == 15
+        assert {int(f[1], 16) for f in v1} == set(range(11)) | {31}
+        assert {int(f[1], 16) for f in v0} == set(range(9))
+        assert {int(f[2], 16) for f in v1} == {0, 1, 2, 3}
+        assert all(f[2] == '' for f in v0)
+        flags1 = 0
+        for f in v1:
+            flags1 |= int(f[3], 16)
+        assert flags1 & 0x3f == 0x3f
+        flags0 = 0
+        for f in v0:
+            flags0 |= int(f[3], 16)
+        assert flags0 == 0xff
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'frame.number in {14, 35}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Diag: Mis-Connectivity Defect, State: Down, Flags: 0x00',
+            'Diag: No Diagnostic, Flags: 0xf0',
+        ]
+
+    def test_bfd_authentication(self, cmd_tshark, capture_file, test_env):
+        '''Simple Password and the keyed MD5 and SHA1 authentication
+        sections, with the summary on the subtree item.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'bfd.auth.type',
+                '-Tfields', '-eframe.number', '-ebfd.auth.type', '-ebfd.auth.password',
+                '-ebfd.auth.seq_num', '-ebfd.checksum',
+            ), encoding='utf-8', env=test_env)
+        frames = {int(f[0]): f[1:] for f in (line.split('\t') for line in stdout.splitlines())}
+        assert frames[40][:2] == ['1', 'x']
+        assert frames[42][:2] == ['1', '0123456789abcdef']
+        assert frames[66][:2] == ['1', 'tp-cc']
+        assert [frames[n][0] for n in (44, 45, 46, 47, 48)] == ['2', '3', '4', '5', '6']
+        assert [frames[n][2] for n in (44, 45, 46, 47)] == [
+            '0x00000100', '0x00000101', '0x00000200', '0x00000201']
+        assert [len(frames[n][3]) // 2 for n in (44, 45, 46, 47)] == [16, 16, 20, 20]
+        assert frames[48][1:] == ['', '', '']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'frame.number in {41, 44, 49}',
+                '-O', 'bfd', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert grep_output(stdout, r'Authentication: Simple Password: secret12$')
+        assert grep_output(stdout, r'Authentication: Keyed MD5$')
+        assert grep_output(stdout, r'Authentication: Keyed MD5: Invalid Authentication Section$')
+
+    def test_bfd_auth_short(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of frames 53-55: the A flag with a Length of 4
+        reports that there is no authentication data, and a Simple Password
+        section shorter than four octets is reported as invalid instead of
+        running to the end of the frame.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 53 && frame.number <= 55',
+                '-Tfields', '-eframe.number', '-ebfd.message_length', '-ebfd.auth.no_data',
+                '-ebfd.auth.len.invalid', '-ebfd.auth.len', '-ebfd.auth.password',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['53', '54', '55']
+        assert [f[1] for f in frames] == ['4', '28', '28']
+        assert [bool(f[2]) for f in frames] == [True, False, False]
+        assert [bool(f[3]) for f in frames] == [False, True, True]
+        assert [f[4] for f in frames] == ['', '2', '1']
+        assert [f[5] for f in frames] == ['', '', '']
+
+    def test_bfd_mpls(self, cmd_tshark, capture_file, test_env):
+        '''BFD CC, CV with the Source MEP-ID TLVs, VCCV and Lock Instruct.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bfd_coverage.pcap.gz'),
+                '-Y', 'pwach',
+                '-Tfields', '-eframe.number', '-epwach.channel_type', '-ebfd.sta',
+                '-ebfd.mep.type', '-ebfd.mep.node.id', '-ebfd.mep.tunnel.no',
+                '-ebfd.mep.lsp.no', '-ebfd.mep.agi.val',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == [str(n) for n in range(65, 78)]
+        assert [int(f[1], 16) for f in frames] == [0x22] * 2 + [0x23] * 5 + [0x7] * 2 + [0x26] * 4
+        assert [f[3] for f in frames] == ['', '', '0', '1', '2', '', '1', '', '', '0', '1', '2', '']
+        assert frames[3][4:7] == ['192.0.2.2', '10', '1']
+        assert frames[4][7] == 'agi-value'
+        assert frames[6][4:7] == ['192.0.2.1', '11', '2']
+        assert frames[11][7] == 'pw'
+        assert [f[2] for f in frames[7:9]] == ['0x01', '0x03']
+
+
+class TestDissectBgp:
+    def test_bgp_messages(self, cmd_tshark, capture_file, test_env):
+        '''Every message type, path attribute and address family in the
+        synthetic capture decodes without malformed packets or error
+        expert infos, in one and two passes. The warnings are the expected
+        ones: unknown ORF types, next hop scope and route distinguisher,
+        unknown BGP-LS TLVs and the old TE metric length.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 146
+        assert protocols.count('BGP') == 141
+        assert protocols.count('TCP') == 5
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'bgp.type',
+                '-Tfields', '-ebgp.type',
+            ), encoding='utf-8', env=test_env)
+        types = [int(t) for line in stdout.split() for t in line.split(',')]
+        assert {t: types.count(t) for t in set(types)} == {
+            1: 4, 2: 114, 3: 13, 4: 5, 5: 5, 6: 1, 7: 1, 128: 1}
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == "Error"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == []
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-Y', '_ws.expert.severity == "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == ['23', '64', '76', '77', '78', '126', '129', '132']
+
+    def test_bgp_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''The BGP tree is the same in one and two passes: per-frame state
+        (encapsulation community, AFI/SAFI, BGP-LS protocol ID) is always
+        saved before it is read.'''
+        trees = []
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-O', 'bgp',
+                ), encoding='utf-8', env=test_env)
+            trees.append([line for line in stdout.splitlines()
+                          if line.startswith((' ', 'Border Gateway Protocol'))])
+        assert len(trees[0]) > 10000
+        assert trees[0] == trees[1]
+
+    def test_bgp_fixed_offsets(self, cmd_tshark, capture_file, test_env):
+        '''The reproducers of the offset and length fixes: OPEN unknown
+        parameter, Prefix-SID SRGB and unknown TLV, RT-Constrain AS4 route
+        target, four octet flow spec value, EVPN IGMP Leave maximum
+        response time, and BGP-LS sub-TLVs in the last octets of a TLV.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {3, 51, 53, 86, 90, 114}',
+                '-Tfields', '-eframe.number', '-ebgp.open.opt.param.type', '-ebgp.cap.mp.afi',
+                '-ebgp.prefix_sid.originator_srgb_base', '-ebgp.prefix_sid.originator_srgb_range',
+                '-ebgp.prefix_sid.label_index.value', '-ebgp.prefix_sid.value',
+                '-ebgp.community_prefix', '-ebgp.flowspec_nlri.dec_val_32',
+                '-ebgp.flowspec_nlri.dec_val_8', '-ebgp.evpn.nlri.igmp_mc_max_resp_time',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3\t3,2\t1\t\t\t\t\t\t\t\t',
+            '51\t\t\t16000,100000\t8000,1000\t42,43\t\t\t\t\t',
+            '53\t\t\t\t\t\tdeadbeef\t\t\t\t',
+            '86\t\t\t\t\t\t\t65001:100,192.0.2.1:7,65536:7,Invalid RT type\t\t\t',
+            '90\t\t\t\t\t\t\t\t8080\t80,53\t',
+            '114\t\t\t\t\t\t\t\t\t\t100',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {127, 129, 133}',
+                '-Tfields', '-eframe.number', '-ebgp.ls.type',
+            ), encoding='utf-8', env=test_env)
+        ls_types = {int(f): t.split(',') for f, t in (line.split('\t') for line in stdout.splitlines())}
+        # SRv6 End.X and LAN End.X carry an SRv6 SID Structure sub-TLV
+        # (1252) and Application-Specific Link Attributes their link
+        # attribute sub-TLVs, each ending at the end of the TLV
+        assert ls_types[127][ls_types[127].index('1106') + 1] == '1252'
+        assert ls_types[127][ls_types[127].index('1107') + 1] == '1252'
+        assert ls_types[127][ls_types[127].index('1122') + 1:][:2] == ['1092', '1173']
+        assert ls_types[129][ls_types[129].index('1107') + 1] == '1252'
+        assert ls_types[129][-2:] == ['1122', '1095']
+        # Flex-Algo Definition whose only sub-TLV is in its last 4 octets
+        assert ls_types[133] == ['1039', '1045']
+
+    def test_bgp_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''An extended message UPDATE over four TCP segments, a message
+        split inside its header, several messages in one segment, bytes
+        before the first marker, and a segment without a marker.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 137',
+                '-Tfields', '-eframe.number', '-e_ws.col.protocol', '-ebgp.type',
+                '-ebgp.length', '-etcp.reassembled.length', '-ebgp.continuation',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '137\tBGP\t4,2,4\t19,45,19\t\t',
+            '138\tTCP\t\t\t\t',
+            '139\tTCP\t\t\t\t',
+            '140\tTCP\t\t\t\t',
+            '141\tBGP\t2\t5243\t5243\t',
+            '142\tTCP\t\t\t\t',
+            '143\tBGP\t2,4\t45,19\t64\t',
+            '144\tBGP\t4\t19\t\t1',
+            '145\tTCP\t\t\t\t',
+            '146\tBGP\t2\t53\t\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 141',
+                '-Tfields', '-ebgp.nlri_prefix',
+            ), encoding='utf-8', env=test_env)
+        prefixes = stdout.strip().split(',')
+        assert len(prefixes) == 1300
+        assert prefixes[0] == '10.0.0.0' and prefixes[-1] == '10.5.19.0'
+
+    def test_bgp_evpn_state(self, cmd_tshark, capture_file, test_env):
+        '''With the VXLAN or VXLAN-GPE encapsulation community before
+        MP_REACH, EVPN labels and the PMSI label are VNIs; without it they
+        are MPLS labels. A 2-octet AS route target is split into the EVPN
+        local administrator fields only in an EVPN UPDATE. Same result in
+        one and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-Y', 'frame.number in {41, 100, 117, 118}',
+                    '-Tfields', '-eframe.number', '-ebgp.evpn.nlri.vni', '-ebgp.evpn.nlri.mpls_ls1',
+                    '-ebgp.ext_com.local_admin.service_id', '-ebgp.ext_com.value_an4',
+                    '-E', 'occurrence=f',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '41\t\t\t\t100',
+                '100\t\t101\t100\t',
+                '117\t5000\t\t5000\t',
+                '118\t7000\t\t\t',
+            ]
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 117',
+                    '-Tfields', '-ebgp.evpn.nlri.vni',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.strip() == '5000,5001,5001,6001,5002,5003,5000'
+
+    def test_bgp_address_families(self, cmd_tshark, capture_file, test_env):
+        '''MP_REACH/MP_UNREACH of every AFI/SAFI pair the capture holds.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bgp_coverage.pcap.gz'),
+                '-Y', 'bgp.update.path_attribute.mp_reach_nlri.afi || bgp.update.path_attribute.mp_unreach_nlri.afi',
+                '-Tfields', '-ebgp.update.path_attribute.mp_reach_nlri.afi',
+                '-ebgp.update.path_attribute.mp_reach_nlri.safi',
+                '-ebgp.update.path_attribute.mp_unreach_nlri.afi',
+                '-ebgp.update.path_attribute.mp_unreach_nlri.safi',
+            ), encoding='utf-8', env=test_env)
+        reach, unreach = set(), set()
+        for line in stdout.splitlines():
+            ra, rs, ua, us = line.split('\t')
+            for afis, safis, found in ((ra, rs, reach), (ua, us, unreach)):
+                if afis:
+                    found.update(zip(map(int, afis.split(',')), map(int, safis.split(','))))
+        assert reach == {
+            (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 7), (1, 64), (1, 73), (1, 85),
+            (1, 128), (1, 129), (1, 130), (1, 132), (1, 133), (1, 134),
+            (2, 1), (2, 2), (2, 4), (2, 5), (2, 7), (2, 64), (2, 73), (2, 85), (2, 128),
+            (2, 133), (2, 134), (25, 65), (25, 70), (25, 128), (16388, 71), (16388, 72)}
+        assert unreach == {(1, 1), (1, 4), (1, 66), (1, 128), (1, 133), (2, 1), (2, 85), (2, 129),
+                           (25, 70), (196, 65), (16388, 128)}
+
+    def test_bgp_as_path_last(self, cmd_tshark, capture_file, test_env):
+        '''An UPDATE whose last attribute is a one segment 2-octet AS_PATH
+        and that has no NLRI is not malformed: the AS length heuristic no
+        longer reads past the message.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bgp_coverage.pcap.gz'),
+                    '-Y', 'frame.number == 146 && !_ws.malformed',
+                    '-Tfields', '-ebgp.update.path_attribute.as_path_segment.as2',
+                    '-ebgp.mp_reach_nlri_ipv4_prefix',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['65001,65002\t198.51.100.0']
+
+
+class TestDissectBhttp:
+    def test_bhttp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Known- and indeterminate-length requests and responses carried
+        as HTTP bodies with Content-Type message/bhttp decode without
+        malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bhttp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 32
+        assert protocols.count('bHTTP') == 31
+        assert protocols.count('TCP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bhttp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bhttp_messages(self, cmd_tshark, capture_file, test_env):
+        '''Framing indicators, request control data, informational and
+        final status codes, content lengths and chunks, padding.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bhttp_coverage.pcap.gz'),
+                '-Y', 'bhttp',
+                '-Tfields', '-eframe.number', '-ebhttp.framing_indicator',
+                '-ebhttp.request.method', '-ebhttp.response.informational.status',
+                '-ebhttp.response.final.status', '-ebhttp.known_length_content.len',
+                '-ebhttp.indeterminate_length_content.chunk_len', '-ebhttp.padding_length',
+            ), encoding='utf-8', env=test_env)
+        frames = {int(f[0]): f[1:] for f in (line.split('\t') for line in stdout.splitlines())}
+        assert sorted(frames) == list(range(1, 27)) + [28, 29, 30, 31, 32]
+        assert [int(frames[n][0], 16) for n in sorted(frames)] == \
+            [0] * 6 + [1] * 7 + [2] * 6 + [3] * 6 + [4, 0, 3, 3, 1, 3]
+        assert [frames[n][1] for n in range(1, 7)] == \
+            ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'GET']
+        # 103 Early Hints before 200; 102 before 204; indeterminate 103/200
+        assert frames[8][2:4] == ['103', '200']
+        assert frames[10][2:4] == ['102', '204']
+        assert frames[20][2:4] == ['103', '200']
+        # A status outside 100-599 stops the response (11, 12, 23, 29)
+        assert frames[11][2:4] == ['100', '']
+        assert frames[12][2:4] == ['', '']
+        assert frames[23][2:4] == ['100', '']
+        assert frames[29][2:4] == ['', '']
+        # Known-length content, including empty, 300 octets (2 octet
+        # varint) and 2000 octets reassembled by HTTP from two segments
+        assert [frames[n][4] for n in (2, 5, 6, 28)] == ['12', '0', '300', '2000']
+        # Indeterminate-length content chunks
+        assert frames[15][5] == '11,20'
+        assert frames[20][5] == '9,8'
+        assert frames[30][5] == '0'
+        # Padding (16 and 8 zero octets; the dissector counts one more)
+        assert frames[3][6] == '17'
+        assert frames[15][6] == '9'
+
+    def test_bhttp_fields(self, cmd_tshark, capture_file, test_env):
+        '''Field lines of known- and indeterminate-length header and
+        trailer sections, and the end of message marker.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bhttp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {2, 8, 15, 20}',
+                '-Tfields', '-ebhttp.name', '-ebhttp.value',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'content-type,x-checksum\ttext/plain,abc123',
+            'link,content-type,server-timing\t</style.css>; rel=preload,text/html,db;dur=53',
+            'content-type,x-id,x-checksum\tapplication/octet-stream,42,deadbeef',
+            'link,content-type,etag\t</a.js>; rel=preload,text/plain,"xyz"',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bhttp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {16, 25}', '-V', '-O', 'bhttp',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.count('Indeterminate-length field section: End of message') == 2
+
+    def test_bhttp_long_length(self, cmd_text2pcap, cmd_tshark, result_file, test_env):
+        '''A 62-bit field section, name or value length is not cut to 32
+        bits: a small all-0xff field section (name length 2^62-1) and a
+        field section length longer than the message are reported
+        malformed at once, without stepping back and growing the tree.'''
+        def http(body):
+            return (b'POST /g HTTP/1.1\r\nHost: example.com\r\n'
+                    b'Content-Type: message/bhttp\r\n'
+                    b'Content-Length: %d\r\n\r\n' % len(body)) + body
+        packets = [
+            # Empty control data, field section length 300, 300 x 0xff
+            http(bytes(5) + b'\x41\x2c' + b'\xff' * 300),
+            # Field section length 1048576, 300 x 0xff
+            http(bytes(5) + b'\x80\x10\x00\x00' + b'\xff' * 300),
+        ]
+        text_file = result_file('bhttp_long.txt')
+        capture = result_file('bhttp_long.pcap')
+        with open(text_file, 'w') as f:
+            for packet in packets:
+                f.writelines(f'{o:06x}  {packet[o:o + 16].hex(" ")}\n'
+                             for o in range(0, len(packet), 16))
+        subprocess.check_call((cmd_text2pcap, '-q', '-T', '40000,80', text_file, capture),
+                              env=test_env)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture, '-V', '-O', 'bhttp',
+            ), encoding='utf-8', env=test_env, timeout=60)
+        assert stdout.count('[Malformed Packet: Binary HTTP]') == 2
+        assert stdout.count('Name length: 4611686018427387903') == 1
+        assert stdout.count('Known-length field section length: 1048576') == 1
+        assert len(stdout) < 20000
+
+
+class TestDissectBiccMst:
+    def test_bicc_mst_frames(self, cmd_tshark, capture_file, test_env):
+        '''LCLS Global Call References in BSSMAP ASSIGNMENT REQUEST and
+        HANDOVER REQUEST over SCCP/M3UA decode without malformed packets
+        or expert infos in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 12
+        assert protocols.count('BSSAP') == 5
+        assert protocols.count('SCCP (Int. ITU)') == 7
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Y', 'bicc_mst',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['3', '4', '5', '6', '9']
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bicc_mst_gcr_fields(self, cmd_tshark, capture_file, test_env):
+        '''The network ID, node ID and call reference ID each go to their
+        own field: the node ID is bicc_mst.lcls_gcr.node_id, not a second
+        bicc_mst.lcls_gcr.network_id.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Y', 'bicc_mst',
+                '-Tfields', '-eframe.number',
+                '-ebicc_mst.lcls_gcr.network_id_len', '-ebicc_mst.lcls_gcr.network_id',
+                '-ebicc_mst.lcls_gcr.node_id_len', '-ebicc_mst.lcls_gcr.node_id',
+                '-ebicc_mst.lcls_gcr.call_ref_id_len', '-ebicc_mst.lcls_gcr.call_ref_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3\t3\t62f210\t2\t1234\t5\tdeadbeef01',
+            '4\t5\t1122334455\t2\tabcd\t5\t0000000002',
+            '5\t1\t99\t2\t5678\t5\t0102030405',
+            '6\t0\t<MISSING>\t0\t<MISSING>\t0\t<MISSING>',
+            '9\t3\t00f110\t2\t0fa0\t5\t1020304050',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Y', 'frame.number == 3',
+                '-O', 'gsm_a.bssmap',
+            ), encoding='utf-8', env=test_env)
+        assert 'LCLS GCR Network ID: 62f210' in stdout
+        assert 'LCLS GCR Node ID: 1234' in stdout
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Y', 'bicc_mst.lcls_gcr.node_id == 12:34',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['3']
+
+    def test_bicc_mst_following_elements(self, cmd_tshark, capture_file, test_env):
+        '''BSSMAP continues with the LCLS elements after the GCR.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bicc_mst_coverage.pcap.gz'),
+                '-Y', 'bicc_mst',
+                '-Tfields', '-eframe.number', '-egsm_a.bssmap.elem_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3\t0x0b,0x01,0x89,0x8a,0x8b',
+            '4\t0x0b,0x01,0x89,0x8a,0x8b,0x8c',
+            '5\t0x0b,0x01,0x89',
+            '6\t0x0b,0x01,0x89,0x8a,0x8b',
+            '9\t0x0b,0x0a,0x12,0x05,0x05,0x89,0x8a,0x8b',
+        ]
+
+
+class TestDissectBier:
+    def test_bier_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every BitString length and next protocol decodes, rejected
+        headers fall back to MPLS data, and there are no malformed packets
+        in one and two passes. The only expert info of warning or error
+        severity is the nesting limit in frame 28.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 28
+        assert protocols.count('DISCARD') == 16
+        assert protocols.count('Geneve/DISCARD') == 1
+        assert protocols.count('BIER') == 5
+        assert protocols.count('MPLS') == 6
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bier_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['28\tPayload nested too deep, not dissected']
+
+    def test_bier_fields(self, cmd_tshark, capture_file, test_env):
+        '''Header fields, every BitString length and the payload of every
+        next protocol.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'bier',
+                '-Tfields', '-eframe.number', '-ebier.bsl', '-ebier.proto',
+                '-ebier.bitstring', '-ebier.bfir-id',
+                '-E', 'occurrence=f',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        # Frames 21-26 have headers BIER rejects
+        assert [int(f[0]) for f in frames] == list(range(1, 21)) + [28]
+        assert [int(f[1]) for f in frames[:7]] == list(range(1, 8))
+        assert [len(f[3]) // 2 for f in frames[:7]] == [8, 16, 32, 64, 128, 256, 512]
+        assert [int(f[4]) for f in frames[:7]] == [100, 200, 300, 400, 500, 600, 700]
+        assert [int(f[2], 16) for f in frames[7:20]] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 10, 63, 1]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'frame.number == 11',
+                '-Tfields', '-ebier.ver', '-ebier.entropy', '-ebier.oam',
+                '-ebier.rsv', '-ebier.dscp', '-ebier.bfir-id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['3', '0x0fffff', '0x03', '0x03', '0x003f', '65535']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'frame.number in {8..10, 12..18, 20}',
+                '-Tfields', '-eframe.protocols', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        # MPLS hands the payload to BIER without adding it to the protocols
+        assert stdout.splitlines() == [
+            'eth:ethertype:mpls:mpls:udp:discard\tDiscard',
+            'eth:ethertype:mpls:mpls:udp:discard\tDiscard',
+            'eth:ethertype:mpls:eth:ethertype:ip:udp:discard\tDiscard',
+            'eth:ethertype:mpls:data\tOAM packet',
+            'eth:ethertype:mpls:ipv6:udp:discard\tDiscard',
+            'eth:ethertype:mpls:vxlan:eth:ethertype:ip:udp:discard\tDiscard',
+            'eth:ethertype:mpls:gre:eth:ethertype:ip:udp:discard\tDiscard',
+            'eth:ethertype:mpls:geneve:eth:ethertype:ip:udp:discard\tEncapsulated Transparent Ethernet bridging, Discard',
+            'eth:ethertype:mpls:data\tReserved',
+            'eth:ethertype:mpls:data\tUnknown (0x0a)',
+            'eth:ethertype:mpls:mpls:ip:udp:discard\tDiscard',
+        ]
+        # Frame 20 nests MPLS -> BIER -> MPLS -> BIER -> IPv4
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'frame.number == 20',
+                '-Tfields', '-ebier.bfir-id', '-empls.label',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['1,20', '16,200,400']
+
+    def test_bier_decode_as(self, cmd_tshark, capture_file, test_env):
+        '''BIER bound to an MPLS label rejects a payload whose first nibble
+        is not 5, so the first nibble logic dissects it as IPv4.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-d', 'mpls.label==500,bier', '-d', 'mpls.label==100,bier',
+                '-Y', 'frame.number in {1, 27}',
+                '-Tfields', '-eframe.number', '-ebier.bsl', '-eudp.dstport',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['1\t1\t9', '27\t\t9']
+
+    def test_bier_too_deep(self, cmd_tshark, capture_file, test_env):
+        '''MPLS and BIER nested 500 times stop before the layer limit
+        with a warning instead of failing an assertion.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'bier.too_deep',
+                '-Tfields', '-eframe.number', '-ebier.proto', '-e_ws.malformed',
+                '-E', 'occurrence=a', '-E', 'aggregator= ',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == ['28']
+        assert len(frames[0][1].split()) == 481
+        assert frames[0][2] == ''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bier_coverage.pcap.gz'),
+                '-Y', 'frame.number == 28', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert 'Dissector bug' not in stdout
+        assert 'Payload nested too deep, not dissected' in stdout
+
+
+BIST_ITCH_DECODE_AS = (
+    '-d', 'udp.port==30064,moldudp64',
+    '-d', 'udp.port==30010,moldudp',
+    '-d', 'moldudp64.payload,bist_itch',
+    '-d', 'moldudp.payload,bist_itch',
+)
+
+
+class TestDissectBistItch:
+    def test_bist_itch_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type over MoldUDP64 and MoldUDP decodes without
+        malformed packets or expert infos, in one and two passes, and the
+        protocol column uses an ASCII hyphen.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 30
+        assert protocols.count('BIST-ITCH') == 30
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                    *BIST_ITCH_DECODE_AS,
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bist_itch_unknown_type(self, cmd_tshark, capture_file, test_env):
+        '''A one-octet message of an unknown type (frame 26) is not
+        malformed; with a body (frame 27) the body is the raw message.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                    *BIST_ITCH_DECODE_AS,
+                    '-Y', 'bist-itch.message_type == 0x51',
+                    '-Tfields', '-eframe.number', '-e_ws.col.info',
+                    '-ebist-itch.message', '-e_ws.malformed',
+                ), encoding='utf-8', env=test_env)
+            assert [l.rstrip() for l in stdout.splitlines()] == [
+                '26\tUnknown (0x51)',
+                '27\tUnknown (0x51) \t414243444546474849',
+            ]
+
+    def test_bist_itch_info(self, cmd_tshark, capture_file, test_env):
+        '''The Info column separates the message type from the order ID.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-Y', 'frame.number in {2, 5, 8, 9}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert [l.rstrip() for l in stdout.splitlines()] == [
+            'Add Order 123456789 qty 500',
+            'Order Executed 123456789 qty 200',
+            'Order Executed w/ Price 123456790 qty 100',
+            'Order Delete 123456789',
+        ]
+
+    def test_bist_itch_add_order_tails(self, cmd_tshark, capture_file, test_env):
+        '''Add Order and Order Book Directory messages without their
+        optional trailing fields, and messages with extra bytes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-Y', 'frame.number >= 16 && frame.number <= 25',
+                '-Tfields', '-eframe.number', '-ebist-itch.ranking_seq',
+                '-ebist-itch.quantity', '-ebist-itch.ranking_time',
+                '-ebist-itch.ranking_type', '-ebist-itch.unexpected',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '16\t\t\t\t\t',
+            '17\t\t\t\t\t',
+            '18\t11\t\t\t\t',
+            '19\t11\t\t\t\t',
+            '20\t11\t750\t\t\t',
+            '21\t11\t750\t\t\t',
+            '22\t11\t750\t1700000000123456789\t\teeee',
+            '23\t\t\t\t\t',
+            '24\t\t\t\t1\teeee',
+            '25\t\t\t\t\tee',
+        ]
+
+    def test_bist_itch_multiple_messages(self, cmd_tshark, capture_file, test_env):
+        '''Every message type in one MoldUDP64 datagram, and three messages
+        in a MoldUDP datagram.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-Y', 'frame.number in {28, 29}',
+                '-Tfields', '-eframe.number', '-ebist-itch.message_type',
+                '-ebist-itch.order_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '28\t0x41,0x5a,0x4d,0x45,0x54,0x50,0x43,0x44,0x53,0x52,0x59,0x56,0x4f,0x4c\t'
+            '123456789,123456789,123456790,123456789',
+            '29\t0x41,0x45,0x44\t323456789,323456789,323456789',
+        ]
+
+    def test_bist_itch_prices(self, cmd_tshark, capture_file, test_env):
+        '''Prices are shown raw by default and divided by 10000 with the
+        show_bigint_price preference.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-Y', 'frame.number in {3, 15}',
+                '-Tfields', '-ebist-itch.price', '-ebist-itch.best_bid_price',
+                '-ebist-itch.price_to',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['1234500\t1234000\t', '\t\t999900']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_itch_coverage.pcap.gz'),
+                *BIST_ITCH_DECODE_AS,
+                '-o', 'bist_itch.show_bigint_price:TRUE',
+                '-Y', 'frame.number in {3, 15}',
+                '-Tfields', '-ebist-itch.price', '-ebist-itch.best_bid_price',
+                '-ebist-itch.price_to',
+            ), encoding='utf-8', env=test_env)
+        # Accept the locale's decimal separator in the prices.
+        expected = [['123.45', '123.4', ''], ['', '', '99.99']]
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert len(lines) == len(expected)
+        for got, want in zip(lines, expected):
+            assert len(got) == len(want)
+            for g, w in zip(got, want):
+                assert g in (w, w.replace('.', ','))
+
+
+class TestDissectBistOuch:
+    def test_bist_ouch_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every message type, found by the heuristic on SoupBinTCP, decodes
+        without malformed packets or warnings, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 63
+        assert protocols.count('BIST-OUCH') == 42
+        assert protocols.count('SoupBinTCP') == 8
+        assert protocols.count('TCP') == 13
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                    '-d', 'tcp.port==21001,soupbintcp',
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bist_ouch_messages(self, cmd_tshark, capture_file, test_env):
+        '''Enter Order with and without the reserved field, Replace Order
+        and Order Replaced told apart by length (with trailing bytes), a
+        negative price and reject code, and an Order Accepted reassembled
+        from two segments (frame 37).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-Y', 'frame.number in {6, 9, 10, 11, 12, 16, 17, 37}',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+                '-ebist_ouch.price.int', '-ebist_ouch.reserved',
+                '-ebist_ouch.raw', '-ebist_ouch.order_id',
+                '-ebist_ouch.reject_code', '-etcp.segment',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '6\tEnter Order, Qty=1000\t123450\t\t\t\t\t',
+            '9\tEnter Order, Qty=1000\t-250\t0000\t\t\t\t',
+            '10\tOrder Rejected\t\t\t\t\t-1234\t',
+            '11\tReplace/Order Replaced, Replace Order\t123500\t0000000000000000\t\t\t\t',
+            '12\tReplace/Order Replaced, Order Replaced\t123500\t\t\t5000001\t\t',
+            '16\tReplace/Order Replaced, Replace Order\t123500\t0000000000000000\teeeeeeeeeeeeeeee\t\t\t',
+            '17\tReplace/Order Replaced, Order Replaced\t123500\t\teeeeeeeeee\t5000001\t\t',
+            '37\tOrder Accepted\t123450\t\t\t5000007\t\t36,37',
+        ]
+
+    def test_bist_ouch_mass_quote(self, cmd_tshark, capture_file, test_env):
+        '''Mass Quote with two entries, without the entry count, and with
+        fewer entries present than counted; Mass Quote Rejection with and
+        without its optional fields.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-Y', 'frame.number >= 21 && frame.number <= 29',
+                '-Tfields', '-eframe.number', '-ebist_ouch.order_token',
+                '-ebist_ouch.mq.count', '-ebist_ouch.mq.ob',
+                '-ebist_ouch.mq.bid_px.int', '-ebist_ouch.reject_code',
+                '-ebist_ouch.mq.status',
+            ), encoding='utf-8', env=test_env)
+        assert [l.split('\t') for l in stdout.splitlines()] == [
+            ['21', 'TOKQ1         ', '2', '70616,70617', '123400,-100', '', ''],
+            ['22', 'TOKQ1         ', '', '70616', '', '', '0'],
+            ['23', 'TOKQ1         ', '', '70616', '', '', '5'],
+            ['24', 'TOKQ2         ', '', '', '', '', ''],
+            ['25', 'TOKQ2         ', '', '', '', '', ''],
+            ['26', 'TOKQ3         ', '3', '70618', '1', '', ''],
+            ['27', 'TOKQ3         ', '', '70618', '', '', ''],
+            ['28', 'TOKQ3         ', '', '70618', '', '-5', ''],
+            ['29', 'TOKQ3         ', '', '70618', '', '-6', ''],
+        ]
+
+    def test_bist_ouch_decimal_price(self, cmd_tshark, capture_file, test_env):
+        '''With show_decimal_price, prices are divided by 10000.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-o', 'bist_ouch.show_decimal_price:TRUE',
+                '-Y', 'frame.number in {6, 9}',
+                '-Tfields', '-ebist_ouch.price', '-ebist_ouch.price.int',
+            ), encoding='utf-8', env=test_env)
+        # Accept the locale's decimal separator in the prices.
+        lines = stdout.splitlines()
+        assert lines[0] in ('12.345\t', '12,345\t')
+        assert lines[1] in ('-0.025\t', '-0,025\t')
+        assert len(lines) == 2
+
+    def test_bist_ouch_orderbook_tracking(self, cmd_tshark, capture_file, test_env):
+        '''With orderbook tracking, messages are grouped into order chains
+        through replacement tokens, chains are joined, and Order Replaced
+        messages with an unseen previous token start a chain. One pass
+        only: the chain links and expert infos are set during the first
+        pass.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-o', 'bist_ouch.enable_orderbook_tracking:TRUE',
+                '-Y', 'bist_ouch',
+                '-Tfields', '-eframe.number', '-ebist_ouch.order.group_id',
+            ), encoding='utf-8', env=test_env)
+        groups = dict(l.split('\t') for l in stdout.splitlines())
+        assert len(groups) == 42
+        # TOK1 and its replacements TOK1R, TOK1S
+        assert [groups[f] for f in ('6', '7', '8', '11', '12', '13', '14', '15', '17')] == ['1'] * 9
+        # A replace whose ROT is the TOK3 chain joins TOK5's chain to it
+        assert groups['33'] == groups['19'] == '4'
+        # Cancel by Order ID carries no token
+        assert groups['18'] == groups['35'] == ''
+        # TOK41 maps two levels below the root chain (TOK21's)
+        assert groups['59'] == groups['51'] == groups['60'] == '11'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-o', 'bist_ouch.enable_orderbook_tracking:TRUE',
+                '-Y', 'bist_ouch.order.prev_unmapped || bist_ouch.order.eot_not_initial',
+                '-Tfields', '-eframe.number', '-e_ws.expert.severity',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '32\t4194304', '33\t4194304', '51\t6291456', '52\t6291456', '58\t4194304']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bist_ouch_coverage.pcap.gz'),
+                '-d', 'tcp.port==21001,soupbintcp',
+                '-o', 'bist_ouch.enable_orderbook_tracking:TRUE',
+                '-o', 'bist_ouch.show_order_index_in_info:TRUE',
+                '-o', 'bist_ouch.show_global_index_in_info:TRUE',
+                '-o', 'bist_ouch.show_group_id_in_info:TRUE',
+                '-Y', 'frame.number in {18, 60}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Cancel by Order ID GlobalIndex#13',
+            'Order Executed, TradedQty=42 OrderChainID#11 OrderIndex#6 GlobalIndex#42',
+        ]
+
+
+class TestDissectBitcoin:
+    def test_bitcoin_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every Bitcoin message type, found by the TCP heuristic, decodes
+        without malformed packets in one and two passes. The only warnings
+        are "Unknown command" for the four commands with no handler.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 146
+        assert protocols.count('Bitcoin') == 118
+        assert protocols.count('TCP') == 28
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || (_ws.expert.severity >= warning && !bitcoin.command.unknown)',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                    '-Y', 'bitcoin.command.unknown',
+                    '-Tfields', '-ebitcoin.command',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.split() == ['cmpctblock', 'getblocktxn', 'blocktxn', 'synthetic']
+
+    def test_bitcoin_commands(self, cmd_tshark, capture_file, test_env):
+        '''The number of PDUs of each command.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin',
+                '-Tfields', '-ebitcoin.command',
+            ), encoding='utf-8', env=test_env)
+        commands = stdout.replace('\n', ',').rstrip(',').split(',')
+        assert len(commands) == 125
+        expected = {
+            'version': 16, 'verack': 9, 'ping': 7, 'pong': 5, 'tx': 10,
+            'reject': 9, 'inv': 5, 'getdata': 5, 'notfound': 5, 'addr': 4,
+            'addrv2': 4, 'getblocks': 4, 'getheaders': 4, 'headers': 4,
+            'block': 4, 'filterload': 4, 'filteradd': 4, 'merkleblock': 4,
+            'feefilter': 2, 'sendcmpct': 2,
+        }
+        for command, count in expected.items():
+            assert commands.count(command) == count, command
+        for command in ('wtxidrelay', 'sendaddrv2', 'sendheaders', 'getaddr',
+                        'mempool', 'filterclear', 'checkorder', 'submitorder',
+                        'reply', 'alert', 'cmpctblock', 'getblocktxn',
+                        'blocktxn', 'synthetic'):
+            assert commands.count(command) == 1, command
+
+    def test_bitcoin_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Four PDUs in one segment, a block over three segments, a header
+        split after 10 octets, and a segment with the tail of one PDU, a
+        whole PDU and the head of another.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin && frame.number >= 96 && frame.number <= 107',
+                '-Tfields', '-eframe.number', '-ebitcoin.command',
+                '-ebitcoin.length', '-etcp.segment',
+                '-ebitcoin.block.num_transactions',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '96\tversion,verack,ping,pong\t101,0,8,8\t\t',
+            '99\tblock\t3164\t97,98,99\t9',
+            '101\tinv\t325\t100,101\t',
+            '103\tgetdata,ping\t73,8\t102,103\t',
+            '104\tnotfound\t37\t103,104\t',
+            '105\tping\t8\t\t',
+            '107\ttx\t521\t105,106,107\t',
+        ]
+
+    def test_bitcoin_magic_and_version(self, cmd_tshark, capture_file, test_env):
+        '''The testnet magic numbers are recognized, and the version
+        message fields depend on the protocol version. The user agent
+        length in a 3, 5 and 9 octet varint gives the same string.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin.version && frame.number >= 111',
+                '-Tfields', '-eframe.number', '-ebitcoin.magic',
+                '-ebitcoin.version.version', '-ebitcoin.version.start_height',
+                '-ebitcoin.version.relay', '-ebitcoin.string.value',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '111\t0xfabfb5da\t70016\t840000\t1\t/Synthetic:0.1/',
+            '112\t0xfabfb5da\t70016\t840000\t1\t/Synthetic:0.1/',
+            '119\t0x0b110907\t70016\t840000\t1\t/Synthetic:0.1/',
+            '120\t0x0b110907\t70016\t840000\t1\t/Synthetic:0.1/',
+            '127\t0x1c163f28\t70016\t840000\t1\t/Synthetic:0.1/',
+            '128\t0x1c163f28\t70016\t840000\t1\t/Synthetic:0.1/',
+            '135\t0xf9beb4d9\t60\t\t\t',
+            '136\t0xf9beb4d9\t106\t\t\t/Synthetic:0.1/',
+            '137\t0xf9beb4d9\t209\t840000\t\t/Synthetic:0.1/',
+            '138\t0xf9beb4d9\t70001\t840000\t\t/Synthetic:0.1/',
+            '139\t0xf9beb4d9\t70016\t840000\t1\t/Synthetic:0.1/',
+            '140\t0xf9beb4d9\t70016\t840000\t1\t/Synthetic:0.1/',
+            '141\t0xf9beb4d9\t70016\t840000\t1\t/Synthetic:0.1/',
+        ]
+
+    def test_bitcoin_varints(self, cmd_tshark, capture_file, test_env):
+        '''Counts and lengths in every varint size: inv counts of 9, segwit
+        witness component lengths, and reject strings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin.inv && frame.number < 30',
+                '-Tfields', '-ebitcoin.inv.count', '-ebitcoin.inv.count64',
+                '-ebitcoin.inv.type',
+            ), encoding='utf-8', env=test_env)
+        types = '0,1,2,3,4,5,1073741825,1073741826,7'
+        assert stdout.splitlines() == [f'9\t\t{types}'] * 3 + [f'\t9\t{types}']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin.tx.flag && frame.number < 60',
+                '-Tfields', '-eframe.number',
+                '-ebitcoin.tx.witness.component_count',
+                '-ebitcoin.tx.witness.component.length',
+                '-ebitcoin.tx.witness.component.length64',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '54\t2,2\t72,33,72,33\t',
+            '55\t2,2\t72,33,72,33\t',
+            '56\t2,2\t72,33,72,33\t',
+            '57\t\t\t72,33,72,33',
+            '58\t0\t\t',
+            '59\t2\t72,33\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin.reject && frame.number <= 80',
+                '-Tfields', '-ebitcoin.string.value', '-ebitcoin.reject.ccode',
+                '-ebitcoin.string.count', '-ebitcoin.string.count64',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'tx,bad-txns-inputs-missingorspent\t0x10\t2,30\t',
+            'block,reason\t0x01\t5,6\t',
+            'version,reason\t0x11\t7,6\t',
+            'tx,reason\t0x12\t2,6\t',
+            'tx,reason\t0x40\t\t2,6',
+        ]
+
+    def test_bitcoin_addrv2(self, cmd_tshark, capture_file, test_env):
+        '''addrv2 with every network id, the services as a varint.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bitcoin_coverage.pcap.gz'),
+                '-Y', 'bitcoin.addrv2',
+                '-Tfields', '-ebitcoin.addrv2.network',
+                '-ebitcoin.addrv2.address.ipv4', '-ebitcoin.addrv2.address.ipv6',
+                '-ebitcoin.addrv2.port',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1,2,3,4,5,6,7\t203.0.113.9\t2001:db8::1\t8333,8333,9050,8333,0,8333,1234'] * 4
+
+    def test_bitcoin_pdu_length_wrap(self, cmd_tshark, result_file, test_env):
+        '''A payload length of 0xffffffe8 no longer wraps the PDU length to
+        0, which made TCP add every later segment of the stream to the
+        reassembly and dissect it all again; the stream is dissected
+        quickly and nothing in it is malformed.'''
+        def csum(data):
+            s = sum(struct.unpack('!%dH' % (len(data) // 2), data))
+            while s >> 16:
+                s = (s & 0xffff) + (s >> 16)
+            return ~s & 0xffff
+        src, dst = bytes([192, 0, 2, 1]), bytes([192, 0, 2, 2])
+        records = b''
+        seq = 1000
+        for i in range(20):
+            payload = (struct.pack('<I12sII', 0xD9B4BEF9, b'ping', 0xffffffe8, 0)
+                       if i == 0 else b'Z' * 1400)
+            tcp = struct.pack('!HHIIBBHHH', 40001, 8333, seq, 1, 0x50, 0x18, 65535, 0, 0)
+            tcp = tcp[:16] + struct.pack('!H', csum(src + dst + struct.pack('!BBH', 0, 6,
+                                         len(tcp) + len(payload)) + tcp + payload)) + tcp[18:]
+            ip = struct.pack('!BBHHHBBH4s4s', 0x45, 0, 40 + len(payload), 1, 0, 64, 6, 0, src, dst)
+            ip = ip[:10] + struct.pack('!H', csum(ip)) + ip[12:]
+            packet = bytes(6) + bytes(6) + b'\x08\x00' + ip + tcp + payload
+            records += struct.pack('<IIII', 1700000000, i, len(packet), len(packet)) + packet
+            seq += len(payload)
+        capture = result_file('bitcoin_pdu_length_wrap.pcap')
+        with open(capture, 'wb') as f:
+            f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1) + records)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture,
+                '-Tfields', '-eframe.number', '-e_ws.malformed',
+            ), encoding='utf-8', env=test_env, timeout=60)
+        assert stdout.split() == [str(i) for i in range(1, 21)]
+
+
+BITTORRENT_UTP_OPTS = ('-d', 'udp.port==50001,bt-utp')
+
+
+class TestDissectBittorrent:
+    def test_bittorrent_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Handshakes, every message type, the Fast extension, extended and
+        Azureus Messaging Protocol messages, on TCP ports 6881-6889, found
+        by the heuristic and over uTP, decode without malformed packets or
+        warnings, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 138
+        assert protocols.count('BitTorrent') == 93
+        assert protocols.count('TCP') == 35
+        assert protocols.count('UDP') == 10
+        stdout = subprocess.check_output((cmd_tshark, *BITTORRENT_UTP_OPTS,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count('BitTorrent') == 100
+        assert protocols.count('BT-uTP') == 3
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *BITTORRENT_UTP_OPTS, *passes,
+                    '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bittorrent_amp_messages(self, cmd_tshark, capture_file, test_env):
+        '''Azureus Messaging Protocol messages decode by name. Fixed length
+        messages (Have, Request, Cancel, Port, Unchoke, the Fast extension)
+        used to be shown as continuation data, because their length was
+        checked including the name (frame 77 is the BT_HAVE reproducer).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'bittorrent.azureus_msg',
+                '-Tfields', '-eframe.number', '-ebittorrent.msg.aztype',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert [f[0] for f in frames] == [str(n) for n in range(65, 90)] + ['94']
+        info = {f[1]: f[2].strip() for f in frames}
+        assert info['BT_HAVE'] == 'Have, Piece (Idx:0x1)'
+        assert info['BT_REQUEST'] == 'Request, Piece (Idx:0x7,Begin:0x100,Len:0x200)'
+        assert info['BT_CANCEL'] == 'Cancel, Piece (Idx:0x7,Begin:0x100,Len:0x200)'
+        assert info['BT_PORT'] == 'Port'
+        assert info['BT_UNCHOKE'] == 'Unchoke'
+        assert info['BT_HAVE_ALL'] == 'Have All'
+        assert info['BT_HAVE_NONE'] == 'Have None'
+        assert info['BT_SUGGEST'] == 'Suggest Piece, Piece (Idx:0x8)'
+        assert info['BT_REJECT_REQUEST'] == 'Reject Request, Piece (Idx:0x7,Begin:0x100,Len:0x200)'
+        assert info['BT_ALLOWED_FAST'] == 'Allowed Fast, Piece (Idx:0x9)'
+        assert info['JPC_HELLO'] == 'Azureus PeerCache Hello'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'frame.number in {80, 88}',
+                '-Tfields', '-eframe.number', '-ebittorrent.port',
+                '-ebittorrent.jpc.addr', '-ebittorrent.jpc.port',
+                '-ebittorrent.jpc.session',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '80\t6882\t\t\t',
+            '88\t\t10.0.0.99\t6881\t0x12345678',
+        ]
+
+    def test_bittorrent_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A 0x4000 octet piece over 12 segments, a message split after its
+        length field and one that starts in the middle of a segment are
+        reassembled; for two passes too.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                    '-Y', 'bittorrent.piece.index && tcp.port == 6881',
+                    '-Tfields', '-eframe.number', '-ebittorrent.msg.length',
+                    '-ebittorrent.piece.index', '-ebittorrent.piece.begin',
+                    '-ebittorrent.piece.length',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '19\t5\t0x00000017\t\t',
+                '20\t13\t0x00000001\t0x00000000\t0x00004000',
+                '21\t13\t0x00000001\t0x00000000\t0x00004000',
+                '23\t5\t0x00000005\t\t',
+                '24\t13\t0x00000001\t0x00000000\t0x00004000',
+                '25\t5\t0x00000006\t\t',
+                '27\t13,13,0,5\t0x00000002,0x00000002,0x00000003\t0x00000000,0x00004000\t0x00004000,0x00000010',
+                '28\t25\t0x00000002\t0x00004000\t',
+                '40\t16393,5\t0x00000002,0x00000002\t0x00000000\t',
+                '43\t13\t0x00000004\t0x00000000\t0x00004000',
+                '45\t5\t0x00000004\t\t',
+                '47\t49\t0x00000004\t0x00000000\t',
+                '55\t5\t0x00000004\t\t',
+            ]
+
+    def test_bittorrent_continuation(self, cmd_tshark, capture_file, test_env):
+        '''Messages with an unknown type or a length their type cannot have
+        are shown as continuation data, and the next segment is decoded
+        again.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'bittorrent.continuous_data',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['48', '49', '50', '51', '52', '53', '54', '93']
+
+    def test_bittorrent_extended(self, cmd_tshark, capture_file, test_env):
+        '''Extended handshakes (id 0) are bencoded; other ids are bytes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'bittorrent.extended.id',
+                '-Tfields', '-eframe.number', '-ebittorrent.extended.id',
+                '-ebencode.int',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '6\t0\t3,1,51413,250',
+            '7\t0\t2',
+            '8\t1\t',
+            '9\t3\t',
+            '85\t0\t1',
+            '86\t5\t',
+        ]
+
+    def test_bittorrent_heuristic_and_utp(self, cmd_tshark, capture_file, test_env):
+        '''A handshake on unregistered ports is found by the heuristic,
+        also when split after the protocol name, and BitTorrent is decoded
+        over uTP.'''
+        stdout = subprocess.check_output((cmd_tshark, *BITTORRENT_UTP_OPTS,
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'bittorrent && (tcp.port == 40001 || udp)',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert [line.split('\t')[0] for line in stdout.splitlines()] == \
+            [str(n) for n in range(102, 109)] + [str(n) for n in range(131, 138)]
+        assert 'Interested  Have, Piece (Idx:0x1)' in stdout
+
+    def test_bittorrent_decode_client(self, cmd_tshark, capture_file, test_env):
+        '''With decode_client, the client and version come from the peer ID.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-o', 'bittorrent.decode_client:TRUE',
+                '-r', capture_file('bittorrent_coverage.pcap.gz'),
+                '-Y', 'tcp.port in {6881, 6882, 6884, 6885}',
+                '-O', 'bittorrent',
+            ), encoding='utf-8', env=test_env)
+        for client in ('Transmission v2940', 'qBittorrent v4250',
+                       'Azureus v4004', 'Azureus v5770', 'BitTornado v03I',
+                       'Bits on Wheels v0A0', 'Azureus v\\001\\002\\003\\004'):
+            assert 'Client is ' + client in stdout
+
+
+class TestDissectBjnp:
+    def test_bjnp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every BJNP device type and command code on UDP 8611-8614 decodes
+        without malformed packets or warnings, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bjnp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 28
+        assert protocols.count('BJNP') == 27
+        assert protocols.count('UDP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bjnp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bjnp_types_and_codes(self, cmd_tshark, capture_file, test_env):
+        '''Device types and command codes, known and unknown, in Info.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bjnp_coverage.pcap.gz'),
+                '-Y', 'bjnp',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        info = stdout.splitlines()
+        assert info[:14] == [
+            'Printer Command: Discover', 'Printer Response: Discover',
+            'Printer Command: Print Job Details', 'Printer Response: Print Job Details',
+            'Printer Command: Request Closure', 'Printer Response: Request Closure',
+            'Printer Command: Get Printer Status', 'Printer Response: Get Printer Status',
+            'Printer Command: Print', 'Printer Response: Print',
+            'Printer Command: Get Printer Identity', 'Printer Response: Get Printer Identity',
+            'Printer Command: Scan Job Details', 'Printer Response: Scan Job Details',
+        ]
+        assert info[14:16] == ['Scanner Command: Discover', 'Scanner Response: Discover']
+        assert info[20:23] == [
+            'Unknown type (127): Unknown code (127)',
+            'Printer Command: Unknown code (66)',
+            'Unknown type (85): Print',
+        ]
+
+    def test_bjnp_payload_length(self, cmd_tshark, capture_file, test_env):
+        '''Empty payloads, a payload that exactly fills the datagram and one
+        shorter than the datagram; a non-printable first octet is not BJNP.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bjnp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {5, 25, 26, 27, 28}',
+                '-Tfields', '-eframe.number', '-ebjnp.seq_no', '-ebjnp.session_id',
+                '-ebjnp.payload_len', '-ebjnp.payload',
+            ), encoding='utf-8', env=test_env)
+        frames = [line.split('\t') for line in stdout.splitlines()]
+        assert frames[0] == ['5', '3', '259', '0', '']
+        assert frames[1] == ['25', '1', '0', '4', b'abcd'.hex()]
+        assert frames[2][:4] == ['26', '43', '3', '1024']
+        assert frames[2][4] == (bytes(range(256)) * 4).hex()
+        assert frames[3] == ['27', '44', '4', '2', b'AB'.hex()]
+        assert frames[4] == ['28', '', '', '', '']
+
+    def test_bjnp_payload_length_too_long(self, cmd_tshark, result_file, test_env):
+        '''A payload length of 0xffffffff is malformed instead of becoming
+        -1, "to the end of the packet", and showing the payload.'''
+        def frame(plen):
+            bjnp = b'BJNP' + struct.pack('>BBIHI', 0x01, 0x30, 1, 0, plen) + b'abcd'
+            udp = struct.pack('>HHHH', 40000, 8611, 8 + len(bjnp), 0) + bjnp
+            ip = struct.pack('>BBHHHBBH4s4s', 0x45, 0, 20 + len(udp), 1, 0, 64, 17, 0,
+                             bytes((192, 0, 2, 1)), bytes((192, 0, 2, 2)))
+            s = sum(struct.unpack('>10H', ip))
+            s = (s & 0xffff) + (s >> 16)
+            s = (s & 0xffff) + (s >> 16)
+            ip = ip[:10] + struct.pack('>H', ~s & 0xffff) + ip[12:]
+            return bytes.fromhex('020000000002020000000001') + b'\x08\x00' + ip + udp
+        pcap = result_file('bjnp-payload-len.pcap')
+        with open(pcap, 'wb') as f:
+            f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
+            for i, plen in enumerate((4, 0xffffffff, 5)):
+                p = frame(plen)
+                f.write(struct.pack('<IIII', 1700000000 + i, 0, len(p), len(p)) + p)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', pcap,
+                '-Tfields', '-eframe.number', '-ebjnp.payload_len',
+                '-ebjnp.payload',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t4\t61626364',
+            '2\t4294967295\t',
+            '3\t5\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', pcap,
+                '-Y', '_ws.malformed',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['2', '3']
+
+
+class TestDissectBlip:
+    BLIP_FIELDS = ('-Y', 'blip', '-Tfields', '-eframe.number',
+                   '-eblip.messagenum', '-eblip.frameflags',
+                   '-eblip.propslength', '-eblip.props', '-eblip.messagebody',
+                   '-eblip.numackbytes', '-eblip.checksum', '-Eoccurrence=a')
+
+    def test_blip_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Four HTTP Upgrades to the BLIP WebSocket subprotocols (_2, _3 and
+        _4) and their BLIP frames decode without malformed packets or
+        warnings, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('blip_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 71
+        assert protocols.count('BLIP') == 36
+        assert protocols.count('HTTP') == 8
+        assert protocols.count('TCP') == 26
+        assert protocols.count('WebSocket') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('blip_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_blip_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''Every BLIP field, the decompressed ones included, is the same in
+        one pass and in two passes.'''
+        one = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('blip_coverage.pcap.gz'),
+                *self.BLIP_FIELDS,
+            ), encoding='utf-8', env=test_env)
+        two = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('blip_coverage.pcap.gz'),
+                *self.BLIP_FIELDS,
+            ), encoding='utf-8', env=test_env)
+        assert len(one.splitlines()) == 36
+        assert one == two
+
+    def test_blip_message_types(self, cmd_tshark, capture_file, test_env):
+        '''MSG, RPY, ERR, ACKMSG, ACKRPY and the unknown types in Info.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('blip_coverage.pcap.gz'),
+                '-Y', 'blip && frame.number <= 22',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [
+            'MSG#1', 'RPY#1', 'MSG#2', 'MSG#3', 'ERR#2', 'MSG#4', 'MSG#5',
+            'MSG#5', 'ACKMSG#5', 'RPY#5', 'RPY#5', 'ACKRPY#5', 'MSG#300',
+            'MSG#6', '???#7', '???#8', '???#9',
+        ]
+
+    def test_blip_properties(self, cmd_tshark, capture_file, test_env):
+        '''Properties are shown with ':' between the NUL separated strings
+        (not after the last one); the properties length, the flags, the body
+        and the checksum around them; the continuation frames of the
+        multi-frame messages 5 have no properties.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('blip_coverage.pcap.gz'),
+                    *self.BLIP_FIELDS,
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            assert lines[:14] == [
+                '6\t1\t0x00\t34\tProfile:getCheckpoint:client:cp-1\t\t\t3851910490',
+                '7\t1\t0x00\t8\trev:0-1\t{"time":"2026-01-01","seq":42}\t\t1508552918',
+                '8\t2\t0x10\t35\tProfile:subChanges:continuous:true\t{"since":0}\t\t2730329405',
+                '9\t3\t0x20\t16\tProfile:changes\t[[1,"doc1","1-a"]]\t\t1112529692',
+                '10\t2\t0x00\t33\tError-Domain:HTTP:Error-Code:404\tmissing\t\t2450579132',
+                '11\t4\t0x30\t21\tProfile:norev:error:\t{}\t\t2862184604',
+                '12\t5\t0x40\t23\tProfile:proposeChanges\t{"docs":[1,2,\t\t1744174805',
+                '13\t5\t0x00\t\t\t3,4]}\t\t3364111897',
+                '14\t5\t0x00\t\t\t\t500\t',
+                '15\t5\t0x50\t14\tmaxHistory:20\t[0,0,\t\t3215669924',
+                '16\t5\t0x10\t\t\t0,0]\t\t715424643',
+                '17\t5\t0x00\t\t\t\t70000\t',
+                '18\t300\t0x00\t0\t\tplain body\t\t740653655',
+                '19\t6\t0x00\t0\t\tok\t\t28523',
+            ]
+            assert '23\t10,11\t0x00,0x20\t22,22\tProfile:getAttachment,Profile:setCheckpoint\tfirst,second\t\t3580673869,2123913605' in lines
+            assert '28\t12\t0x00\t12\tProfile:rev\tfragmented websocket message\t\t176424424' in lines
+            assert '29\t13\t0x00\t1\tp\tbody\t\t2040546919' in lines
+
+    def test_blip_compressed(self, cmd_tshark, capture_file, test_env):
+        '''Compressed frames are inflated on the deflate stream of their
+        direction: frame 40 refers back into frame 38, the continuation
+        frames 43 and 47 have no properties, and the 3013 octet body of
+        frame 46 is kept for the second pass.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('blip_coverage.pcap.gz'),
+                    '-Y', 'blip.frameflags & 0x08 && frame.number < 50',
+                    '-Tfields', '-eframe.number', '-eblip.frameflags',
+                    '-eblip.propslength', '-eblip.props', '-eblip.messagebody',
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            assert lines[:6] == [
+                '38\t0x08\t35\tProfile:getCheckpoint:client:cbl-1\t{"client":"cbl-1","since":"0"}',
+                '39\t0x08\t8\trev:0-2\t{"client":"cbl-1","since":"42"}',
+                '40\t0x18\t43\tProfile:setCheckpoint:client:cbl-1:rev:0-2\t{"client":"cbl-1","since":"42"}',
+                '42\t0x48\t16\tProfile:changes\t[["doc1","1-a"],',
+                '43\t0x08\t\t\t["doc2","1-b"]]',
+                '45\t0x28\t0\t\t',
+            ]
+            frame46 = lines[6].split('\t')
+            assert frame46[:4] == ['46', '0x78', '30', 'Content-Type:application/json']
+            assert len(frame46[4]) == 3013
+            assert frame46[4].startswith('{"rows":[{"id":"doc","rev":"1-a"},')
+            assert lines[7] == '47\t0x18\t\t\t '
+            assert len(lines) == 8
+
+    def test_blip_reproducer(self, cmd_tshark, capture_file, test_env):
+        '''The frames of batch95-119/blip_mix.pcap that decode cleanly
+        (1, 9 and 11) on their own connection: the compressed frames share
+        one stream, and the ACK carries its byte count.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('blip_coverage.pcap.gz'),
+                    '-Y', 'blip && tcp.srcport == 50003',
+                    '-Tfields', '-eframe.number', '-eblip.messagenum',
+                    '-eblip.propslength', '-eblip.props', '-eblip.messagebody',
+                    '-eblip.numackbytes', '-eblip.checksum',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '57\t1\t35\tProfile:subChanges:continuous:true\t{"a":1}\t\t0',
+                '58\t9\t\t\t\t1000\t',
+                '59\t11\t3\ta:b\tbody\t\t0',
+            ]
+
+    def test_blip_two_compressed_in_one_segment(self, cmd_tshark, capture_file, test_env):
+        '''Two compressed BLIP frames in one TCP segment (frame 68) each keep
+        their own inflated data, so the second pass does not show the
+        second message twice.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('blip_coverage.pcap.gz'),
+                    '-Y', 'blip && tcp.srcport == 50004',
+                    '-Tfields', '-eframe.number', '-eblip.messagenum',
+                    '-eblip.props', '-eblip.messagebody',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '68\t1,2\tProfile:a,Profile:b\tfirst body,second body',
+            ]
+
+
+class TestDissectBluecom:
+    def test_bluecom_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every bluecom block command, as request, response and both,
+        decodes without malformed packets or warnings, in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 24
+        assert protocols.count('bluecom') == 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bluecom_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_bluecom_search_response_error(self, cmd_tshark, capture_file, test_env):
+        '''The Search Response summary reads the error code big-endian like
+        its field: an error of 5 is summarized as 5, not 83886080.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'bluecom.searchrsp.error',
+                '-Tfields', '-eframe.number', '-ebluecom.searchrsp.error',
+                '-ebluecom.searchrsp.name', '-ebluecom.searchrsp.ethaddr2',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t5\tslave\t',
+            '9\t16909060\tslave-c\t02:00:00:00:00:05',
+            '10\t6\tboth\t',
+            '22\t5\tslave\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'bluecom.searchrsp.error',
+                '-O', 'bluecom',
+            ), encoding='utf-8', env=test_env)
+        summaries = [l.strip() for l in stdout.splitlines() if 'BCP Search Response:' in l]
+        assert summaries == [
+            'BCP Search Response: Name=slave, IpAddr=192.0.2.1 Error=5',
+            'BCP Search Response: Name=slave-c, IpAddr=192.0.2.2 Error=16909060',
+            'BCP Search Response: Name=both, IpAddr=192.0.2.3 Error=6',
+            'BCP Search Response: Name=slave, IpAddr=192.0.2.1 Error=5',
+        ]
+        assert '83886080' not in stdout
+
+    def test_bluecom_blocks(self, cmd_tshark, capture_file, test_env):
+        '''Several blocks in one frame, a 16-bit segment code, no blocks,
+        user data of DATA blocks and of an unknown command.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'frame.number in {17, 18, 19, 20}',
+                '-Tfields', '-eframe.number', '-ebluecom.hdr.segcode',
+                '-ebluecom.hdr.blocknb', '-ebluecom.hdr.cmd', '-ebluecom.hdr.len',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '17\t4660\t3\t0x01,0x01,0x01\t3,3,3',
+            '18\t2\t2\t0x01,0x09\t0,11',
+            '19\t3\t0\t\t',
+            '20\t4\t5\t0x00,0x01,0x02,0x03,0x04\t12,4,50,40,54',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'bluecom.userdata && frame.number != 18',
+                '-Tfields', '-eframe.number', '-ebluecom.userdata',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '16\t' + b'cyclic-data-0001'.hex(),
+            '17\t616263,616263,616263',
+            '20\t01020304',
+        ]
+
+    def test_bluecom_requests(self, cmd_tshark, capture_file, test_env):
+        '''Search requests of each address type and connect requests and
+        responses, with and without the optional second Ethernet address.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'bluecom.searchreq.addrtype',
+                '-Tfields', '-eframe.number', '-ebluecom.searchreq.addrtype',
+                '-ebluecom.searchreq.name', '-ebluecom.searchreq.ipaddrfirst',
+                '-ebluecom.searchreq.ipaddrlast', '-ebluecom.searchreq.addrdata',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '5\t1\tslave-a\t\t\t',
+            '6\t2\t\t192.0.2.1\t192.0.2.50\t',
+            '7\t7\t\t\t\t' + bytes(range(32)).hex(),
+            '10\t1\tboth\t\t\t',
+            '20\t2\t\t192.0.2.1\t192.0.2.2\t',
+            '23\t2\t\t192.0.2.1\t192.0.2.9\t',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluecom_coverage.pcap.gz'),
+                '-Y', 'bluecom.connectreq.name || bluecom.connectrsp.error',
+                '-Tfields', '-eframe.number', '-ebluecom.connectreq.name',
+                '-ebluecom.connectreq.offlinefactor', '-ebluecom.connectreq.ethaddr2',
+                '-ebluecom.connectrsp.error',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '12\tslave-a\t10\t\t',
+            '13\tslave-b\t3\t02:00:00:00:00:06\t',
+            '14\t\t\t\t7',
+            '15\tboth\t4\t02:00:00:00:00:05\t0',
+            '20\tmulti\t2\t\t',
+        ]
+
+
+class TestDissectBluetooth:
+    def test_bluetooth_protocols(self, cmd_tshark, capture_file, test_env):
+        '''HCI over H4 with and without direction, the Linux monitor and
+        USB, LE Link Layer with and without the RF header and Exported
+        PDUs decode without malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 69
+        assert protocols.count('HCI_CMD') == 10
+        assert protocols.count('HCI_EVT') == 13
+        assert protocols.count('HCI_MON') == 1
+        assert protocols.count('L2CAP') == 2
+        assert protocols.count('SDP') == 4
+        assert protocols.count('ATT') == 13
+        assert protocols.count('LE LL') == 11
+        assert protocols.count('USB') == 6
+        assert protocols.count('Bluetooth') == 3
+        assert protocols.count('') == 6
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout == ''
+
+    def test_bluetooth_encapsulations(self, cmd_tshark, capture_file, test_env):
+        '''Each link type reaches the Bluetooth dissector and the
+        dissector for its header; the direction comes from the
+        pseudo-header or the USB URB.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {1, 32, 35, 37, 43, 51, 53, 64}',
+                '-Tfields', '-eframe.protocols', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'bluetooth:hci_h4:bthci_cmd\tSent Reset',
+            'bluetooth:hci_h4:bthci_cmd\tUnknownDirection Reset',
+            'bluetooth:hci_mon:bthci_cmd\tSent Reset',
+            'bluetooth:btle:btcommon:bluetooth.gaen\tADV_IND',
+            'bluetooth:btle_rf:btle:btcommon\tCONNECT_IND',
+            'usb:bluetooth:hci_usb:bthci_cmd\tSent Reset',
+            'usb:bluetooth:hci_usb:bthci_evt\tRcvd Command Complete (Reset)',
+            'exported_pdu:bluetooth:btle:btcommon\tADV_NONCONN_IND',
+        ]
+
+    def test_bluetooth_exported_pdu(self, cmd_tshark, capture_file, test_env):
+        '''An Exported PDU naming "bluetooth.usb" carries no URB info; it
+        is declined and shown as data instead of crashing. "bluetooth",
+        "bluetooth.bthci" and "bluetooth.btmon" have no encapsulation to
+        dispatch on and show data too.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {60..63}',
+                '-Tfields', '-eexported_pdu.prot_name', '-eframe.protocols', '-edata.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'bluetooth.usb\texported_pdu:data\t01030c00',
+            'bluetooth\texported_pdu:bluetooth:data\t01030c00',
+            'bluetooth.bthci\texported_pdu:bluetooth:data\t01030c00',
+            'bluetooth.btmon\texported_pdu:bluetooth:data\t01030c00',
+        ]
+
+    def test_bluetooth_gaen(self, cmd_tshark, capture_file, test_env):
+        '''GAEN service data in an advertisement and as an Exported PDU;
+        data shorter than 20 octets is declined.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {37, 38, 65, 66}',
+                '-Tfields', '-eframe.number', '-ebluetooth.gaen.rpi', '-ebluetooth.gaen.aemd',
+                '-ebtcommon.eir_ad.entry.service_data', '-edata.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '37\t101112131415161718191a1b1c1d1e1f\ta1b2c3d4\t\t',
+            '38\t\t\t01020304\t',
+            '65\t303132333435363738393a3b3c3d3e3f\t01020304\t\t',
+            '66\t\t\t\t0102030405',
+        ]
+
+    def test_bluetooth_beacons(self, cmd_tshark, capture_file, test_env):
+        '''Matter advertising data of each opcode, AltBeacon and iBeacon.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'bluetooth.matter',
+                '-Tfields', '-eframe.number', '-ebluetooth.matter.opcode',
+                '-ebluetooth.matter.version', '-ebluetooth.matter.discriminator',
+                '-ebluetooth.matter.vendor_id', '-ebluetooth.matter.product_id',
+                '-ebluetooth.matter.recovery_id', '-ebluetooth.matter.flags',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '39\t0x00\t1\t0x0123\t0xfff1\t0x8001\t\t0x01',
+            '40\t0x01\t1\t\t\t\t0x0102030405060708\t0x02',
+            '41\t0x05\t\t\t\t\t\t',
+            '48\t0x00\t0\t0x0f00\t0xfff1\t0x8000\t\t0x00',
+            '69\t0x00\t0\t0x0f00\t0xfff1\t0x8002\t\t0x03',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'alt_beacon || ibeacon',
+                '-Tfields', '-eframe.number', '-ebluetooth.alt_beacon.code',
+                '-ebluetooth.alt_beacon.reference_rssi', '-ebluetooth.apple.ibeacon.uuid128',
+                '-ebluetooth.apple.ibeacon.major', '-ebluetooth.apple.ibeacon.minor',
+                '-ebluetooth.apple.ibeacon.measured_power',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '67\t0xbeac\t-59\t\t\t\t',
+            '68\t\t\t11223344-5566-7788-99aa-bbccddeeff00\t1\t2\t-59',
+        ]
+
+    def test_bluetooth_addresses(self, cmd_tshark, capture_file, test_env):
+        '''In the second pass the Bluetooth layer shows the source and
+        destination that HCI ("host", "controller") and BTLE (BD_ADDR)
+        stored in the first pass.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-Y', 'frame.number in {1, 2, 43, 46}',
+                '-Tfields', '-ebluetooth.src_str', '-ebluetooth.dst_str',
+                '-ebluetooth.src', '-ebluetooth.dst',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'host\tcontroller\t\t',
+            'controller\thost\t\t',
+            '\t\tc0:ff:ee:00:00:04\tc0:ff:ee:00:00:03',
+            '\t\tc0:ff:ee:00:00:04\tc0:ff:ee:00:00:03',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-qz', 'conv,bluetooth',
+            ), encoding='utf-8', env=test_env)
+        conv = [line.split()[:3] for line in stdout.splitlines() if '<->' in line]
+        assert ['host', '<->', 'controller'] in conv
+        assert ['c0:ff:ee:00:00:04', '<->', 'c0:ff:ee:00:00:03'] in conv
+
+    def test_bluetooth_uuids(self, cmd_tshark, capture_file, test_env):
+        '''UUIDs of 16, 32 and 128 bits are collapsed to 16 bits where
+        possible and named from the built-in table, the built-in custom
+        UUIDs and the custom UUID preference.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('bluetooth_coverage.pcapng.gz'),
+                '-o', 'uat:bluetooth_uuids:"11223344-5566-7788-99AA-BBCCDDEEFF00","Coverage Custom","FALSE"',
+                '-o', 'uat:bluetooth_uuids:"12345678","Coverage 32","FALSE"',
+                '-o', 'uat:bluetooth_uuids:"3fff","Coverage 16","FALSE"',
+                '-Y', 'frame.number in {18, 26}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Sent Service Search Request : L2CAP: Coverage 16: Serial Port: Coverage 32: '
+            'Audio Source: SyncML Client: Coverage Custom',
+            'Rcvd Read By Group Type Response, Attribute List Length: 1, Apple Notification Center Service',
+        ]
