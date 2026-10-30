@@ -39,7 +39,7 @@ if(NOT "c_std_17" IN_LIST CMAKE_C_COMPILE_FEATURES)
 	message(FATAL_ERROR "The C compiler you're using does not support C17, but Wireshark and Stratoshark require it; use GCC or Clang.")
 endif()
 if(NOT "cxx_std_17" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
-	message(FATAL_ERROR "The C++ compiler you're using does not support C17, but Wireshark and Stratoshark require it; use GCC or Clang.")
+	message(FATAL_ERROR "The C++ compiler you're using does not support C++17, but Wireshark and Stratoshark require it; use GCC or Clang.")
 endif()
 
 #
@@ -2312,6 +2312,7 @@ set(TSHARK_TAP_SRC
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-iostat.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-iousers.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-macltestat.c
+	${CMAKE_SOURCE_DIR}/ui/cli/tap-mkastat.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-oran.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-protocolinfo.c
 	${CMAKE_SOURCE_DIR}/ui/cli/tap-protohierstat.c
@@ -2513,58 +2514,27 @@ if(USE_REPOSITORY)
 	# need libunwind.
 	if (SINSP_FOUND AND FALCO_PLUGIN_DIR AND FALCO_PLUGIN_DLLS)
 		list(TRANSFORM FALCO_PLUGIN_DLLS PREPEND "${FALCO_PLUGIN_DIR}/" OUTPUT_VARIABLE _falco_plugin_dlls)
-		ws_add_runtime_dlls(${_falco_plugin_dlls})
+		ws_add_runtime_dlls(${_falco_plugin_dlls} ONLY_FOR stratoshark)
 	endif()
 
 	if (SMI_FOUND)
 		# Wireshark.nsi wants SMI_DIR which is the base SMI directory
 		get_filename_component(SMI_DIR ${SMI_DLL_DIR} DIRECTORY)
 
-		#Make the initial output directory for the SMI MIBs.
-		add_custom_command(TARGET copy_cli_dlls PRE_BUILD
-			COMMAND ${CMAKE_COMMAND} -E make_directory
-				"${_dll_output_dir}/snmp"
-		)
-
-		set(SMI_MIBS)
-
-		#List of the subdirectories in the SMI share directory that contain desired MIBs.
-		set(MIB_DIRS "mibs" "pibs" "yang")
-
-		foreach( _mib_dir ${MIB_DIRS} )
-
-			set(MIBS_FILES "")
-
-			#Make the necessary output directories for the SMI MIBs.
+		# Copy and install the directories of SMI modules (MIBs, PIBs and YANG
+		# modules) that we use, including their subdirectories, such as
+		# mibs/iana and mibs/ietf. This is the same layout as in the NSIS
+		# installer. We search the snmp directory recursively for modules.
+		cmake_path(SET _snmp_install_dir NORMALIZE "${CMAKE_INSTALL_BINDIR}/snmp")
+		foreach(_mib_dir mibs pibs yang)
 			add_custom_command(TARGET copy_cli_dlls PRE_BUILD
-				COMMAND ${CMAKE_COMMAND} -E make_directory
+				COMMAND ${CMAKE_COMMAND} -E copy_directory
+					"${SMI_SHARE_DIR}/${_mib_dir}"
 					"${_dll_output_dir}/snmp/${_mib_dir}"
 			)
-
-			#Grab everything in the subdirectory, but only keep the files.
-			file(GLOB_RECURSE POTENTIAL_MIBS_FILES
-				RELATIVE "${SMI_SHARE_DIR}/${_mib_dir}/*"
-				CONFIGURE_DEPENDS "${SMI_SHARE_DIR}/${_mib_dir}/*"
+			install(DIRECTORY "${SMI_SHARE_DIR}/${_mib_dir}"
+				DESTINATION "${_snmp_install_dir}"
 			)
-			foreach(_path ${POTENTIAL_MIBS_FILES})
-				if(NOT IS_DIRECTORY "${_path}")
-					list(APPEND MIBS_FILES "${_path}")
-				endif()
-			endforeach()
-
-			add_custom_command(TARGET copy_cli_dlls PRE_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_directory
-				"${SMI_SHARE_DIR}/${_mib_dir}"
-				"${_dll_output_dir}/snmp/${_mib_dir}"
-			)
-
-			#Keep track of the MIBs for packaging and installation.
-			list (APPEND SMI_MIBS ${MIBS_FILES})
-
-			#Add the MIBs to the list of files to be installed.
-			cmake_path(SET MIBS_INSTALL_DIR NORMALIZE "${CMAKE_INSTALL_BINDIR}/snmp/${_mib_dir}")
-			install(FILES ${SMI_MIBS} DESTINATION "${MIBS_INSTALL_DIR}")
-
 		endforeach()
 
 	endif(SMI_FOUND)
