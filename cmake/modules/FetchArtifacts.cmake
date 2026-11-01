@@ -38,7 +38,7 @@ elseif(WIN32)
   set(ARTIFACTS_DIR ${_PROJECT_LIB_DIR})
   set(download_prefix "https://dev-libs.wireshark.org/windows/packages")
   # Make sure we look for our fetched artifacts first.
-  set(asciidoctor_version "2.0.23-1")
+  set(asciidoctor_version "2.0.26-1")
   set(Asciidoctor_ROOT ${ARTIFACTS_DIR}/asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws)
   set(WIRESHARK_XML_CATALOG_PATH ${Asciidoctor_ROOT}/etc/xml/catalog.xml)
   set(WIN_FLEX_BISON_DIR ${ARTIFACTS_DIR}/win_flex_bison)
@@ -54,6 +54,10 @@ list(APPEND CMAKE_PREFIX_PATH ${ARTIFACTS_DIR})
 set(manifest_file ${ARTIFACTS_DIR}/manifest.txt)
 
 set(artifacts)
+
+# The DocBook releases we use haven't changed in years. Fetch our copies
+# instead of depending on more sites being up.
+set(docbook_download_prefix "https://dev-libs.wireshark.org/src/docbook")
 
 function(add_artifact archive_path sha256_hash)
   # XXX Should this be a list of lists instead?
@@ -207,6 +211,47 @@ function(update_artifacts)
   endif()
 endfunction()
 
+# Unset the cache entries that point into package directories in
+# ARTIFACTS_DIR that no longer exist, e.g. because update_artifacts()
+# removed them when the package was updated. find_*() doesn't search
+# again while its result variable is set, even if the cached path is
+# gone. FindWSWinLibs clears entries for the packages it's used for, but
+# not every Find module uses it, e.g. FindAsciidoctor relies on
+# Asciidoctor_ROOT. Doing this on every run also repairs build
+# directories whose cache went stale on an earlier run.
+# This is only needed on Windows, where each package is in its own
+# versioned directory. On macOS packages share a common prefix whose
+# paths don't change when a package is updated.
+function(unset_cache_entries_in_missing_artifact_dirs)
+  string(LENGTH "${ARTIFACTS_DIR}/" prefix_len)
+  set(unset_vars)
+  get_cmake_property(cache_vars CACHE_VARIABLES)
+  foreach(var IN LISTS cache_vars)
+    get_property(type CACHE ${var} PROPERTY TYPE)
+    if(NOT type MATCHES "^(FILEPATH|PATH|STRING)$")
+      continue()
+    endif()
+    get_property(value CACHE ${var} PROPERTY VALUE)
+    foreach(item IN LISTS value)
+      string(FIND "${item}" "${ARTIFACTS_DIR}/" pos)
+      if(NOT pos EQUAL 0)
+        continue()
+      endif()
+      string(SUBSTRING "${item}" ${prefix_len} -1 subpath)
+      string(REGEX REPLACE "/.*" "" subdir "${subpath}")
+      if(NOT IS_DIRECTORY "${ARTIFACTS_DIR}/${subdir}")
+        unset(${var} CACHE)
+        list(APPEND unset_vars ${var})
+        break()
+      endif()
+    endforeach()
+  endforeach()
+  if(unset_vars)
+    list(JOIN unset_vars ", " unset_vars)
+    message(STATUS "Clearing cached paths to removed artifacts: ${unset_vars}")
+  endif()
+endfunction()
+
 set(need_falco_libs FALSE)
 if(BUILD_stratoshark OR BUILD_strato OR BUILD_falcodump OR BUILD_dumpcalls)
   set(need_falco_libs TRUE)
@@ -214,9 +259,9 @@ endif()
 
 if(APPLE)
   if (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
-    add_artifact(asciidoctor/asciidoctor-bundle-2.0.23-1-macos-arm64.tar.xz e6ea01ed3a7bb50aba373d3243ef4619d0bc1141e6deb576a30b479bf1a0a4b0)
+    add_artifact(asciidoctor/asciidoctor-bundle-2.0.26-1-macos-arm64.tar.xz 4897f7b49502700d02d7969373cee05734c0b6a3dda27abe7e0922ec91ca6417)
   else()
-    add_artifact(asciidoctor/asciidoctor-bundle-2.0.23-1-macos-x86_64.tar.xz c033d8873a1c9833fadf5ce97be5fc7321c4bef8485776a27cd6284233641301)
+    add_artifact(asciidoctor/asciidoctor-bundle-2.0.26-1-macos-x86_64.tar.xz f3d1b5754987fb2ce250c1c2bd231ac8b943f161ed33534596e94ca05019fd01)
   endif()
   add_artifact(bcg729/bcg729-1.1.1-1-macos-universal.tar.xz 0e302ac5816fbff353d33a428d25eeaad04d5e2ccd6df20a0003f14431aa63a4)
   add_artifact(brotli/brotli-1.2.1-1-macos-universal.tar.xz ad8b66d3378aaee87e56eb7c0a9282f483a156b1553b2f705618843cc0536300)
@@ -243,9 +288,9 @@ if(APPLE)
   add_artifact(zlib-ng/zlib-ng-2.2.4-1-macos-universal.tar.xz 52f1f054be4c97320b4417ebad5d4d8e278f615efac8fbec94abb4986100cbb0)
   add_artifact(zstd/zstd-1.5.7-1-macos-universal.tar.xz a7bfa6fdc228badbe30da5b89fc875e1c9bad52ee692df117aba9721798249d0)
 
-  add_external_artifact(https://archive.docbook.org/xml/5.0.1/docbook-5.0.1.zip 7af9df452410e035a3707883e43039b4062f09dc2f49f2e986da3e4c0386e3c7 etc/xml)
-  add_external_artifact(https://github.com/docbook/xslt10-stylesheets/releases/download/release%2F1.79.2/docbook-xsl-1.79.2.zip 853dce096f5b32fe0b157d8018d8fecf92022e9c79b5947a98b365679c7e31d7 etc/xml)
-  add_external_artifact(https://github.com/docbook/xslt10-stylesheets/releases/download/release%2F1.79.2/docbook-xsl-nons-1.79.2.zip ba41126fbf4021e38952f3074dc87cdf1e50f3981280c7a619f88acf31456822 etc/xml)
+  add_external_artifact(${docbook_download_prefix}/docbook-5.0.1.zip 7af9df452410e035a3707883e43039b4062f09dc2f49f2e986da3e4c0386e3c7 etc/xml)
+  add_external_artifact(${docbook_download_prefix}/docbook-xsl-1.79.2.zip 853dce096f5b32fe0b157d8018d8fecf92022e9c79b5947a98b365679c7e31d7 etc/xml)
+  add_external_artifact(${docbook_download_prefix}/docbook-xsl-nons-1.79.2.zip ba41126fbf4021e38952f3074dc87cdf1e50f3981280c7a619f88acf31456822 etc/xml)
 
   file(MAKE_DIRECTORY ${ARTIFACTS_DIR}/sparkle)
   add_external_artifact(https://github.com/sparkle-project/Sparkle/releases/download/2.7.3/Sparkle-2.7.3.tar.xz 4146b751cf53f54ad0bacb63b4d2fa412d8edc10bd0939dd25b5866f0c8c5094 sparkle)
@@ -320,18 +365,22 @@ elseif(WIN32)
       add_artifact(falcosecurity-libs/falcosecurity-plugins-2026-03-16-2-x64-ws.7z 3a90c406e1c8e62175ac138f12046554b4c49a2303012e2c9680bd1f48fdc114)
     endif()
   endif()
-  add_artifact(asciidoctor/asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws.7z d1dae73dd61ded005b8f1f2d7d19bd08e6edbeed216428e8ab898267229d150b)
-  add_external_artifact(https://archive.docbook.org/xml/5.0.1/docbook-5.0.1.zip 7af9df452410e035a3707883e43039b4062f09dc2f49f2e986da3e4c0386e3c7 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
-  add_external_artifact(https://github.com/docbook/xslt10-stylesheets/releases/download/release%2F1.79.2/docbook-xsl-1.79.2.zip 853dce096f5b32fe0b157d8018d8fecf92022e9c79b5947a98b365679c7e31d7 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
-  add_external_artifact(https://github.com/docbook/xslt10-stylesheets/releases/download/release%2F1.79.2/docbook-xsl-nons-1.79.2.zip ba41126fbf4021e38952f3074dc87cdf1e50f3981280c7a619f88acf31456822 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
+  add_artifact(asciidoctor/asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws.7z 626a21bf9cff6dfba9284a9c4ed459cd348ee635b7025808e2675aecf905f7a3)
+  add_external_artifact(${docbook_download_prefix}/docbook-5.0.1.zip 7af9df452410e035a3707883e43039b4062f09dc2f49f2e986da3e4c0386e3c7 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
+  add_external_artifact(${docbook_download_prefix}/docbook-xsl-1.79.2.zip 853dce096f5b32fe0b157d8018d8fecf92022e9c79b5947a98b365679c7e31d7 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
+  add_external_artifact(${docbook_download_prefix}/docbook-xsl-nons-1.79.2.zip ba41126fbf4021e38952f3074dc87cdf1e50f3981280c7a619f88acf31456822 asciidoctor-bundle-${asciidoctor_version}-x64-windows-ws/etc/xml)
   file(MAKE_DIRECTORY ${WIN_FLEX_BISON_DIR})
   add_external_artifact(https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip 8d324b62be33604b2c45ad1dd34ab93d722534448f55a16ca7292de32b6ac135 win_flex_bison)
 endif()
 
 update_artifacts()
+if(WIN32)
+  unset_cache_entries_in_missing_artifact_dirs()
+endif()
 
 unset(manifest_file)
 unset(download_prefix)
+unset(docbook_download_prefix)
 unset(artifacts)
 unset(need_falco_libs)
 unset(asciidoctor_version)
