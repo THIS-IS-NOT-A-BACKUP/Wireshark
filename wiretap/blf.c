@@ -1605,7 +1605,7 @@ blf_read_ethernetframe(blf_params_t *params, int *err, char **err_info, int64_t 
     tmpbuf[10] = ethheader.src_addr[4];
     tmpbuf[11] = ethheader.src_addr[5];
 
-    if (ethheader.tpid != 0 && ethheader.tci != 0) {
+    if (ethheader.tpid != 0) {  /* A valid VLAN tag can have a TCI of 0. */
         phtonu16(tmpbuf + 12, ethheader.tpid);
         phtonu16(tmpbuf + 14, ethheader.tci);
         phtonu16(tmpbuf + 16, ethheader.ethtype);
@@ -1905,9 +1905,9 @@ blf_read_canfdmessage(blf_params_t *params, int *err, char **err_info, int64_t b
 
     payload_length_valid = payload_length;
 
-    if (payload_length_valid > object_length - (data_start - block_start) + sizeof(canheader)) {
+    if (payload_length_valid > object_length - (data_start - block_start) - sizeof(canheader)) {
         ws_debug("shortening can payload because buffer is too short.");
-        payload_length_valid = (uint8_t)(object_length - (data_start - block_start));
+        payload_length_valid = (uint8_t)(object_length - (data_start - block_start) - sizeof(canheader));
     }
 
     if (!blf_can_fill_buf_and_rec(params, err, err_info, canid, payload_length, payload_length_valid, data_start + sizeof(canheader), flags, object_timestamp, canheader.channel, canfd_flags)) {
@@ -1970,9 +1970,9 @@ blf_read_canfdmessage64(blf_params_t *params, int *err, char **err_info, int64_t
 
     payload_length_valid = payload_length;
 
-    if (payload_length_valid > object_length - (data_start - block_start)) {
+    if (payload_length_valid > object_length - (data_start - block_start) - sizeof(canheader)) {
         ws_debug("shortening can payload because buffer is too short.");
-        payload_length_valid = (uint8_t)(object_length - (data_start - block_start));
+        payload_length_valid = (uint8_t)(object_length - (data_start - block_start) - sizeof(canheader));
     }
 
     if (!blf_can_fill_buf_and_rec(params, err, err_info, canid, payload_length, payload_length_valid, data_start + sizeof(canheader), flags, object_timestamp, canheader.channel, canfd_flags)) {
@@ -2263,7 +2263,24 @@ blf_read_canxlchannelframe(blf_params_t *params, int *err, char **err_info, int6
         bool canfd = canxlheader.flags & BLF_CANXLCHANNELFRAME_FLAG_FDF;
         uint8_t canfd_flags = 0;
 
+        if (object_length < (data_start - block_start) + (int)sizeof(canxlheader) + payload_length) {
+            ws_debug("shortening canxl for can/canfd payload because buffer is too short.");
+            object_length = (data_start - block_start) + (int)sizeof(canxlheader) + payload_length;
+        }
+
         if (canfd) {
+            if (payload_length > 64) {
+                ws_debug("CANFD should not have payload_length > 64. Shortening!");
+                payload_length = 64;
+            }
+
+            if (canxlheader.dlc > 0x0f) {
+                ws_debug("CANFD should not have DLC > 0x0f.");
+            } else if (payload_length > canfd_dlc_to_length[canxlheader.dlc]) {
+                ws_debug("CANFD payload_length and DLC not compatible!");
+            }
+
+
             if ((canxlheader.flags & BLF_CANXLCHANNELFRAME_FLAG_BRS) == BLF_CANXLCHANNELFRAME_FLAG_BRS) {
                 canfd_flags |= CANFD_BRS;
             }
@@ -2274,8 +2291,15 @@ blf_read_canxlchannelframe(blf_params_t *params, int *err, char **err_info, int6
                 canfd_flags |= CANFD_FDF;
             }
         } else {
+            if (payload_length > 8) {
+                ws_debug("Regular CAN should not have payload_length > 8. Shortening!");
+                payload_length = 8;
+            }
+
             if (canxlheader.dlc > 8) {
                 ws_debug("Regular CAN should not have DLC > 8.");
+            } else if (payload_length != canxlheader.dlc) {
+                ws_debug("CAN payload_length and DLC not compatible!");
             }
 
             canfd_flags = 0;

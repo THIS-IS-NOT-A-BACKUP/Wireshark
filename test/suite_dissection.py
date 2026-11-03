@@ -32215,3 +32215,5555 @@ class TestDissectDcerpcBossvr:
                 value = (0x1000 + opnum).to_bytes(4, 'little' if le else 'big').hex()
                 assert lines[conn * 70 + 2 * opnum] == '%d\t%s request\t%s' % (opnum, name, value)
                 assert lines[conn * 70 + 2 * opnum + 1] == '%d\t%s response\t%s00000000' % (opnum, name, value)
+
+
+class TestDissectDcerpcBrowser:
+    def test_browser_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 23 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 164
+        assert protocols.count('RPC_BROWSER') == 140
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_browser_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t6bffd098-a112-3610-9833-012892020162\t0\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t6bffd098-a112-3610-9833-012892020162\t0\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t6bffd098-a112-3610-9833-012892020162\t0\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_browser_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with its status code and Info column; the same in
+        all three connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Y', 'rpc_browser',
+                '-Tfields', '-ebrowser.opnum', '-ebrowser.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 140
+        calls = [
+            '0\t\tBrowserrServerEnum request',
+            '0\t0x00000000\tBrowserrServerEnum response',
+            '0\t\tBrowserrServerEnum request',
+            '0\t0x000000ea\tBrowserrServerEnum response, Error: WERR_MORE_DATA',
+            '1\t\tBrowserrDebugCall request',
+            '1\t0x00000032\tBrowserrDebugCall response, Error: WERR_NOT_SUPPORTED',
+            '1\t\tBrowserrDebugCall request',
+            '1\t0x00000000\tBrowserrDebugCall response',
+            '2\t\tBrowserrQueryOtherDomains request',
+            '2\t0x00000000\tBrowserrQueryOtherDomains response',
+            '2\t\tBrowserrQueryOtherDomains request',
+            '2\t0x00000005\tBrowserrQueryOtherDomains response, Error: WERR_ACCESS_DENIED',
+            '3\t\tBrowserrResetNetlogonState request',
+            '3\t0x00000000\tBrowserrResetNetlogonState response',
+            '3\t\tBrowserrResetNetlogonState request',
+            '3\t0x00000005\tBrowserrResetNetlogonState response, Error: WERR_ACCESS_DENIED',
+            '4\t\tBrowserrDebugTrace request',
+            '4\t0x00000000\tBrowserrDebugTrace response',
+            '4\t\tBrowserrDebugTrace request',
+            '4\t0x00000005\tBrowserrDebugTrace response, Error: WERR_ACCESS_DENIED',
+            '5\t\tBrowserrQueryStatistics request',
+            '5\t0x00000000\tBrowserrQueryStatistics response',
+            '5\t\tBrowserrQueryStatistics request',
+            '5\t0x00000005\tBrowserrQueryStatistics response, Error: WERR_ACCESS_DENIED',
+            '6\t\tBrowserrResetStatistics request',
+            '6\t0x00000000\tBrowserrResetStatistics response',
+            '6\t\tBrowserrResetStatistics request',
+            '6\t0x00000005\tBrowserrResetStatistics response, Error: WERR_ACCESS_DENIED',
+            '7\t\tNetrBrowserStatisticsClear request',
+            '7\t0x00000005\tNetrBrowserStatisticsClear response, Error: WERR_ACCESS_DENIED',
+            '7\t\tNetrBrowserStatisticsClear request',
+            '7\t0x00000000\tNetrBrowserStatisticsClear response',
+            '8\t\tNetrBrowserStatisticsGet request',
+            '8\t0x00000057\tNetrBrowserStatisticsGet response, Error: WERR_INVALID_PARAMETER',
+            '9\t\tBrowserrSetNetlogonState request',
+            '9\t0x00000000\tBrowserrSetNetlogonState response',
+            '9\t\tBrowserrSetNetlogonState request',
+            '9\t0x00000005\tBrowserrSetNetlogonState response, Error: WERR_ACCESS_DENIED',
+            '10\t\tBrowserrQueryEmulatedDomains request',
+            '10\t0x00000000\tBrowserrQueryEmulatedDomains response',
+            '10\t\tBrowserrQueryEmulatedDomains request',
+            '10\t0x00000005\tBrowserrQueryEmulatedDomains response, Error: WERR_ACCESS_DENIED',
+            '11\t\tBrowserrServerEnumEx request',
+            '11\t0x00000000\tBrowserrServerEnumEx response',
+            '11\t\tBrowserrServerEnumEx request',
+            '11\t0x00000005\tBrowserrServerEnumEx response, Error: WERR_ACCESS_DENIED',
+        ]
+        assert lines[0:46] == calls
+        assert lines[46:48] == ['12\t\tUnknown operation 12 request',
+                                '12\t\tUnknown operation 12 response']
+        assert lines[48:94] == calls
+        assert lines[94:140] == calls
+
+    def test_browser_info101_entries(self, cmd_tshark, capture_file, test_env):
+        '''The NetSrvInfo101 entries of a BrowserrSrvInfo101Ctr are labelled
+        with the info 101 field, not the info 100 one ("RPC Browser: Label
+        the info 101 entries with their own field").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Y', 'browser.BrowserrSrvInfo101Ctr.entries_read > 0',
+                '-Tfields', '-eframe.number', '-ebrowser.BrowserrSrvInfo101Ctr.entries_read',
+                '-esrvsvc.srvsvc_NetSrvInfo101.server_name',
+                '-esrvsvc.srvsvc_NetSrvInfo101.version_major',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '9\t3\tFILESRV,X\t10,4,6',
+            '49\t1\tFILESRV\t10',
+            '65\t3\tFILESRV,X\t10,4,6',
+            '105\t1\tFILESRV\t10',
+            '119\t3\tFILESRV,X\t10,4,6',
+            '159\t1\tFILESRV\t10',
+        ]
+        for count, frames in ((3, '9\n65\n119\n'), (1, '49\n105\n159\n')):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                    '-Y', 'count(browser.BrowserrSrvInfo101Ctr.entries) == %d'
+                          ' && !browser.BrowserrSrvInfo100Ctr.entries' % count,
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert stdout == frames
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Y', 'count(browser.BrowserrSrvInfo100Ctr.entries) == 3',
+                '-Tfields', '-eframe.number', '-esrvsvc.srvsvc_NetSrvInfo100.server_name',
+                '-esrvsvc.srvsvc_NetSrvInfo100.platform_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '7\t\\\\\\\\FILESRV,DC1\t500,400,600',
+            '63\t\\\\\\\\FILESRV,DC1\t500,400,600',
+            '117\t\\\\\\\\FILESRV,DC1\t500,400,600',
+        ]
+
+    def test_browser_values(self, cmd_tshark, capture_file, test_env):
+        '''Decoded arguments in NDR64 (the third connection): strings,
+        the statistics (TYPE_2), the emulated domains byte array (TYPE_4)
+        and the total entries.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_browser_coverage.pcap.gz'),
+                '-Y', 'rpc_browser && tcp.port == 50003',
+                '-Tfields', '-ebrowser.BrowserrServerEnum.unknown7',
+                '-ebrowser.BrowserrDebugTrace.unknown2', '-ebrowser.TYPE_1.unknown',
+                '-ebrowser.TYPE_2.unknown4', '-ebrowser.TYPE_2.unknown18',
+                '-ebrowser.TYPE_4.unknown2', '-ebrowser.BrowserrSetNetlogonState.unknown2',
+                '-ebrowser.BrowserrQueryOtherDomains.total_entries',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert len(lines) == 46
+        assert lines[0][0] == 'WORKGROUP'
+        assert lines[16][1] == 'c:\\\\trace.log'
+        assert lines[21][2:5] == ['72623859790382856,72623859790382857,72623859790382858,72623859790386952',
+                                  '84281352', '84281366']
+        assert lines[39][5] == '1,2,3,4,5,6,7,8'
+        assert lines[34][6] == 'DOMAIN'
+        assert lines[9][7] == '2'
+
+
+class TestDissectDcerpcBudb:
+    @staticmethod
+    def budb_calls():
+        '''One connection's calls: (opnum, return code of the response).'''
+        ok, denied = 0, 0xc0000022
+        calls = [(0, ok), (0, denied), (1, ok), (2, ok), (3, 0x0b4d7b06),
+                 (4, ok), (4, ok), (5, ok), (5, denied), (6, ok), (7, ok), (7, ok),
+                 (8, ok), (9, ok), (10, ok), (10, denied), (11, ok), (11, denied),
+                 (12, ok), (12, denied)]
+        calls += [(op, ok) for op in range(13, 18)]
+        calls += [(18, denied)]
+        calls += [(op, ok) for op in range(19, 25)]
+        calls += [(25, ok), (25, ok), (26, ok), (27, ok), (28, ok)]
+        lines = []
+        for op, rc in calls:
+            lines.append('%d\t' % op)
+            lines.append('%d\t0x%08x' % (op, rc))
+        return lines
+
+    def test_budb_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 37 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 248
+        assert protocols.count('BUDB') == 224
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_budb_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\teb814e2a-0099-11ca-8678-02608c2ea96e\t4\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\teb814e2a-0099-11ca-8678-02608c2ea96e\t4\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\teb814e2a-0099-11ca-8678-02608c2ea96e\t4\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_budb_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum and the return code of every response in all three
+        connections, and the Info column of some calls.'''
+        for stream, extra in ((0, ['29\t', '29\t']), (1, []), (2, [])):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                    '-Y', 'budb && tcp.stream == %d' % stream,
+                    '-Tfields', '-ebudb.opnum', '-ebudb.rc',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == self.budb_calls() + extra
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                '-Y', 'frame.number in {9, 15, 57, 80}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'AddVolume response, STATUS_ACCESS_DENIED',
+            'DeleteTape response, Unknown error 0x0b4d7b06',
+            'FreeLock response, STATUS_ACCESS_DENIED',
+            'Unknown operation 29 request',
+        ]
+
+    def test_budb_entries(self, cmd_tshark, capture_file, test_env):
+        '''Dump entries with their tape set and principal, tape and volume
+        entries and the database header; the same in all three
+        connections.'''
+        dumps = ('1\t0\t5', '1\t1001\t5', '6\t1001\t0', '7\t1001\t5', '7\t1001\t5',
+                 '8\t1001\t4', '8\t1001\t0')
+        rest = '\tuser.vs\t/full/incr1\tuser.vs.incr1\ttapesrv.example\tuser.vs.incr1.%d\tadmin\texample.com\t4'
+        for stream in (0, 1, 2):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                    '-Y', 'budb.dumpEntry.id && tcp.stream == %d' % stream,
+                    '-Tfields', '-ebudb.opnum', '-ebudb.dumpEntry.id',
+                    '-ebudb.dumpEntry.flags', '-ebudb.dumpEntry.volumeSetName',
+                    '-ebudb.dumpEntry.dumpPath', '-ebudb.dumpEntry.name',
+                    '-ebudb.tapeSet.tapeServer', '-ebudb.tapeSet.format',
+                    '-ebudb.principal.name', '-ebudb.principal.cell',
+                    '-ebudb.principal.spare4',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [d + rest for d in dumps]
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                    '-Y', '(budb.tapeEntry.name || budb.volumeEntry.name || budb.DbHeader.cell) && tcp.stream == %d' % stream,
+                    '-Tfields', '-ebudb.opnum', '-ebudb.tapeEntry.name',
+                    '-ebudb.tapeEntry.flags', '-ebudb.tapeEntry.tapeid',
+                    '-ebudb.volumeEntry.name', '-ebudb.volumeEntry.id',
+                    '-ebudb.volumeEntry.server', '-ebudb.volumeEntry.tape',
+                    '-ebudb.DbHeader.cell', '-ebudb.DbHeader.lastTapeId',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '0\t\t\t\tuser.alice\t4294967811\tfs1.example\tuser.vs.incr1.1\t\t',
+                '0\t\t\t\t\t18446744073709551615\t\t\t\t',
+                '3\tuser.vs.incr1.1\t2\t77\t\t\t\t\t\t',
+                '9\tuser.vs.incr1.1\t32\t77\t\t\t\t\t\t',
+                '13\tuser.vs.incr1.1\t4\t77\t\t\t\t\t\t',
+                '23\t\t\t\t\t\t\t\texample.com\t77',
+            ]
+
+    def test_budb_names(self, cmd_tshark, capture_file, test_env):
+        '''Name strings behind full pointers, and NULL pointers, in the
+        requests, in NDR64 (the third connection).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                '-Y', 'budb.opnum in {4, 5, 6, 7, 10, 11, 12, 25, 26} && dcerpc.pkt_type == 0 && tcp.stream == 2',
+                '-Tfields', '-ebudb.opnum', '-ebudb.DeleteVDP.dsname',
+                '-ebudb.DeleteVDP.dumpPath', '-ebudb.FindClone.volName',
+                '-ebudb.FindDump.volName', '-ebudb.FindLatestDump.vsname',
+                '-ebudb.FindLatestDump.dname', '-ebudb.GetDumps.name',
+                '-ebudb.GetTapes.name', '-ebudb.GetVolumes.name',
+                '-ebudb.T_DumpHashTable.filename', '-ebudb.T_DumpDatabase.filename',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '4\tuser.vs\t/full/incr1' + '\t' * 9,
+            '4' + '\t' * 11,
+            '5\t\t\tuser.alice' + '\t' * 8,
+            '5' + '\t' * 11,
+            '6' + '\t' * 4 + 'user.alice' + '\t' * 7,
+            '7' + '\t' * 5 + 'user.vs' + '\t' * 6,
+            '7' + '\t' * 6 + 'user.vs.incr1' + '\t' * 5,
+            '10' + '\t' * 7 + 'user.vs' + '\t' * 4,
+            '10' + '\t' * 11,
+            '11' + '\t' * 8 + 'user.vs.incr1.1' + '\t' * 3,
+            '11' + '\t' * 11,
+            '12' + '\t' * 9 + 'user.alice' + '\t' * 2,
+            '12' + '\t' * 11,
+            '25' + '\t' * 10 + '/tmp/budb.hash\t',
+            '25' + '\t' * 11,
+            '26' + '\t' * 11 + '/tmp/budb.dump',
+        ]
+
+    def test_budb_results(self, cmd_tshark, capture_file, test_env):
+        '''Output values of the responses: clone time, list indexes, an
+        empty dump list, lock and instance handles, DbVerify, empty text
+        blocks and an empty interface list.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_budb_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 2 && tcp.stream == 1 && budb.opnum in {10, 12, 13, 14, 15, 19, 20, 21, 22, 24, 27}',
+                '-Tfields', '-ebudb.opnum', '-ebudb.GetDumps.nextIndex',
+                '-ebudb.dumpList.dumpList_len', '-ebudb.volumeList.volumeList_len',
+                '-ebudb.UseTape.new', '-ebudb.charListT.charListT_len',
+                '-ebudb.GetTextVersion.tversion', '-ebudb.GetInstanceId.instanceId',
+                '-ebudb.GetLock.lockHandle', '-ebudb.DbVerify.orphans', '-ebudb.DbVerify.host',
+                '-ebudb.DumpDB.flags', '-ebudb.T_GetVersion.majorVersion',
+                '-ebudb.dfs_interfaceList.dfs_interfaceList_len',
+            ), encoding='utf-8', env=test_env)
+        assert [l.rstrip('\t') for l in stdout.splitlines()] == [
+            '10\t-1\t0',
+            '10\t-1',
+            '12\t\t\t0',
+            '12',
+            '13\t\t\t\t1',
+            '14\t\t\t\t\t0',
+            '15\t\t\t\t\t\t9',
+            '19\t\t\t\t\t\t\t12',
+            '20\t\t\t\t\t\t\t\t55',
+            '21\t\t\t\t\t\t\t\t\t2\t167772161',
+            '22\t\t\t\t\t0\t\t\t\t\t\t1',
+            '24\t\t\t\t\t\t\t\t\t\t\t\t1',
+            '27\t\t\t\t\t\t\t\t\t\t\t\t\t0',
+        ]
+
+
+class TestDissectDcerpcButc:
+    @staticmethod
+    def butc_tree(cmd_tshark, capture_file, test_env, passes):
+        '''The BUTC trees of every frame, without the DCE/RPC request and
+        response links that only the second pass adds.'''
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-V', '-O', 'butc',
+            ), encoding='utf-8', env=test_env)
+        return [l.split(', [Resp: #')[0]
+                for l in stdout.splitlines()
+                if not l.lstrip().startswith(('[Response in frame', '[Request in frame', '[Time from request'))]
+
+    def test_butc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is BUTC and none is malformed or has an expert
+        info, in one and two passes, and both passes decode the same.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 82
+        assert protocols.count('BUTC') == 82
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        assert self.butc_tree(cmd_tshark, capture_file, test_env, ()) == \
+            self.butc_tree(cmd_tshark, capture_file, test_env, ('-2',))
+
+    def test_butc_opnums(self, cmd_tshark, capture_file, test_env):
+        '''A request and a response for every opnum 0-13, in little and
+        big endian, and the return codes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 56',
+                '-Tfields', '-edcerpc.pkt_type', '-ebutc.opnum', '-ebutc.rc',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        expected = []
+        for rc in ('', '0xc0000022'):
+            for op in range(14):
+                expected += ['0\t%d\t' % op, '2\t%d\t%s' % (op, rc or '0x00000000')]
+        assert lines == expected
+
+    def test_butc_restore(self, cmd_tshark, capture_file, test_env):
+        '''Restore descriptors behind embedded pointers (one NULL), their
+        flags bits in little and big endian (frame 82 is the reproducer
+        butc_flags_be.py), and an unknown flag bit.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Y', 'butc.tc_restoreDesc.flags',
+                '-Tfields', '-Eseparator=|', '-eframe.number',
+                '-ebutc.BUTC_PerformRestore.dumpSetName',
+                '-ebutc.tc_restoreDesc.tapeName',
+                '-ebutc.Restore_flags.TC_RESTORE_CREATE',
+                '-ebutc.Restore_flags.TC_RESTORE_INCR',
+                '-ebutc.tc_restoreDesc.newName',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3|user.vols.daily|tape.1,tape.2,tape.3|True,False,True|False,True,True|.restored,,.r',
+            '31|user.vols.daily|tape.1,tape.2,tape.3|True,False,True|False,True,True|.restored,,.r',
+            '81||tape.4|True|False|',
+            '82||tape|True|True|new',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Y', 'frame.number in {3, 81}',
+                '-Tfields', '-ebutc.tc_restoreDesc.flags',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['0x00000001,0x00000002,0x00000003', '0x00000005']
+
+    def test_butc_dump(self, cmd_tshark, capture_file, test_env):
+        '''PerformDump with the dump interface and two dump descriptors
+        (the second of the three pointers is NULL).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Y', 'butc.tc_dumpDesc.name',
+                '-Tfields', '-Eseparator=|', '-eframe.number',
+                '-ebutc.tc_dumpInterface.dumpName',
+                '-ebutc.tc_tapeSet.format',
+                '-ebutc.tc_dumpArray.tc_dumpArray_len',
+                '-ebutc.tc_dumpDesc.name', '-ebutc.tc_dumpDesc.partition',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1|user.vols.daily|daily.%d|2|user.alice,|1,2',
+            '29|user.vols.daily|daily.%d|2|user.alice,|1,2',
+        ]
+
+    def test_butc_status_info(self, cmd_tshark, capture_file, test_env):
+        '''Every arm of tc_statusInfoSwitch and a level without an arm.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_butc_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 57 && dcerpc.pkt_type == 2 && butc.tciStatusS.info',
+                '-Tfields', '-Eseparator=|', '-eframe.number',
+                '-ebutc.tciStatusS.taskName', '-ebutc.tciStatusS.info',
+                '-ebutc.tc_statusInfoSwitch.none',
+                '-ebutc.tc_statusInfoSwitchVol.volumeName',
+                '-ebutc.tc_tapeLabel.name',
+                '-ebutc.tc_statusInfoSwitch.spare1',
+                '-ebutc.tc_statusInfoSwitch.spare2',
+                '-ebutc.tc_statusInfoSwitch.spare3',
+                '-ebutc.tc_statusInfoSwitch.spare4',
+                '-ebutc.tc_statusInfoSwitch.spare5',
+                '-ebutc.tciStatusS.taskId',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '58|op0|0|80||||||||100',
+            '60|op1|1|||tape.1||||||101',
+            '62|op2|2|||tape.2||||||102',
+            '64|op3|3||user.vol3|||||||103',
+            '66|op4|4||user.vol4|||||||104',
+            '68|op5|5||||85|||||105',
+            '70|op6|6||||||86|||106',
+            '72|op7|7|||||||87||107',
+            '74|op8|8|||||88||||108',
+            '76|op9|9||||||||89|109',
+            '78||42|||||||||142',
+        ]
+
+
+class TestDissectDcerpc:
+    def test_dcerpc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts per protocol column, and no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 434
+        assert protocols.count('DCERPC') == 87
+        assert protocols.count('WINREG') == 82
+        assert protocols.count('RPCH') == 62
+        assert protocols.count('SRVSVC') == 13
+        assert protocols.count('EPM') == 12
+        assert protocols.count('TCP') == 138
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dcerpc_pdu_types(self, cmd_tshark, capture_file, test_env):
+        '''Every connection-oriented and connectionless PDU type.'''
+        for ver, expected in (('5', {0: 71, 2: 59, 3: 6, 11: 21, 12: 19, 14: 2, 15: 2,
+                                     16: 2, 17: 1, 18: 2, 19: 2, 20: 64}),
+                              ('4', {0: 13, 1: 2, 2: 8, 3: 1, 4: 1, 5: 2, 6: 1, 7: 1,
+                                     8: 3, 9: 3, 10: 3})):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                    '-Y', 'dcerpc.ver == ' + ver,
+                    '-Tfields', '-edcerpc.pkt_type',
+                ), encoding='utf-8', env=test_env)
+            types = [int(t) for t in stdout.replace(',', '\n').split()]
+            assert {t: types.count(t) for t in set(types)} == expected
+
+    def test_dcerpc_bind(self, cmd_tshark, capture_file, test_env):
+        '''A bind with NDR32, NDR64, bind time feature negotiation and two
+        transfer syntaxes in one context; the bind_ack results.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'frame.number in {4, 5}',
+                '-Tfields', '-edcerpc.cn_ctx_id', '-edcerpc.cn_num_trans_items',
+                '-edcerpc.cn_bind_trans_id', '-edcerpc.cn_ack_result',
+                '-edcerpc.cn_ack_reason', '-edcerpc.cn_sec_addr',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0,1,2,3\t1,1,1,2\t8a885d04-1ceb-11c9-9fe8-08002b104860,'
+            '71710533-beba-4937-8319-b5dbef9ccc36,6cb71c2c-9812-4540-0300-000000000000,'
+            '71710533-beba-4937-8319-b5dbef9ccc36,8a885d04-1ceb-11c9-9fe8-08002b104860\t\t\t',
+            '\t\t\t0,0,3,2\t2\t49152',
+        ]
+
+    def test_dcerpc_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Connection-oriented request, response and fault fragments and
+        connectionless request and response fragments are reassembled.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.reassembled.length',
+                '-Tfields', '-eframe.number', '-edcerpc.fragment',
+                '-edcerpc.reassembled.length', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '25\t23,24,25\t2464\tSetValue request, Blob',
+            '30\t28,29,30\t3044\tQueryValue response',
+            '39\t37,38,39\t24\tFault: call_id: 15, Fragment: Last, Ctx: 0, status: nca_s_fault_ndr',
+            '408\t404,406,408\t264\tSetValue request, Frag',
+            '412\t411,412\t196\tQueryValue response',
+        ]
+
+    def test_dcerpc_deferred_pointers(self, cmd_tshark, capture_file, test_env):
+        '''dcerpc_ptrlist_cubic with a small N: 16 QueryMultipleValues
+        elements, each with a nested pointer, are dissected once and in
+        order; drsuapi_list_quadratic with 100 linked objects (99 pointers
+        deep) is dissected without the "Too many nested pointers" expert
+        info. Both took quadratic or cubic time before "DCERPC: Do not
+        assert on NDR64 counts, dissect deferred pointers once".'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'frame.number == 14',
+                '-Tfields', '-ewinreg.winreg_ValNameBuf.name',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip().split(',') == ['Value%d' % i for i in range(16)]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'drsuapi', '-V', '-O', 'drsuapi',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.count('Referent ID') == 99
+        assert 'Too many nested pointers' not in stdout
+
+    def test_dcerpc_verification_trailer(self, cmd_tshark, capture_file, test_env):
+        '''Verification trailers after a WINREG stub and after the stub of
+        an interface without a dissector.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.rpc_sec_vt.signature',
+                '-Tfields', '-eframe.number', '-edcerpc.rpc_sec_vt.command.cmd',
+                '-edcerpc.rpc_sec_vt.command.length',
+                '-edcerpc.rpc_sec_vt.pcontext.interface.uuid',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '21\t0x0001,0x0002,0x0003,0x0007\t4,40,16,3\t'
+            '338cd001-2244-31f1-aaaa-900038001003,8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '159\t0x0001,0x0002,0x0003\t4,40,16\t'
+            '12345678-9abc-def0-1234-56789abcdef0,0badc0de-1111-2222-3333-444455556666',
+        ]
+
+    def test_dcerpc_auth(self, cmd_tshark, capture_file, test_env):
+        '''NTLMSSP integrity with auth padding, NTLMSSP privacy (stubs
+        shown encrypted), an unknown authentication type.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.auth_type',
+                '-Tfields', '-edcerpc.auth_type', '-edcerpc.auth_level',
+                '-edcerpc.auth_pad_len',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        counts = {l: lines.count(l) for l in set(lines)}
+        assert counts == {'10\t5\t0': 8, '10\t5\t4': 3, '10\t5\t8': 4, '10\t5\t12': 2,
+                          '10\t6\t0': 7, '10\t6\t4': 1, '127\t2\t0': 4, '127\t6\t0': 2}
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.encrypted_stub_data',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['134', '135', '136', '137', '138', '149', '150']
+
+    def test_dcerpc_transports(self, cmd_tshark, capture_file, test_env):
+        '''DCE/RPC in HTTP bodies, over NetBIOS, SMB1 and SMB2.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', '(http || netbios || smb || smb2) && dcerpc',
+                '-Tfields', '-eframe.number', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '270\t2*DCERPC', '271\t3*DCERPC',
+            '275\tDCERPC', '276\tDCERPC', '277\tWINREG', '278\tWINREG',
+            '282\tDCERPC', '285\tDCERPC', '286\tSRVSVC', '287\tSRVSVC',
+            '294\tDCERPC', '295\tDCERPC', '296\tWINREG', '297\tWINREG',
+            '306\tDCERPC', '308\tSRVSVC', '389\tSMB2',
+        ]
+
+    def test_dcerpc_rts(self, cmd_tshark, capture_file, test_env):
+        '''Every RTS command and the named RTS PDUs.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 20',
+                '-Tfields', '-edcerpc.cn_rts_command', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        cmds = set()
+        names = set()
+        for line in stdout.splitlines():
+            c, info = line.split('\t')
+            cmds.update(int(x, 16) for x in c.split(',') if x)
+            names.add(info.split(', ')[0])
+        assert cmds == set(range(15))
+        assert {'CONN/A1', 'CONN/A2', 'CONN/A3', 'CONN/B1', 'CONN/B2', 'CONN/B3',
+                'CONN/C1,CONN/C2', 'IN_R1/A2', 'OUT_R1/A4', 'OUT_R2/B3', 'Ping',
+                'Echo', 'Keep-Alive', 'FlowControlAck', 'FlowControlAckWithDestination',
+                'PingTrafficSentNotify', 'unknown RTS PDU'} <= names
+        assert len(names) == 31
+
+    def test_dcerpc_srt(self, cmd_tshark, capture_file, test_env):
+        '''Service response time statistics count the matched calls.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_coverage.pcap.gz'), '-q',
+                '-z', 'dcerpc,srt,4b324fc8-1670-01d3-1278-5a47bf6ee188,3.0',
+            ), encoding='utf-8', env=test_env)
+        rows = [l.split()[:3] for l in stdout.splitlines() if l.split()[:1] in (['15'], ['23'])]
+        assert rows == [['15', 'NetShareEnumAll', '2'], ['23', 'NetDiskEnum', '5']]
+
+
+class TestDissectDcerpcDceSmall:
+    # Opnum names of the interfaces that only register them, in opnum order
+    OPNUMS = {
+        'cds_clerkserver': [
+            'AddReplica', 'AllowClearinghouses', 'Combine', 'CreateChild',
+            'CreateDirectory', 'CreateSoftLink', 'CreateObject', 'DeleteChild',
+            'DeleteObject', 'DeleteSoftLink', 'DeleteDirectory',
+            'DisallowClearinghouses', 'DoUpdate', 'EnumerateAttributes',
+            'EnumerateChildren', 'EnumerateObjects', 'EnumerateSoftLinks',
+            'LinkReplica', 'ModifyAttribute', 'ModifyReplica', 'NewEpoch',
+            'ReadAttribute', 'RemoveReplica', 'ResolveName', 'Skulk',
+            'TestAttribute', 'TestGroup'],
+        'cds_solicit': ['cds_Solicit', 'cds_Advertise', 'cds_SolicitServer'],
+        'cprpc_server': ['dnscp_server'],
+        'dtsprovider': ['ContactProvider', 'ServerRequestProviderTime'],
+        'dtsstime_req': ['ClerkRequestTime', 'ServerRequestTime'],
+        'ftserver': [
+            'CreateTrans', 'AbortTrans', 'DeleteTrans', 'CreateVolume',
+            'DeleteVolume', 'Dump', 'Restore', 'Forward', 'Clone', 'ReClone',
+            'GetFlags', 'SetFlags', 'GetStatus', 'SetStatus', 'ListVolumes',
+            'ListAggregates', 'AggregateInfo', 'Monitor', 'GetOneVolStatus',
+            'GetServerInterfaces', 'SwapIDs'],
+        'icl_rpc': [
+            'DFSTRACE_GetSetInfo', 'DFSTRACE_SetSetInfo', 'DFSTRACE_GetLogInfo',
+            'DFSTRACE_SetLogInfo', 'DFSTRACE_ClearSet', 'DFSTRACE_ClearLog',
+            'DFSTRACE_DumpSet'],
+        'llb': ['insert', 'delete', 'lookup'],
+        'frsapi': [
+            'VerifyPromotion', 'PromotionStatus', 'StartDemotion',
+            'CommitDemotion', 'Set_DsPollingIntervalW', 'Get_DsPollingIntervalW',
+            'VerifyPromotionW', 'InfoW', 'IsPathReplicated', 'WriterCommand'],
+    }
+
+    def test_dcerpc_dce_small_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: a request and response for every opnum of each
+        interface (the connectionless ones also once in big endian), two
+        TCP connections with a bind (FRSAPI and MISC); no malformed
+        packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dce_small_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 186
+        assert protocols.count('CDS_CLERK') == 56
+        assert protocols.count('cds_solicit') == 8
+        assert protocols.count('cprpc_server') == 4
+        assert protocols.count('DTSPROVIDER') == 6
+        assert protocols.count('DTSSTIME_REQ') == 6
+        assert protocols.count('FTSERVER') == 44
+        assert protocols.count('ICL_RPC') == 16
+        assert protocols.count('llb') == 8
+        assert protocols.count('FRSAPI') == 20
+        assert protocols.count('MISC') == 2
+        assert protocols.count('DCERPC') == 4
+        assert protocols.count('TCP') == 12
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_dce_small_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dcerpc_dce_small_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum is shown by its name, in the request and in the
+        response matched to it; the big endian call of each
+        connectionless interface comes last.'''
+        for proto, names in self.OPNUMS.items():
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_dce_small_coverage.pcap.gz'),
+                    '-Y', proto,
+                    '-Tfields', '-e' + proto + '.opnum', '-edcerpc.drep.byteorder',
+                    '-e_ws.col.info',
+                ), encoding='utf-8', env=test_env)
+            expected = []
+            for opnum, name in enumerate(names):
+                expected += ['%d\t1\t%s request' % (opnum, name),
+                             '%d\t1\t%s response' % (opnum, name)]
+            if proto != 'frsapi':
+                expected += ['0\t0\t%s request' % names[0],
+                             '0\t0\t%s response' % names[0]]
+            assert stdout.splitlines() == expected, proto
+
+    def test_dcerpc_dce_small_misc(self, cmd_tshark, capture_file, test_env):
+        '''MISC registers its interface without operations, so its call is
+        an unknown operation with the stub shown as data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dce_small_coverage.pcap.gz'),
+                '-Y', 'misc',
+                '-Tfields', '-edcerpc.cn_bind_to_uuid', '-emisc.opnum',
+                '-edcerpc.stub_data', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '\t0\t00150000\tUnknown operation 0 request',
+            '\t0\t0000000000000000\tUnknown operation 0 response',
+        ]
+
+
+class TestDissectDcerpcClusapi:
+    def test_clusapi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and calls, and no malformed packets or warnings
+        in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 1176
+        assert protocols.count('CLUSAPI') == 1146
+        assert protocols.count('DCERPC') == 8
+        assert protocols.count('TCP') == 22
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_clusapi_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\tb97db8b2-4c63-11cf-bff6-08002be23f2f\t3\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\tb97db8b2-4c63-11cf-bff6-08002be23f2f\t3\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\tb97db8b2-4c63-11cf-bff6-08002be23f2f\t3\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_clusapi_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum has a request and a response (except the response of
+        SetServiceAccountPassword, 108) in NDR and NDR64, plus the unknown
+        opnum 184 in the first connection.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'clusapi',
+                '-Tfields', '-etcp.stream', '-edcerpc.pkt_type', '-eclusapi.opnum',
+            ), encoding='utf-8', env=test_env)
+        seen = {}
+        for line in stdout.splitlines():
+            stream, ptype, opnum = line.split('\t')
+            seen.setdefault((stream, ptype), set()).add(int(opnum))
+        everything = set(range(184))
+        assert seen[('0', '0')] == everything | {184}
+        assert seen[('0', '2')] == (everything - {108}) | {184}
+        assert seen[('1', '0')] == seen[('1', '2')] == set(range(16))
+        assert seen[('2', '0')] == everything
+        assert seen[('2', '2')] == everything - {108}
+
+    def test_clusapi_strings(self, cmd_tshark, capture_file, test_env):
+        '''GetClusterName responses with two strings and with NULL
+        pointers and an error, in all three encodings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'clusapi.opnum == 3 && dcerpc.pkt_type == 2',
+                '-Tfields', '-etcp.dstport',
+                '-eclusapi.clusapi_GetClusterName.ClusterName',
+                '-eclusapi.clusapi_GetClusterName.NodeName', '-eclusapi.werror',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '50001\tClusterName4\tNodeName5\t0x00000000\tGetClusterName response',
+            '50001\t\t\t0x00000005\tGetClusterName response, Error: WERR_ACCESS_DENIED',
+            '50002\tClusterName2\tNodeName3\t0x00000000\tGetClusterName response',
+            '50003\tClusterName0\tNodeName1\t0x00000000\tGetClusterName response',
+        ]
+
+    def test_clusapi_enum(self, cmd_tshark, capture_file, test_env):
+        '''CreateEnum: every bit, no bit and an unknown bit in the
+        ClusterEnumType bitmap, and the ENUM_LIST entries.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'clusapi.opnum == 7',
+                '-Tfields', '-eclusapi.clusapi_CreateEnum.dwType',
+                '-eclusapi.ENUM_LIST.EntryCount', '-eclusapi.ENUM_ENTRY.Name',
+                '-eclusapi.ENUM_ENTRY.Type', '-eclusapi.werror',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0xc000003f\t\t\t\t',
+            '\t2\tName9,Name0\t0xc000003f,0xc000003f\t0x00000000',
+            '0x00000000\t\t\t\t',
+            '\t\t\t\t0x00000005',
+            '0x00000041\t\t\t\t',
+            '\t2\tName1,Name2\t0x00000041,0x00000041\t0x00000057',
+            '0xc000003f\t\t\t\t',
+            '\t2\tName9,Name0\t0xc000003f,0xc000003f\t0x00000000',
+            '0xc000003f\t\t\t\t',
+            '\t2\tName7,Name8\t0xc000003f,0xc000003f\t0x00000000',
+        ]
+
+    def test_clusapi_mrr(self, cmd_tshark, capture_file, test_env):
+        '''ClusterMrr (opnum 142): the CLUSTER_MRR_RESPONSE behind two
+        levels of conformant pointers, in NDR and NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'clusapi.CLUSTER_MRR_RESPONSE.NodeCount',
+                '-Tfields', '-etcp.dstport', '-eclusapi.opnum',
+                '-eclusapi.CLUSTER_MRR_RESPONSE.NodeCount',
+                '-eclusapi.CLUSTER_MRR_NODE_RESPONSE.pszNodeName',
+                '-eclusapi.CLUSTER_MRR_NODE_RESPONSE.ResultSize',
+                '-eclusapi.CLUSTER_MRR_NODE_RESPONSE.pResultData',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '50001\t142\t1\tpszNodeName5\t1\t48',
+            '50003\t142\t1\tpszNodeName9\t1\t48',
+        ]
+
+    def test_clusapi_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A ClusterControl request with a 9000 octet buffer in three
+        DCE/RPC fragments over several TCP segments.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_clusapi_coverage.pcap.gz'),
+                '-Y', 'clusapi.clusapi_ClusterControl.nInBufferSize == 9000',
+                '-Tfields', '-edcerpc.fragment.count', '-edcerpc.reassembled.length',
+                '-eclusapi.clusapi_ClusterControl.dwControlCode',
+                '-eclusapi.clusapi_ClusterControl.nOutBufferSize',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['3\t9040\t16777285\t512']
+
+
+class TestDissectDcerpcConv:
+    def test_conv_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: connectionless calls of every opnum in little
+        endian (plus an unknown opnum) and in big endian, and no
+        malformed packets or expert infos in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_conv_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 30
+        assert protocols.count('CONV') == 30
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_conv_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_conv_info(self, cmd_tshark, capture_file, test_env):
+        '''The Info column of every call: activity UIDs, sequence
+        numbers, status and address space UUIDs; the same in both byte
+        orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_conv_coverage.pcap.gz'),
+                '-Tfields', '-edcerpc.drep.byteorder', '-econv.opnum',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        calls = [
+            '0\tconv_who_are_you request actuid: a1b2c3d4-e5f6-4711-8899-aabbccddeeff',
+            '0\tconv_who_are_you response seq:42 st:SUCCESS',
+            '0\tconv_who_are_you request actuid: 00000000-0000-0000-0000-000000000000',
+            '0\tconv_who_are_you response seq:0 st:Error returned from rpc service',
+            '1\tconv_who_are_you2 request actuid: a1b2c3d4-e5f6-4711-8899-aabbccddeeff',
+            '1\tconv_who_are_you2 response seq:43 st:SUCCESS cas:01234567-89ab-4cde-8f01-23456789abcd',
+            '1\tconv_who_are_you2 request actuid: 01234567-89ab-4cde-8f01-23456789abcd',
+            '1\tconv_who_are_you2 response seq:4294967295 st:305419896 cas:a1b2c3d4-e5f6-4711-8899-aabbccddeeff',
+            '2\tare_you_there request',
+            '2\tare_you_there response',
+            '3\twho_are_you_auth request',
+            '3\twho_are_you_auth response',
+            '4\twho_are_you_auth_more request',
+            '4\twho_are_you_auth_more response',
+        ]
+        assert lines[0:14] == ['1\t' + c for c in calls]
+        assert lines[14:16] == ['1\t5\tUnknown operation 5 request',
+                                '1\t5\tUnknown operation 5 response']
+        assert lines[16:30] == ['0\t' + c for c in calls]
+
+    def test_conv_fields(self, cmd_tshark, capture_file, test_env):
+        '''The decoded request and response fields (little endian), and
+        the boot times in both byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_conv_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 8',
+                '-Tfields', '-econv.who_are_you_rqst_actuid',
+                '-econv.who_are_you2_rqst_actuid', '-econv.who_are_you_resp_seq',
+                '-econv.who_are_you2_resp_seq', '-econv.who_are_you2_resp_casuuid',
+                '-econv.status',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'a1b2c3d4-e5f6-4711-8899-aabbccddeeff\t\t\t\t\t',
+            '\t\t42\t\t\t0',
+            '00000000-0000-0000-0000-000000000000\t\t\t\t\t',
+            '\t\t0\t\t\t556613636',
+            '\ta1b2c3d4-e5f6-4711-8899-aabbccddeeff\t\t\t\t',
+            '\t\t\t43\t01234567-89ab-4cde-8f01-23456789abcd\t0',
+            '\t01234567-89ab-4cde-8f01-23456789abcd\t\t\t\t',
+            '\t\t\t4294967295\ta1b2c3d4-e5f6-4711-8899-aabbccddeeff\t305419896',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_conv_coverage.pcap.gz'),
+                '-Y', 'conv.who_are_you_rqst_boot_time == "2023-11-14T22:13:20Z"'
+                      ' || conv.who_are_you2_rqst_boot_time == "2023-11-14T22:14:20Z"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['1', '5', '17', '21']
+
+
+class TestDissectDcerpcDfs:
+    # One connection's calls: (opnum, Windows error of the response or
+    # None for GetManagerVersion, which has no status). The big endian
+    # connection answers some calls with WERR_INVALID_PARAMETER (0x57).
+    @staticmethod
+    def dfs_calls(be=False):
+        e = 0x57 if be else 0
+        calls = [(0, None)] * 4
+        calls += [(1, 0), (1, 5), (2, 0), (2, 0x490)]
+        calls += [(3, 0 if i % 4 else 5) for i in range(1, 15)]
+        calls += [(4, 0)] * 15 + [(4, 0x490), (4, 0x1234567)]
+        calls += [(5, 0)] * 6
+        calls += [(21, 0)] * 5 + [(21, e)]
+        calls += [(5, 0x103)]
+        calls += [(op, 0x32) for op in (6, 7, 8, 9, 16, 17, 19, 20, 22)]
+        calls += [(10, e), (10, e), (10, e), (11, 0), (11, 5)]
+        calls += [(op, e) for op in (12, 13, 14, 15, 18)]
+        lines = []
+        for op, status in calls:
+            lines.append('%d\t' % op)
+            lines.append('%d\t%s' % (op, '' if status is None else '0x%08x' % status))
+        return lines
+
+    def test_dfs_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 71 calls each (plus an unknown opnum in
+        the first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 452
+        assert protocols.count('NETDFS') == 428
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dfs_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t4fc742e0-4a10-11cf-8273-00aa004ae673\t3\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t4fc742e0-4a10-11cf-8273-00aa004ae673\t3\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t4fc742e0-4a10-11cf-8273-00aa004ae673\t3\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_dfs_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum and the status of every response, in all three
+        connections, and the Info column of some calls.'''
+        for stream, extra in ((0, ['23\t', '23\t']), (1, []), (2, [])):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                    '-Y', 'netdfs && tcp.stream == %d' % stream,
+                    '-Tfields', '-enetdfs.opnum', '-enetdfs.werror',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == self.dfs_calls(stream == 1) + extra
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                '-Y', 'frame.number in {7, 17, 21, 83, 109, 147, 148}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'dfs_GetManagerVersion response',
+            'dfs_Add response, Error: WERR_ACCESS_DENIED',
+            'dfs_Remove response, Error: WERR_NOT_FOUND',
+            'dfs_GetInfo response, Error: Unknown DOS error 0x01234567',
+            'dfs_Enum response, Error: WERR_NO_MORE_ITEMS',
+            'dfs_FlushFtTable response',
+            'Unknown operation 23 request',
+        ]
+
+    def test_dfs_get_info(self, cmd_tshark, capture_file, test_env):
+        '''GetInfo answered at every dfs_Info level: strings behind
+        embedded pointers, storage arrays, GUIDs, bitmaps with unknown
+        bits and target priorities. All three encodings give the same.'''
+        fields = ('netdfs.dfs_Info1.path', 'netdfs.dfs_Info2.state',
+                  'netdfs.dfs_Info3.path', 'netdfs.dfs_StorageInfo.server',
+                  'netdfs.dfs_StorageInfo.share', 'netdfs.dfs_Info4.guid',
+                  'netdfs.dfs_Info5.flags', 'netdfs.dfs_Info6.num_stores',
+                  'netdfs.dfs_Target_Priority.target_priority_rank',
+                  'netdfs.dfs_Info7.generation_guid', 'netdfs.dfs_Info100.comment',
+                  'netdfs.dfs_Info101.state', 'netdfs.dfs_Info102.timeout',
+                  'netdfs.dfs_Info103.flags', 'netdfs.dfs_Info105.comment',
+                  'netdfs.dfs_Info106.state')
+        expected = [
+            '',
+            '\\\\\\\\dom\\\\dfs\\\\link1',
+            '\t0x0000130f',
+            '\t\t\\\\\\\\dom\\\\dfs\\\\link3\t\\\\\\\\srv1,\\\\\\\\srv2\tshare1',
+            '\t\t\t\\\\\\\\srv1,\\\\\\\\srv2\tshare1\t12345678-9abc-def0-0123-456789abcdef',
+            '\t' * 6 + '0x0000011f',
+            '\t\t\tsrv1,srv3,srv4,srv5,srv6,srv7\tshare1,share2,share3,s4,s5,s6,s7\t\t\t7\t1,2,3,4,5,6,7',
+            '\t' * 9 + 'fedcba98-7654-3210-8899-aabbccddeeff',
+            '\t' * 10 + 'A comment',
+            '\t' * 11 + '0x00000087',
+            '\t' * 12 + '3600',
+            '\t' * 13 + '0x00000000',
+            '\t' * 8 + '7',
+            '\t' * 14 + 'Comment 105',
+            '\t' * 8 + '9' + '\t' * 7 + '0x00000002',
+            '',
+            '',
+        ]
+        for stream in (0, 1, 2):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                    '-Y', 'netdfs.opnum == 4 && dcerpc.pkt_type == 2 && tcp.stream == %d' % stream,
+                    '-Tfields', *['-e' + f for f in fields],
+                ), encoding='utf-8', env=test_env)
+            assert [l.rstrip('\t') for l in stdout.splitlines()] == expected
+
+    def test_dfs_enum(self, cmd_tshark, capture_file, test_env):
+        '''Enum and EnumEx answered at every dfs_EnumInfo level, in NDR64
+        (the third connection).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                '-Y', 'netdfs.opnum in {5, 21} && dcerpc.pkt_type == 2 && tcp.stream == 2',
+                '-Tfields', '-enetdfs.opnum', '-enetdfs.dfs_EnumStruct.level',
+                '-enetdfs.dfs_EnumArray1.count', '-enetdfs.dfs_EnumArray3.count',
+                '-enetdfs.dfs_EnumArray300.count', '-enetdfs.dfs_Info2.path',
+                '-enetdfs.dfs_Info4.path', '-enetdfs.dfs_Info200.dom_root',
+                '-enetdfs.dfs_Info300.flavor', '-enetdfs.dfs_Info300.dom_root',
+                '-enetdfs.dfs_Enum.total', '-enetdfs.dfs_EnumEx.total',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert len(lines) == 13
+        assert [l[0:2] for l in lines] == [['5', '1'], ['5', '2'], ['5', '3'], ['5', '4'],
+                                           ['5', '200'], ['5', '300'],
+                                           ['21', '1'], ['21', '2'], ['21', '3'], ['21', '4'],
+                                           ['21', '200'], ['21', '300'], ['5', '1']]
+        assert lines[0][2] == '3' and lines[2][3] == '2' and lines[5][4] == '3'
+        assert lines[1][5] == r'\\\\dom\\dfs,\\\\dom\\dfs\\a'
+        assert lines[3][6] == r'\\\\dom\\dfs'
+        assert lines[4][7] == r'\\\\dom\\dfs,\\\\dom\\other'
+        assert lines[5][8:10] == ['256,512,768', r'\\\\srv\\standalone,\\\\dom\\adblob']
+        assert [l[10] for l in lines[0:6]] == ['1', '2', '3', '4', '5', '6']
+        assert [l[11] for l in lines[6:12]] == ['10', '', '12', '', '14', '']
+        # the last Enum is answered with a NULL array and no total
+        assert lines[12][2:] == [''] * 10
+
+    def test_dfs_ft_root(self, cmd_tshark, capture_file, test_env):
+        '''AddFtRoot and RemoveFtRoot with a dfs_UnknownStruct behind two
+        pointers, with a NULL inner pointer and with a NULL outer one.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dfs_coverage.pcap.gz'),
+                '-Y', 'netdfs.opnum in {10, 11} && tcp.stream == 1',
+                '-Tfields', '-enetdfs.opnum', '-enetdfs.dfs_AddFtRoot.unknown1',
+                '-enetdfs.dfs_UnknownStruct.unknown1', '-enetdfs.dfs_UnknownStruct.unknown2',
+                '-enetdfs.dfs_AddFtRoot.dfs_config_dn', '-enetdfs.dfs_RemoveFtRoot.dns_servername',
+                '-enetdfs.werror',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '10\t1\t7\tunknown\tCN=Dfs-Configuration\t\t',
+            '10\t\t7\tunknown\t\t\t0x00000057',
+            '10\t1\t\t\tCN=Dfs-Configuration\t\t',
+            '10\t\t\t\t\t\t0x00000057',
+            '10\t1\t\t\tCN=Dfs-Configuration\t\t',
+            '10\t\t\t\t\t\t0x00000057',
+            '11\t\t9\t\t\tsrv1.dom.example\t',
+            '11\t\t9\t\t\t\t0x00000000',
+            '11\t\t\t\t\tsrv1.dom.example\t',
+            '11\t\t\t\t\t\t0x00000005',
+        ]
+
+
+class TestDissectDcerpcDnsserver:
+    def test_dnsserver_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 26 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 182
+        assert protocols.count('DNSSERVER') == 158
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dnsserver_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t50abc2a4-574d-40b3-9d66-ee4fd5fba076\t5\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t50abc2a4-574d-40b3-9d66-ee4fd5fba076\t5\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t50abc2a4-574d-40b3-9d66-ee4fd5fba076\t5\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_dnsserver_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with its status code and Info column; the same in
+        all three connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                '-Y', 'dnsserver',
+                '-Tfields', '-ednsserver.opnum', '-ednsserver.status', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 158
+        calls = []
+        for op, name in ((0, 'DnssrvOperation'), (1, 'DnssrvQuery'),
+                         (2, 'DnssrvComplexOperation'), (3, 'DnssrvEnumRecords'),
+                         (4, 'DnssrvUpdateRecord'), (5, 'DnssrvOperation2'),
+                         (7, 'DnssrvComplexOperation2'), (9, 'DnssrvUpdateRecord2')):
+            calls += [
+                '%d\t\t%s request DNSSERVER V5' % (op, name),
+                '%d\t0x00000000\t%s response' % (op, name),
+                '%d\t\t%s request DNSSERVER V5' % (op, name),
+                '%d\t0xc0000022\t%s response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED' % (op, name),
+            ]
+        for status in ('0x00000000', '0x00000000', '0x00000000', '0x00000000',
+                       '0xc0000225\tDnssrvQuery2 response, STATUS_NOT_FOUND, Error: STATUS_NOT_FOUND',
+                       '0xc0000022\tDnssrvQuery2 response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED',
+                       '0xc000000d\tDnssrvQuery2 response, STATUS_INVALID_PARAMETER, Error: STATUS_INVALID_PARAMETER'):
+            calls += ['6\t\tDnssrvQuery2 request',
+                      '6\t' + (status if '\t' in status else status + '\tDnssrvQuery2 response')]
+        calls += [
+            '8\t\tDnssrvEnumRecords2 request',
+            '8\t0x00000000\tDnssrvEnumRecords2 response',
+            '8\t\tDnssrvEnumRecords2 request',
+            '8\t0x00000000\tDnssrvEnumRecords2 response',
+            '8\t\tDnssrvEnumRecords2 request',
+            '8\t0x0000251d\tDnssrvEnumRecords2 response, Unknown error 0x0000251d, Error: Unknown NT status 0x0000251d',
+        ]
+        assert len(calls) == 52
+        assert lines[0:52] == calls
+        assert lines[52:54] == ['10\t\tUnknown operation 10 request',
+                                '10\t\tUnknown operation 10 response']
+        assert lines[54:106] == calls
+        assert lines[106:158] == calls
+
+    def test_dnsserver_query2(self, cmd_tshark, capture_file, test_env):
+        '''DnssrvQuery2 in NDR64 (the third connection): every union arm,
+        the server info with its strings, IP4 arrays and bitmaps.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                '-Y', 'dnsserver.opnum == 6 && tcp.port == 50003',
+                '-Tfields', '-ednsserver.DnssrvQuery2.client_version',
+                '-ednsserver.DnssrvQuery2.zone', '-ednsserver.DnssrvQuery2.operation',
+                '-ednsserver.DnssrvQuery2.type_id', '-ednsserver.DNSSRV_RPC_UNION.dword',
+                '-ednsserver.DNSSRV_RPC_UNION.null',
+                '-ednsserver.DNS_RPC_SERVER_INFO_DOTNET.ServerName',
+                '-ednsserver.DNS_RPC_SERVER_INFO_DOTNET.DsContainer',
+                '-ednsserver.IP4_ARRAY.AddrCount', '-ednsserver.IP4_ARRAY.AddrArray',
+                '-ednsserver.DNS_RPC_SERVER_INFO_DOTNET.LogLevel',
+                '-ednsserver.DNS_RPC_SERVER_INFO_DOTNET.extension5',
+                '-ednsserver.DNS_RPC_SERVER_INFO_DOTNET.DsDsaVersion',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert len(lines) == 14
+        assert lines[0][0:3] == ['7', '', 'ServerInfo']
+        assert lines[1][3:] == ['19', '', '', 'dns1.example.test',
+                                'CN=MicrosoftDNS,DC=example,DC=test', '2,1,0,3',
+                                '3221225985,3221225986,3221225985,3325256705,3325256706,3325256707',
+                                '0x8100f333', 'ext5', '114']
+        assert lines[2][0:3] == ['6', '..Cache', 'ServerInfo']
+        assert lines[3][3:] == ['19', '', '', '', '', '', '', '0x00000000', '', '114']
+        assert lines[5][3:6] == ['1', '305419896', '']
+        assert lines[7][3:6] == ['0', '', '90']
+        assert lines[9][3:6] == ['0', '', '']
+        assert lines[13][3] == '2'
+
+    def test_dnsserver_enum_records2(self, cmd_tshark, capture_file, test_env):
+        '''DnssrvEnumRecords2 in big endian (the second connection): the
+        node in the subcontext with its records and names.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dnsserver_coverage.pcap.gz'),
+                '-Y', 'dnsserver.opnum == 8 && tcp.port == 50002',
+                '-Tfields', '-ednsserver.DnssrvEnumRecords2.node_name',
+                '-ednsserver.DnssrvEnumRecords2.record_type',
+                '-ednsserver.DnssrvEnumRecords2.select_flag',
+                '-ednsserver.DnssrvEnumRecords2.buffer_length',
+                '-ednsserver.DnssrvEnumRecords2.record_buffer.subcontext',
+                '-ednsserver.DNS_RPC_NODE.Length', '-ednsserver.DNS_RPC_NODE.RecordCount',
+                '-ednsserver.DNS_RPC_NODE.Flags', '-ednsserver.DNS_RPC_NODE.Childcount',
+                '-ednsserver.DNS_RPC_NAME.name', '-ednsserver.DNS_RPC_RECORD.Type',
+                '-ednsserver.DNS_RPC_RECORD.DataLength',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '@\t255\t0x0003011f\t\t\t\t\t\t\t\t\t',
+            '\t\t\t160\t0x000000a0\t160\t4\t0xfe870100\t2\thost,ns1.example.test,\t1,2,2,65281\t4,21,5,8',
+            '\t1\t0x00000000\t\t\t\t\t\t\t\t\t',
+            '\t\t\t13\t0x0000000d\t13\t0\t0x00000000\t0\t\t\t',
+            'missing\t28\t0x00000001\t\t\t\t\t\t\t\t\t',
+            '\t\t\t0\t\t\t\t\t\t\t\t',
+        ]
+
+
+class TestDissectDcerpcDrsuapi:
+    def test_drsuapi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and calls, and no malformed packets or warnings
+        in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 435
+        assert protocols.count('DRSUAPI') == 403
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 26
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_drsuapi_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\te3514235-4b06-11d1-ab04-00c04fc2dcd2\t4\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\te3514235-4b06-11d1-ab04-00c04fc2dcd2\t4\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\te3514235-4b06-11d1-ab04-00c04fc2dcd2\t4\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_drsuapi_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum 0-30 has requests and responses in all three
+        connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi',
+                '-Tfields', '-etcp.stream', '-edcerpc.pkt_type', '-edrsuapi.opnum',
+            ), encoding='utf-8', env=test_env)
+        seen = {}
+        for line in stdout.splitlines():
+            stream, ptype, opnum = line.split('\t')
+            seen.setdefault((stream, ptype), set()).add(int(opnum))
+        assert len(seen) == 6
+        for opnums in seen.values():
+            assert opnums == set(range(31))
+
+    def test_drsuapi_bind_info(self, cmd_tshark, capture_file, test_env):
+        '''DsBind: DsBindInfoCtr with each length (24, 28, 32, 48, 52 and
+        a fallback blob in requests), the NULL bind_info and the status.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 0 && tcp.stream == 0',
+                '-Tfields', '-edrsuapi.drsuapi_DsBindInfoCtr.length',
+                '-edrsuapi.drsuapi_DsBindInfo24.pid', '-edrsuapi.werror',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '24\t7\t', '28\t\t0x00000000',
+            '\t\t', '\t\t0x00000005',
+            '32\t\t', '48\t\t0x00000057',
+            '52\t\t', '24\t1\t0x000006ba',
+            '14\t\t', '24\t4294967295\t0x00000057',
+        ]
+
+    def test_drsuapi_getncchanges(self, cmd_tshark, capture_file, test_env):
+        '''DsGetNCChanges: request levels 5, 8 and 10, ctr levels 1, 2
+        (the MSZIP ctr) and 6, in NDR and NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 3',
+                '-Tfields', '-etcp.stream', '-edrsuapi.drsuapi_DsGetNCChanges.level',
+                '-edrsuapi.drsuapi_DsGetNCChanges.level_out',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert lines[0:12] == [
+            '0\t5\t', '0\t\t1', '0\t8\t', '0\t\t2', '0\t10\t', '0\t\t6',
+            '0\t8\t', '0\t\t2', '0\t10\t', '0\t\t6', '0\t10\t', '0\t\t6',
+        ]
+        assert lines[12:14] == ['1\t8\t', '1\t\t2']
+        assert lines[14:20] == ['2\t5\t', '2\t\t1', '2\t8\t', '2\t\t2', '2\t10\t', '2\t\t6']
+
+    def test_drsuapi_cracknames(self, cmd_tshark, capture_file, test_env):
+        '''DsCrackNames: the name in the request and DsNameInfo1 in the
+        response (the manual DsNameCtr union), also in NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 12',
+                '-Tfields', '-etcp.stream', '-edrsuapi.drsuapi_DsNameString.str',
+                '-edrsuapi.drsuapi_DsCrackNames.level_out',
+                '-edrsuapi.drsuapi_DsNameInfo1.status',
+                '-edrsuapi.drsuapi_DsNameInfo1.dns_domain_name',
+                '-edrsuapi.drsuapi_DsNameInfo1.result_name',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0\tstr1\t\t\t\t',
+            '0\t\t1\t0\tdns_domain_n2\tresult_name3',
+            '0\t\t\t\t\t',
+            '0\t\t1\t\t\t',
+            '1\tstr1\t\t\t\t',
+            '1\t\t1\t5\tdns_domain_n2\tresult_name3',
+            '2\tstr8\t\t\t\t',
+            '2\t\t1\t0\tdns_domain_n9\tresult_name0',
+        ]
+
+    def test_drsuapi_replica_get_info(self, cmd_tshark, capture_file, test_env):
+        '''DsReplicaGetInfo: every DsReplicaInfo arm in NDR and NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 19 && dcerpc.pkt_type == 2',
+                '-Tfields', '-etcp.stream', '-edrsuapi.drsuapi_DsReplicaGetInfo.info_type',
+            ), encoding='utf-8', env=test_env)
+        types = {}
+        for line in stdout.splitlines():
+            stream, info_type = line.split('\t')
+            types.setdefault(stream, set()).add(int(info_type))
+        arms = set(range(11)) | {0xfffffffa, 0xfffffffb, 0xfffffffc, 0xfffffffe}
+        assert types['0'] == arms
+        assert types['2'] == arms
+
+    def test_drsuapi_sid_and_list(self, cmd_tshark, capture_file, test_env):
+        '''The 28 octet SIDs of DsReplicaSync, and a DsAddEntry request
+        whose linked list of objects has 100 items.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 2 && tcp.stream == 0',
+                '-Tfields', '-edcerpc.nt.domain_sid',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'S-1-5-21-286331153-572662306-858993459-500', '',
+            'S-1-5-21-286331153-572662306-858993459-513', '',
+            'S-1-5-21-286331153-572662306-858993459-0', '',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_drsuapi_coverage.pcap.gz'),
+                '-Y', 'drsuapi.opnum == 17 && dcerpc.pkt_type == 0 && tcp.reassembled.length',
+                '-Tfields', '-edrsuapi.drsuapi_DsReplicaObject.flags',
+            ), encoding='utf-8', env=test_env)
+        flags = stdout.strip().split(',')
+        assert len(flags) == 100
+        assert sorted(int(f, 16) for f in flags) == list(range(100))
+
+
+class TestDissectDcerpcDssetup:
+    def test_dssetup_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 24 calls each (plus an unknown opnum in
+        the first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 170
+        assert protocols.count('DSSETUP') == 146
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dssetup_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order, interface and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t3919286a-b10c-11d0-9ba8-00c04fd92ef5\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t3919286a-b10c-11d0-9ba8-00c04fd92ef5\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t3919286a-b10c-11d0-9ba8-00c04fd92ef5\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_dssetup_calls(self, cmd_tshark, capture_file, test_env):
+        '''The opnum and status of every response in the three
+        connections.'''
+        names = ['DsRoleDnsNameToFlatName', 'DsRoleDcAsDc', 'DsRoleDcAsReplica', 'DsRoleDemoteDc',
+                 'DsRoleGetDcOperationProgress', 'DsRoleGetDcOperationResults', 'DsRoleCancel',
+                 'DsRoleServerSaveStateForUpgrade', 'DsRoleUpgradeDownlevelServer',
+                 'DsRoleAbortDownlevelServerUpgrade']
+        err = ', Error: WERR_NOT_SUPPORTED'
+        for port, le in ((50001, True), (50002, False), (50003, False)):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                    '-Y', 'dssetup && dcerpc.pkt_type == 2 && tcp.dstport == %d' % port,
+                    '-Tfields', '-edssetup.opnum', '-edssetup.werror', '-e_ws.col.info',
+                ), encoding='utf-8', env=test_env)
+            calls = ['0\t0x00000000\tDsRoleGetPrimaryDomainInformation response'] * 13
+            calls += ['0\t0x00000032\tDsRoleGetPrimaryDomainInformation response' + err]
+            for op, name in enumerate(names, 1):
+                if op % 2 or le:
+                    calls.append('%d\t0x00000032\t%s response%s' % (op, name, err))
+                else:
+                    calls.append('%d\t0x00000000\t%s response' % (op, name))
+            if le:
+                calls.append('11\t\tUnknown operation 11 response')
+            assert stdout.splitlines() == calls
+
+    def test_dssetup_role_info(self, cmd_tshark, capture_file, test_env):
+        '''DsRoleGetPrimaryDomainInformation: basic information for every
+        role with present and NULL names, flags and domain GUID; the
+        upgrade and operation status; an unknown level. The same in all
+        three connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                '-Y', 'dssetup.opnum == 0 && dcerpc.pkt_type == 2',
+                '-Tfields', '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.role',
+                '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.flags',
+                '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.domain',
+                '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.dns_domain',
+                '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.forest',
+                '-edssetup.dssetup_DsRolePrimaryDomInfoBasic.domain_guid',
+                '-edssetup.dssetup_DsRoleUpgradeStatus.upgrading',
+                '-edssetup.dssetup_DsRoleUpgradeStatus.previous_role',
+                '-edssetup.dssetup_DsRoleOpStatus.status',
+            ), encoding='utf-8', env=test_env)
+        guid = '6f3c2a1b-4d5e-4f60-8a7b-9c0d1e2f3a4b'
+        null = '00000000-0000-0000-0000-000000000000'
+        infos = [
+            '5\t0x01000001\tEXAMPLE\texample.com\texample.com\t%s\t\t\t' % guid,
+            '4\t0x01000003\tEXAMPLE\texample.com\tforest.example.com\t%s\t\t\t' % guid,
+            '3\t0x00000000\tEXAMPLE\texample.com\t\t%s\t\t\t' % null,
+            '2\t0x00000004\tWORKGROUP\t\t\t%s\t\t\t' % null,
+            '1\t0x00000000\tEXAMPLE\t\t\t%s\t\t\t' % null,
+            '0\t0x80000000\t\t\t\t%s\t\t\t' % null,
+            '\t' * 6 + '0\t0\t',
+            '\t' * 6 + '1\t1\t',
+            '\t' * 6 + '1\t2\t',
+            '\t' * 8 + '0',
+            '\t' * 8 + '1',
+            '\t' * 8 + '2',
+            '\t' * 8,
+            '\t' * 8,
+        ]
+        assert stdout.splitlines() == infos * 3
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dssetup_coverage.pcap.gz'),
+                '-Y', 'dssetup.opnum == 0 && dcerpc.pkt_type == 0',
+                '-Tfields', '-edssetup.dssetup_DsRoleGetPrimaryDomainInformation.level',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == (['1'] * 6 + ['2'] * 3 + ['3'] * 3 + ['7', '1']) * 3
+
+
+class TestDissectDcerpcEfs:
+    def test_efs_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 26 calls each (plus an unknown opnum in the
+        first) and the reproducer connection, and no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 192
+        assert protocols.count('EFS') == 160
+        assert protocols.count('DCERPC') == 8
+        assert protocols.count('TCP') == 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_efs_bind(self, cmd_tshark, capture_file, test_env):
+        '''The four binds: byte order, interface and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\tc681d488-d850-11d0-8c52-00c04fd90f7e\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\tc681d488-d850-11d0-8c52-00c04fd90f7e\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\tc681d488-d850-11d0-8c52-00c04fd90f7e\t1\t71710533-beba-4937-8319-b5dbef9ccc36',
+            '1\tc681d488-d850-11d0-8c52-00c04fd90f7e\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+        ]
+
+    def test_efs_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum 0-13 with its status; the same in all three
+        connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                '-Y', 'efs',
+                '-Tfields', '-eefs.opnum', '-eefs.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 160
+        calls = [
+            '0\t\tEfsRpcOpenFileRaw request',
+            '0\t0x00000000\tEfsRpcOpenFileRaw response',
+            '0\t\tEfsRpcOpenFileRaw request',
+            '0\t0x00000000\tEfsRpcOpenFileRaw response',
+            '0\t\tEfsRpcOpenFileRaw request',
+            '0\t0x00000005\tEfsRpcOpenFileRaw response, Error: WERR_ACCESS_DENIED',
+            '1\t\tEfsRpcReadFileRaw request',
+            '1\t0x00000000\tEfsRpcReadFileRaw response',
+            '1\t\tEfsRpcReadFileRaw request',
+            '1\t0x00000006\tEfsRpcReadFileRaw response, Error: WERR_INVALID_HANDLE',
+            '2\t\tEfsRpcWriteFileRaw request',
+            '2\t0x00000000\tEfsRpcWriteFileRaw response',
+            '2\t\tEfsRpcWriteFileRaw request',
+            '2\t0x00000006\tEfsRpcWriteFileRaw response, Error: WERR_INVALID_HANDLE',
+            '3\t\tEfsRpcCloseRaw request',
+            '3\t\tEfsRpcCloseRaw response',
+            '4\t\tEfsRpcEncryptFileSrv request',
+            '4\t0x00000000\tEfsRpcEncryptFileSrv response',
+            '4\t\tEfsRpcEncryptFileSrv request',
+            '4\t0x00001770\tEfsRpcEncryptFileSrv response, Error: WERR_ENCRYPTION_FAILED',
+            '5\t\tEfsRpcDecryptFileSrv request',
+            '5\t0x00000000\tEfsRpcDecryptFileSrv response',
+            '5\t\tEfsRpcDecryptFileSrv request',
+            '5\t0x00001771\tEfsRpcDecryptFileSrv response, Error: WERR_DECRYPTION_FAILED',
+            '6\t\tEfsRpcQueryUsersOnFile request',
+            '6\t0x00000000\tEfsRpcQueryUsersOnFile response',
+            '6\t\tEfsRpcQueryUsersOnFile request',
+            '6\t0x00000002\tEfsRpcQueryUsersOnFile response, Error: WERR_FILE_NOT_FOUND',
+            '7\t\tEfsRpcQueryRecoveryAgents request',
+            '7\t0x00000000\tEfsRpcQueryRecoveryAgents response',
+            '7\t\tEfsRpcQueryRecoveryAgents request',
+            '7\t0x0000000d\tEfsRpcQueryRecoveryAgents response, Error: WERR_INVALID_DATA',
+            '8\t\tEfsRpcRemoveUsersFromFile request',
+            '8\t0x00000000\tEfsRpcRemoveUsersFromFile response',
+            '8\t\tEfsRpcRemoveUsersFromFile request',
+            '8\t0x00000005\tEfsRpcRemoveUsersFromFile response, Error: WERR_ACCESS_DENIED',
+            '9\t\tEfsRpcAddUsersToFile request',
+            '9\t0x00000000\tEfsRpcAddUsersToFile response',
+            '9\t\tEfsRpcAddUsersToFile request',
+            '9\t0x00000005\tEfsRpcAddUsersToFile response, Error: WERR_ACCESS_DENIED',
+            '10\t\tEfsRpcSetFileEncryptionKey request',
+            '10\t0x00000000\tEfsRpcSetFileEncryptionKey response',
+            '10\t\tEfsRpcSetFileEncryptionKey request',
+            '10\t0x00000057\tEfsRpcSetFileEncryptionKey response, Error: WERR_INVALID_PARAMETER',
+            '10\t\tEfsRpcSetFileEncryptionKey request',
+            '10\t0x00000057\tEfsRpcSetFileEncryptionKey response, Error: WERR_INVALID_PARAMETER',
+            '11\t\tEfsRpcNotSupported request EFS V1',
+            '11\t0x00000032\tEfsRpcNotSupported response, Error: WERR_NOT_SUPPORTED',
+            '12\t\tEfsRpcFileKeyInfo request EFS V1',
+            '12\t0x00000032\tEfsRpcFileKeyInfo response, Error: WERR_NOT_SUPPORTED',
+            '13\t\tEfsRpcDuplicateEncryptionInfoFile request EFS V1',
+            '13\t0x00000032\tEfsRpcDuplicateEncryptionInfoFile response, Error: WERR_NOT_SUPPORTED',
+        ]
+        assert lines[0:52] == calls
+        assert lines[52:54] == ['14\t\tUnknown operation 14 request',
+                                '14\t\tUnknown operation 14 response']
+        assert lines[54:106] == calls
+        assert lines[106:158] == calls
+
+    def test_efs_certificates(self, cmd_tshark, capture_file, test_env):
+        '''QueryUsersOnFile, QueryRecoveryAgents and SetFileEncryptionKey:
+        user SIDs, hash blobs, display names and certificate blobs in NDR
+        and NDR64 (the big endian connection is left out: dissect_nt_sid()
+        reads the sub-authorities little endian).'''
+        for port in (50001, 50003):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                    '-Y', 'tcp.port == %d && efs.opnum in {6, 7, 10} && dcerpc.pkt_type == 2' % port,
+                    '-Tfields', '-edcerpc.nt.domain_sid',
+                    '-eefs.ENCRYPTION_CERTIFICATE_HASH_LIST.nCert_Hash',
+                    '-eefs.EFS_HASH_BLOB.cbData',
+                    '-eefs.ENCRYPTION_CERTIFICATE_HASH.lpDisplayInformation',
+                    '-eefs.werror',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                'S-1-5-21-1111-2222-3333-1001\t3\t20,0\tAlice (alice@example.com)\t0x00000000',
+                '\t\t\t\t0x00000002',
+                'S-1-5-21-1111-2222-3333-500\t1\t20\tRecovery Agent\t0x00000000',
+                '\t0\t\t\t0x0000000d',
+                '\t\t\t\t0x00000000',
+                '\t\t\t\t0x00000057',
+                '\t\t\t\t0x00000057',
+            ]
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                    '-Y', 'tcp.port == %d && efs.opnum == 10 && dcerpc.pkt_type == 0' % port,
+                    '-Tfields', '-edcerpc.nt.domain_sid',
+                    '-eefs.ENCRYPTION_CERTIFICATE.TotalLength',
+                    '-eefs.EFS_CERTIFICATE_BLOB.dwCertEncodingType',
+                    '-eefs.EFS_CERTIFICATE_BLOB.cbData',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                'S-1-5-32-544\t100\t1\t8',
+                '\t100\t\t',
+                '\t\t\t',
+            ]
+
+    def test_efs_user_sid(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "EFS: Dissect a user SID as an NDR RPC_SID":
+        the SID of an ENCRYPTION_CERTIFICATE_HASH starts with the max_count
+        of its sub-authorities. It was decoded from the max_count, so the
+        SID was wrong and the rest of the stub misaligned.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_efs_coverage.pcap.gz'),
+                '-Y', 'tcp.port == 50601 && efs',
+                '-Tfields', '-eframe.number', '-edcerpc.nt.count',
+                '-edcerpc.nt.domain_sid',
+                '-eefs.ENCRYPTION_CERTIFICATE_HASH_LIST.nCert_Hash',
+                '-eefs.ENCRYPTION_CERTIFICATE_HASH.cbTotalLength',
+                '-eefs.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '188\t\t\t\t\t\tEfsRpcQueryUsersOnFile request',
+            '189\t5\tS-1-5-21-1-2-3-500\t1\t64\t0x00000000\tEfsRpcQueryUsersOnFile response',
+        ]
+
+
+class TestDissectDcerpcEpm:
+    def test_epm_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: EPM v3 over TCP in NDR little endian, big endian
+        and NDR64, EPM v4 over UDP little endian and EPM v3 over UDP big
+        endian; no malformed packets and no expert info above a note
+        except the undecoded OSI TP4 floor, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 160
+        assert protocols.count('EPM') == 106
+        assert protocols.count('EPMv4') == 30
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '%d\tRightHandSide not decoded yet for proto_id 0x5' % f
+                for f in (25, 65, 128)]
+
+    def test_epm_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with its request and response, in the first TCP
+        connection; the other connections decode the same calls.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                '-Y', 'epm || epm4',
+                '-Tfields', '-eframe.number', '-eepm.opnum', '-eepm.num_ents',
+                '-eepm.rc', '-eepm.num_towers', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 136
+        svc = 'Service:LSA access, Service:no tower, Service:RPC over HTTP, ' + \
+              'LSARPC, 32bit NDR, LSARPC, 32bit NDR, LSARPC, 32bit NDR'
+        assert lines[0:32] == [
+            '6\t0\t4\t\t\tInsert request, ' + svc,
+            '7\t0\t\t0x00000000\t\tInsert response',
+            '8\t0\t0\t\t\tInsert request',
+            '9\t0\t\t0x16c9a0d6\t\tInsert response',
+            '10\t1\t1\t\t\tDelete request, Service:local, 64bit NDR',
+            '11\t1\t\t0x00000000\t\tDelete response',
+            '12\t2\t\t\t\tLookup request',
+            '13\t2\t4\t0x00000000\t\tLookup response, ' + svc,
+            '14\t2\t\t\t\tLookup request',
+            '15\t2\t0\t0x16c9a0d6\t\tLookup response',
+            '16\t2\t\t\t\tLookup request',
+            '17\t2\t0\t0x16c9a0d6\t\tLookup response',
+            '18\t2\t\t\t\tLookup request',
+            '19\t2\t0\t0x16c9a0d6\t\tLookup response',
+            '20\t3\t\t\t\tMap request, LSARPC, 32bit NDR',
+            '21\t3\t\t0x00000000\t2\tMap response, LSARPC, 32bit NDR, LSARPC, 32bit NDR',
+            '22\t3\t\t\t\tMap request, EPM, 32bit NDR',
+            '23\t3\t\t0x00000000\t3\tMap response, EPM, 32bit NDR, 64bit NDR',
+            '24\t3\t\t\t\tMap request, 32bit NDR',
+            '25\t3\t\t0x00000000\t2\tMap response, 32bit NDR, LSARPC, 32bit NDR',
+            '26\t3\t\t\t\tMap request, LSARPC, 32bit NDR',
+            '27\t3\t\t0x00000000\t3\tMap response, LSARPC, 32bit NDR, EPMv4, 32bit NDR',
+            '28\t3\t\t\t\tMap request',
+            '29\t3\t\t0x16c9a0d6\t0\tMap response',
+            '30\t4\t\t\t\tLookupHandleFree request',
+            '31\t4\t\t0x00000000\t\tLookupHandleFree response',
+            '32\t5\t\t\t\tInqObject request',
+            '33\t5\t\t\t\tInqObject response',
+            '34\t6\t\t\t\tMgmtDelete request',
+            '35\t6\t\t\t\tMgmtDelete response',
+            '36\t7\t\t\t\tUnknown operation 7 request',
+            '37\t7\t\t\t\tUnknown operation 7 response',
+        ]
+        # big endian and EPM v4 over UDP: the same calls without opnum 7
+        strip = [l.split('\t', 1)[1] for l in lines[0:30]]
+        assert [l.split('\t', 1)[1] for l in lines[32:62]] == strip
+        assert [l.split('\t', 1)[1] for l in lines[84:114]] == strip
+        # NDR64 and UDP big endian: one Map call only
+        short = strip[0:16] + strip[24:30]
+        assert [l.split('\t', 1)[1] for l in lines[62:84]] == short
+        assert [l.split('\t', 1)[1] for l in lines[114:136]] == short
+
+    def test_epm_insert_replace(self, cmd_tshark, capture_file, test_env):
+        '''Insert entries: objects, annotations (also empty) and a 32 bit
+        replace value of 256, which only matches since the replace field
+        is FT_UINT32 ("EPM: Do not let an annotation length move back,
+        fix the replace field").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                '-Y', 'epm.replace == 256',
+                '-Tfields', '-eframe.number', '-eepm.num_ents', '-eepm.ann_len',
+                '-eepm.annotation', '-eepm.object',
+            ), encoding='utf-8', env=test_env)
+        obj = '9e1c8d04-3b2e-4c59-8a71-5d2f00a1b2c3'
+        zero = '00000000-0000-0000-0000-000000000000'
+        assert stdout.splitlines() == [
+            '%d\t4\t11,0,9,14\tLSA access,,no tower,RPC over HTTP\t%s,%s,%s,%s'
+            % (f, obj, zero, zero, obj) for f in (6, 46, 84, 109, 139)]
+
+    def test_epm_lookup(self, cmd_tshark, capture_file, test_env):
+        '''Lookup requests with every inquiry type, with and without the
+        object and interface, and the context handles.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 12 && frame.number <= 18 && epm.inq_type',
+                '-Tfields', '-eframe.number', '-eepm.inq_type', '-eepm.object',
+                '-eepm.if_id', '-eepm.ver_maj', '-eepm.ver_opt', '-eepm.max_ents',
+                '-eepm.hnd',
+            ), encoding='utf-8', env=test_env)
+        hnd = '000000002e3d1f5b6c4a8e4f9d0b1c2e3f405162'
+        assert stdout.splitlines() == [
+            '12\t0\t\t\t\t1\t500\t' + '00' * 20,
+            '14\t1\t\t12345778-1234-abcd-ef00-0123456789ab\t0\t1\t500\t' + hnd,
+            '16\t2\t9e1c8d04-3b2e-4c59-8a71-5d2f00a1b2c3\t\t\t1\t500\t' + hnd,
+            '18\t3\t9e1c8d04-3b2e-4c59-8a71-5d2f00a1b2c3\te1af8308-5d1f-11c9-91a4-08002b14a0fa\t3\t1\t500\t' + hnd,
+        ]
+
+    def test_epm_towers(self, cmd_tshark, capture_file, test_env):
+        '''Map responses with towers of every floor protocol: UUID, RPC
+        CO and CL, TCP, UDP, IP, named pipes, NetBIOS, LRPC, RPC over
+        HTTP and every other protocol identifier.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_epm_coverage.pcap.gz'),
+                '-Y', 'frame.number in {21, 23, 25, 27}',
+                '-Tfields', '-eframe.number', '-eepm.tower.proto_id',
+                '-eepm.proto.tcp_port', '-eepm.proto.udp_port', '-eepm.proto.ip',
+                '-eepm.proto.named_pipe', '-eepm.proto.netbios_name',
+                '-eepm.proto.http_port', '-eepm.uuid_version',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '21\t0x0d,0x0d,0x0b,0x07,0x09,0x0d,0x0d,0x0b,0x0f,0x11\t49155\t\t192.0.2.60\t'
+            '\\\\PIPE\\\\lsass\t\\\\\\\\SERVER\t\t0,512,0,512',
+            '23\t0x0d,0x0d,0x0a,0x08,0x09,0x0d,0x0d,0x0b,0x10\t\t49156\t192.0.2.60\t'
+            'LRPC-0123456789abcdef01\t\t\t3,512,513,256',
+            '25\t0x0d,0x0d,0x00,0x02,0x03,0x04,0x05,0x06,0x0c,0x0e,0x12,0x13,0x14,0x16,'
+            '0x17,0x18,0x19,0x1a,0x1b,0x1c,0x20,0x21,0x22,0x30,0x0d,0x0d,0x0b,0x05'
+            '\t\t\t\t\t\t\t513,512,0,512',
+            '27\t0x0d,0x0d,0x0b,0x1f,0x09,0x0d,0x0d,0x0b,0x07,0x09\t135\t\t192.0.2.60,0.0.0.0'
+            '\t\t\t593\t0,512,768,512',
+        ]
+
+
+class TestDissectDcerpcEventlog:
+    def test_eventlog_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 53 calls each (plus an unknown opnum in the
+        first), a fourth with the well-formed call of the record length
+        reproducer, and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 354
+        assert protocols.count('EVENTLOG') == 322
+        assert protocols.count('DCERPC') == 8
+        assert protocols.count('TCP') == 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_eventlog_bind(self, cmd_tshark, capture_file, test_env):
+        '''The four binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        ndr = '8a885d04-1ceb-11c9-9fe8-08002b104860'
+        ndr64 = '71710533-beba-4937-8319-b5dbef9ccc36'
+        uuid = '82273fdc-e32a-18c3-3f78-827929dc23ea'
+        assert stdout.splitlines() == [
+            '1\t%s\t0\t%s' % (uuid, ndr),
+            '0\t%s\t0\t%s' % (uuid, ndr),
+            '1\t%s\t0\t%s' % (uuid, ndr64),
+            '1\t%s\t0\t%s' % (uuid, ndr),
+        ]
+
+    def test_eventlog_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with its status code and Info column; the same in
+        all three connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Y', 'eventlog',
+                '-Tfields', '-eeventlog.opnum', '-eeventlog.status', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 322
+        names = {
+            0xc0000022: 'STATUS_ACCESS_DENIED', 0xc0000008: 'STATUS_INVALID_HANDLE',
+            0xc0000023: 'STATUS_BUFFER_TOO_SMALL', 0xc0000011: 'STATUS_END_OF_FILE',
+        }
+        sequence = [
+            (7, 'OpenEventLogW', [0, 0xc0000022]),
+            (4, 'GetNumRecords', [0, 0xc0000008]),
+            (5, 'GetOldestRecord', [0, 0xc0000008]),
+            (10, 'ReadEventLogW', [0, 0, 0, 0, 0xc0000023]),
+            (6, 'ChangeNotify', [0, 0xc0000022]),
+            (22, 'GetLogInformation', [0, 0xc0000023]),
+            (0, 'ClearEventLogW', [0, 0xc0000022]),
+            (1, 'BackupEventLogW', [0, 0xc0000022]),
+            (23, 'FlushEventLog', [0, 0xc0000008]),
+            (8, 'RegisterEventSourceW', [0, 0xc0000022]),
+            (11, 'ReportEventW', [0, 0, 0xc0000022]),
+            (3, 'DeregisterEventSource', [0, 0xc0000008]),
+            (9, 'OpenBackupEventLogW', [0, 0xc0000011]),
+            (2, 'CloseEventLog', [0, 0, 0xc0000008]),
+        ]
+        calls = []
+        for op, name, statuses in sequence:
+            for status in statuses:
+                calls.append('%d\t\t%s request' % (op, name))
+                if status:
+                    calls.append('%d\t0x%08x\t%s response, %s, Error: %s' % (
+                        op, status, name, names[status], names[status]))
+                else:
+                    calls.append('%d\t0x00000000\t%s response' % (op, name))
+        for op, name in ((12, 'ClearEventLogA'), (13, 'BackupEventLogA'),
+                         (14, 'OpenEventLogA'), (15, 'RegisterEventSourceA'),
+                         (16, 'OpenBackupEventLogA'), (17, 'ReadEventLogA'),
+                         (18, 'ReportEventA'), (19, 'RegisterClusterSvc'),
+                         (20, 'DeregisterClusterSvc'), (21, 'WriteClusterEvents')):
+            calls += [
+                '%d\t\t%s request EVENTLOG V0' % (op, name),
+                '%d\t0x00000000\t%s response' % (op, name),
+                '%d\t\t%s request EVENTLOG V0' % (op, name),
+                '%d\t0xc0000022\t%s response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED' % (op, name),
+            ]
+        assert len(calls) == 106
+        assert lines[0:106] == calls
+        assert lines[106:108] == ['24\t\tUnknown operation 24 request',
+                                  '24\t\tUnknown operation 24 response']
+        assert lines[108:214] == calls
+        assert lines[214:320] == calls
+        assert lines[320:322] == ['10\t\tReadEventLogW request',
+                                  '10\t0x00000000\tReadEventLogW response']
+
+    def test_eventlog_records(self, cmd_tshark, capture_file, test_env):
+        '''The ReadEventLogW records in all three encodings: names, strings
+        found by their offset, the SID, the data and the sizes after the
+        record; the last one is the well-formed call of the record length
+        reproducer (eventlog_reclen_wrap.py).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Y', 'eventlog.Record',
+                '-Tfields', '-eframe.number', '-eeventlog.Record.length',
+                '-eeventlog.eventlog_Record.record_number',
+                '-eeventlog.eventlog_Record.event_type',
+                '-eeventlog.Record.source_name', '-eeventlog.Record.computer_name',
+                '-eeventlog.Record.string', '-ent.sid',
+                '-eeventlog.eventlog_Record.raw_data',
+                '-eeventlog.eventlog_ReadEventLogW.sent_size',
+                '-eeventlog.eventlog_ReadEventLogW.real_size',
+            ), encoding='utf-8', env=test_env)
+        records = [
+            '116\t1\t4\tSrc\tHost\tone,two\tS-1-5-32-544\traw\t116\t0',
+            '80\t2\t1\tSrc\tHost\t\t\t\t80\t0',
+            '100\t3\t16\tSrc\tHost\tx\tS-1-5-32-544\tx\t100\t0',
+            '84\t4\t8\t\t\t\tS-1-5-32-544\tdat\t84\t0',
+            '80\t5\t2\tSrc\tHost\t\t\t\t0\t96',
+        ]
+        expected = []
+        for first in (19, 135, 249):
+            expected += ['%d\t%s' % (first + 2 * i, r) for i, r in enumerate(records)]
+        expected.append('351\t110\t1\t4\tSrc\tHost\tone,two\tS-1-5-32-544\to\t110\t0')
+        assert stdout.splitlines() == expected
+
+    def test_eventlog_handles(self, cmd_tshark, capture_file, test_env):
+        '''Policy handles opened by OpenEventLogW and OpenBackupEventLogW
+        and closed by CloseEventLog (NDR little endian connection, two
+        passes), and the counted strings of the open calls in NDR64.
+        Frames 70 and 71 close the handle closed in frame 68 again
+        (STATUS_INVALID_HANDLE) and stay on that instance.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Y', 'tcp.port == 50001 && (eventlog.opnum == 2 || eventlog.opnum == 7 || eventlog.opnum == 9)',
+                '-Tfields', '-eframe.number', '-edcerpc.nt.open_frame',
+                '-edcerpc.nt.close_frame',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '6\t\t', '7\t7\t68', '8\t\t', '9\t\t',
+            '62\t\t', '63\t63\t66', '64\t\t', '65\t\t',
+            '66\t63\t66', '67\t\t', '68\t7\t68', '69\t\t', '70\t7\t68', '71\t7\t68',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_eventlog_coverage.pcap.gz'),
+                '-Y', 'tcp.port == 50003 && dcerpc.pkt_type == 0'
+                      ' && (eventlog.opnum == 7 || eventlog.opnum == 8 || eventlog.opnum == 9)',
+                '-Tfields', '-eeventlog.eventlog_OpenEventLogW.Module',
+                '-eeventlog.eventlog_OpenUnknown0.unknown0',
+                '-eeventlog.eventlog_RegisterEventSourceW.servername',
+                '-eeventlog.eventlog_OpenBackupEventLogW.logname',
+                '-eeventlog.eventlog_OpenBackupEventLogW.unknown3',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Application\t92\t\t\t',
+            '\t\t\t\t',
+            '\t92\tHOST\t\t',
+            '\t\t\t\t',
+            '\t0\t\tC:\\\\backup.evt\t1',
+            '\t\t\t\t0',
+        ]
+
+
+class TestDissectDcerpcFileexp:
+    @staticmethod
+    def fileexp_tree(cmd_tshark, capture_file, test_env, passes):
+        '''The FILEEXP trees of every frame, without the DCE/RPC request
+        and response links that only the second pass adds.'''
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-V', '-O', 'fileexp',
+            ), encoding='utf-8', env=test_env)
+        return [l.split(', [Resp: #')[0]
+                for l in stdout.splitlines()
+                if not l.lstrip().startswith(('[Response in frame', '[Request in frame', '[Time from request'))]
+
+    def test_fileexp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is FILEEXP and none is malformed or has an expert
+        info, in one and two passes, and both passes decode the same.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 153
+        assert protocols.count('FILEEXP') == 153
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+        assert self.fileexp_tree(cmd_tshark, capture_file, test_env, ()) == \
+            self.fileexp_tree(cmd_tshark, capture_file, test_env, ('-2',))
+
+    def test_fileexp_opnums(self, cmd_tshark, capture_file, test_env):
+        '''A request and a response for every opnum 0-27.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Tfields', '-edcerpc.pkt_type', '-efileexp.opnum',
+            ), encoding='utf-8', env=test_env)
+        pairs = {tuple(l.split('\t')) for l in stdout.splitlines()}
+        assert pairs == {(t, str(op)) for t in ('0', '2') for op in range(28)}
+
+    def test_fileexp_release_tokens(self, cmd_tshark, capture_file, test_env):
+        '''The ReleaseTokens returns array is decoded (it was skipped
+        before "FILEEXP: Check ACL lengths, fix the pipe size and
+        ReleaseTokens") and each entry's flags are read in place.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 153 || frame.number == 37',
+                '-Tfields', '-eframe.number',
+                '-efileexp.afsreturndesc_tokenid_low', '-efileexp.flags',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '37\t0x00000080,0x00000081\t4294967295,1,4294967295',
+            '153\t0x00000005,0x00000005\t119,119,153',
+        ]
+
+    def test_fileexp_fetchdata_pipe_size(self, cmd_tshark, capture_file, test_env):
+        '''The FetchData pipe size is a number (it was an empty string).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Y', 'fileexp.fetchdata_pipe_t_size',
+                '-Tfields', '-eframe.number', '-efileexp.fetchdata_pipe_t_size',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['6\t4096', '62\t4097']
+
+    def test_fileexp_acl(self, cmd_tshark, capture_file, test_env):
+        '''ACLs with lengths above, at and below the 38 octet header.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Y', 'fileexp.acl_len',
+                '-Tfields', '-eframe.number', '-efileexp.acl_len',
+                '-efileexp.acltype',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t46\t', '13\t54\t0', '64\t38\t', '69\t38\t1',
+            '116\t20\t', '119\t0\t0', '130\t46\t', '133\t54\t1',
+        ]
+
+    def test_fileexp_status(self, cmd_tshark, capture_file, test_env):
+        '''Status codes are named from the DCE error table
+        (packet-dcerpc-dce122.c), unknown ones shown as numbers, and an
+        error replaces the Info column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Y', 'frame.number in {2, 58, 64, 66, 70, 72}',
+                '-Tfields', '-eframe.number', '-efileexp.st', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert [l.rstrip() for l in stdout.splitlines()] == [
+            '2\t0\tSetContext response st:SUCCESS',
+            '58\t543465481\tSetContext reply st:No such fileset entry',
+            '64\t12345\tFetchAcl reply st:12345',
+            '66\t539918337\tFetchStatus reply st:event already in set',
+            '70\t556904451\tStoreAcl reply st:ACL entry not found',
+            '72\t704852032\tStoreStatus reply st:zlc_Init() returning .ld',
+        ]
+
+    def test_fileexp_big_endian(self, cmd_tshark, capture_file, test_env):
+        '''The big endian calls decode the same as the little endian ones.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fileexp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        info = stdout.splitlines()
+        le = [1, 2, 19, 20, 35, 36, 37, 38, 41, 42, 53, 54]
+        assert [info[n - 1] for n in le] == info[140:152]
+        assert 'Principal:host/fx.example.com' in info[140]
+        assert ':tn_tag: new0.txt' in info[142]
+
+
+class TestDissectDcerpcFldb:
+    @staticmethod
+    def fldb_calls():
+        '''One transport's calls: (opnum, status of the response or None
+        where the dissector reads none).'''
+        noent = 676372485
+        calls = [(0, None), (1, 0), (1, noent), (2, None), (3, None), (4, None),
+                 (6, 0), (6, 4660), (13, 0), (14, noent), (16, 0), (17, 0),
+                 (18, noent), (19, None), (26, None)]
+        calls += [(op, None) for op in (5, 7, 8, 9, 10, 11, 12, 15, 20, 21, 22,
+                                        23, 24, 25, 27, 28)]
+        lines = []
+        for op, status in calls:
+            lines.append('%d\t' % op)
+            lines.append('%d\t%s' % (op, '' if status is None else status))
+        return lines
+
+    def test_fldb_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: two TCP connections (little and big endian) with
+        a bind and 31 calls each (plus an unknown opnum in the first) and
+        the same 31 calls over UDP, the large responses reassembled from
+        TCP segments or DCE/RPC fragments; no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 234
+        assert protocols.count('FLDB') == 188
+        assert protocols.count('DCERPC') == 14
+        assert protocols.count('TCP') == 32
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_fldb_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum and the status of the responses, the same over TCP
+        in both byte orders and over UDP.'''
+        for filt, extra in (('tcp.stream == 0', ['29\t', '29\t']),
+                            ('tcp.stream == 1', []), ('udp', [])):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                    '-Y', 'fldb && ' + filt,
+                    '-Tfields', '-efldb.opnum', '-efldb.error_st',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == self.fldb_calls() + extra
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'udp && dcerpc.dg_flags1_frag == 1',
+                '-Tfields', '-edcerpc.opnum', '-edcerpc.dg_frag_num',
+            ), encoding='utf-8', env=test_env)
+        frags = [tuple(l.split('\t')) for l in stdout.splitlines()]
+        assert frags == [
+            ('0', '0'), ('0', '1'), ('1', '0'), ('1', '1'), ('1', '0'), ('1', '1'),
+            ('3', '0'), ('3', '1'), ('3', '2'), ('3', '3'), ('4', '0'), ('4', '1'),
+            ('13', '0'), ('13', '1'), ('16', '0'), ('16', '1'), ('19', '0'), ('19', '1'),
+        ]
+
+    def test_fldb_cell_name(self, cmd_tshark, capture_file, test_env):
+        '''The whole 128 octet cell name field of GetCellInfo is decoded:
+        the 121 octet name is shown in full (it was cut to 114 octets
+        before "FLDB: Show the whole cell name, stop at an invalid name
+        length").'''
+        name = 'dce.cell.' + 'x' * 100 + '.example.com'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'fldb.opnum == 3 && dcerpc.pkt_type == 2',
+                '-Tfields', '-efldb.vlconf.name', '-efldb.vlconf.cellidlow',
+                '-efldb.vlconf.numservers', '-efldb.vlconf.spare5',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == ['%s\t42\t2\t5' % name] * 3
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'fldb.opnum == 3 && dcerpc.pkt_type == 2 && tcp.stream == 1',
+                '-Tfields', '-efldb.vlconf.hostname', '-e_ws.col.info',
+                '-Eoccurrence=f',
+            ), encoding='utf-8', env=test_env)
+        hostname, info = stdout.rstrip('\n').split('\t')
+        assert hostname == 'fs1.example.com'
+        assert info.startswith('GetCellInfo response Name: %s CellID:0-42 numServers:2 '
+                               'Type:2  IP:192.0.2.10 Type:2  IP:192.0.2.11 '
+                               'hostName: fs1.example.com hostName: fs2.example.com hostName: ' % name)
+
+    def test_fldb_vldbentry(self, cmd_tshark, capture_file, test_env):
+        '''vldbentry with every site flag and afsFlags bit, with the afsFlags
+        below SERVER_REESTABLISH only, and an all-zero entry, over UDP.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'udp && fldb.vldbentry.volumetype',
+                '-Tfields', '-efldb.opnum', '-efldb.vldbentry.volumename',
+                '-efldb.vldbentry.nservers', '-efldb.vldbentry.siteflags',
+                '-efldb.vldbentry.afsflags', '-efldb.vldbentry.voltypes',
+                '-efldb.vldbentry.cloneidlow', '-efldb.vldbentry.lockername',
+                '-efldb.vldbentry.charspares',
+            ), encoding='utf-8', env=test_env)
+        full = ('user.alice\t2\t1,2,4,8,16,32,64,2147483648,2147483775,0,0,0,0,0,0,0'
+                '\t%d\t1,2,4,0,0,0,0,0\t536870920\tadmin\tspare chars')
+        zero = '\t\t0\t' + ','.join(['0'] * 16) + '\t0\t' + ','.join(['0'] * 8) + '\t0\t\t'
+        assert stdout.splitlines() == [
+            '0\t' + full % 262143,
+            '1\t' + full % 511,
+            '1' + zero,
+            '4\t' + full % 262143,
+            '13\t' + full % 262143,
+            '16' + zero,
+            '19\t' + full % 511,
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'udp && fldb.opnum == 0 && dcerpc.pkt_type == 2',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert (' afsFlags=:RETURNTOKEN:TOKENJUMPQUEUE:SKIPTOKEN:NOOPTIMISM:TOKENID'
+                ':RETURNBLOCKER:ASYNCGRANT:NOREVOKE:MOVE_REESTABLISH:SERVER_REESTABLISH'
+                ':NO_NEW_EPOCH:MOVE_SOURCE_OK:SYNC:ZERO:SKIPSTATUS:FORCEREVOCATIONS'
+                ':FORCEVOLQUIESCE:SEC_SERVICE:CONTEXT_NEW_ACL_IF MaxTotLat:600 ') in stdout
+        assert (' SiteFlags:NEWREPSITE:SPARE1:SPARE2:SPARE3:SAMEASPREV:DEFINED'
+                ':PARTIALADDRS :ZEROIXHERE ') in stdout
+
+    def test_fldb_site_and_name(self, cmd_tshark, capture_file, test_env):
+        '''GetSiteInfo answers and GetEntryByName principal names, in big
+        endian (the second connection).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'tcp.stream == 1 && fldb.opnum in {1, 6, 26} && dcerpc.pkt_type == 0',
+                '-Tfields', '-efldb.opnum', '-efldb.afsnetaddr.type',
+                '-efldb.principalName_size', '-efldb.NameString_principal',
+                '-efldb.numwanted',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t\t10\tuser.alice\t',
+            '1\t\t0\t\t',
+            '6\t2\t\t\t',
+            '6\t0\t\t\t',
+            '26\t2\t\t\t4',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fldb_coverage.pcap.gz'),
+                '-Y', 'tcp.stream == 1 && fldb.opnum == 6 && dcerpc.pkt_type == 2',
+                '-Tfields', '-efldb.NameString', '-efldb.uuid_owner', '-efldb.uuid_objid',
+                '-efldb.creationquota', '-efldb.spare5', '-efldb.error_st',
+            ), encoding='utf-8', env=test_env)
+        site = ('hosts/fs1/self\t00000000-0000-0000-0000-000000000001'
+                '\t11111111-2222-3333-4444-555555555501\t100\t5\t')
+        assert stdout.splitlines() == [site + '0', site + '4660']
+
+
+class TestDissectDcerpcFrsrpc:
+    def test_frsrpc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 20 calls each (plus an unknown opnum in the
+        first), a fourth with the file name reproducer, and no malformed
+        packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 156
+        assert protocols.count('FRSRPC') == 124
+        assert protocols.count('DCERPC') == 8
+        assert protocols.count('TCP') == 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_frsrpc_bind(self, cmd_tshark, capture_file, test_env):
+        '''The four binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_if_ver_minor',
+                '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        ndr = '8a885d04-1ceb-11c9-9fe8-08002b104860'
+        ndr64 = '71710533-beba-4937-8319-b5dbef9ccc36'
+        uuid = 'f5cc59b4-4264-101a-8c59-08002b2f8426'
+        assert stdout.splitlines() == [
+            '1\t%s\t1\t1\t%s' % (uuid, ndr),
+            '0\t%s\t1\t1\t%s' % (uuid, ndr),
+            '1\t%s\t1\t1\t%s' % (uuid, ndr64),
+            '1\t%s\t1\t1\t%s' % (uuid, ndr),
+        ]
+
+    def test_frsrpc_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with its status code and Info column, including the
+        commands of the communication packets; the same in all three
+        connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Y', 'frsrpc',
+                '-Tfields', '-efrsrpc.opnum', '-efrsrpc.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 124
+        commands = ('REMOTE_CO', 'RECEIVING_STATE', 'REMOTE_CO_DONE', 'ABORT_FETCH',
+                    'RETRY_FETCH', 'NEED_JOIN', 'START_JOIN', 'JOINING', 'JOINED',
+                    'UNJOIN_REMOTE', 'WJOIN_DONE', 'SEND_STAGE')
+        calls = [
+            '0\t\tFrsSendCommPkt request,command = FRSRPC_COMMAND_START_JOIN',
+            '0\t0x00000000\tFrsSendCommPkt response',
+            '0\t\tFrsSendCommPkt request,command = FRSRPC_COMMAND_REMOTE_CO',
+            '0\t0x00000000\tFrsSendCommPkt response',
+            '0\t\tFrsSendCommPkt request,command = FRSRPC_COMMAND_REMOTE_CO',
+            '0\t0x00000000\tFrsSendCommPkt response',
+            '0\t\tFrsSendCommPkt request,command = FRSRPC_COMMAND_REMOTE_CO',
+            '0\t0x00000000\tFrsSendCommPkt response',
+            '0\t\tFrsSendCommPkt request' + ''.join(',command = FRSRPC_COMMAND_' + c for c in commands),
+            '0\t0x00000000\tFrsSendCommPkt response',
+            '0\t\tFrsSendCommPkt request',
+            '0\t0x00000057\tFrsSendCommPkt response, Error: WERR_INVALID_PARAMETER',
+            '0\t\tFrsSendCommPkt request',
+            '0\t0x00000005\tFrsSendCommPkt response, Error: WERR_ACCESS_DENIED',
+            '1\t\tFrsVerifyPromotionParent request',
+            '1\t0x00000000\tFrsVerifyPromotionParent response',
+            '1\t\tFrsVerifyPromotionParent request',
+            '1\t0x00000005\tFrsVerifyPromotionParent response, Error: WERR_ACCESS_DENIED',
+            '2\t\tFrsStartPromotionParent request',
+            '2\t0x00000000\tFrsStartPromotionParent response',
+            '2\t\tFrsStartPromotionParent request',
+            '2\t0x00000005\tFrsStartPromotionParent response, Error: WERR_ACCESS_DENIED',
+            '3\t\tFrsNOP request FRSRPC V1',
+            '3\t0x00000000\tFrsNOP response',
+            '3\t\tFrsNOP request FRSRPC V1',
+            '3\t0x00000005\tFrsNOP response, Error: WERR_ACCESS_DENIED',
+        ]
+        for op, name in ((4, 'FRSRPC_BACKUP_COMPLETE'), (5, 'FRSRPC_BACKUP_COMPLETE_5'),
+                         (6, 'FRSRPC_BACKUP_COMPLETE_6'), (7, 'FRSRPC_BACKUP_COMPLETE_7'),
+                         (8, 'FRSRPC_BACKUP_COMPLETE_8'), (9, 'FRSRPC_BACKUP_COMPLETE_9'),
+                         (10, 'FRSRPC_VERIFY_PROMOTION_PARENT_EX')):
+            calls += ['%d\t\t%s request FRSRPC V1' % (op, name),
+                      '%d\t\t%s response FRSRPC V1' % (op, name)]
+        assert len(calls) == 40
+        assert lines[0:40] == calls
+        assert lines[40:42] == ['11\t\tUnknown operation 11 request',
+                                '11\t\tUnknown operation 11 response']
+        assert lines[42:82] == calls
+        assert lines[82:122] == calls
+        assert lines[122:124] == [
+            '0\t\tFrsSendCommPkt request',
+            '0\t0x00000000\tFrsSendCommPkt response',
+        ]
+
+    def test_frsrpc_chunks(self, cmd_tshark, capture_file, test_env):
+        '''The chunk types of each communication packet and the names and
+        GUIDs of the TO, FROM, REPLICA and CONNECTION chunks (NDR64).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Y', 'frsrpc.opnum == 0 && dcerpc.pkt_type == 0 && tcp.port == 50003',
+                '-Tfields', '-efrsrpc.frsrpc_FrsSendCommPktReq.minor',
+                '-efrsrpc.frsrpc_FrsSendCommPktReq.pkt_len',
+                '-efrsrpc.frsrpc_CommPktChunk.type',
+                '-efrsrpc.frsrpc_CommPktChunkGuidName.name',
+                '-efrsrpc.frsrpc_CommPktChunkData.co_sequence_number',
+            ), encoding='utf-8', env=test_env)
+        join = ('0x00000001,0x00000002,0x00000003,0x00000004,0x00000005,0x00000008,'
+                '0x00000006,0x00000012,0x00000007,0x00000011,0x00000014,0x00000018,0x00000013')
+        remote_co = ('0x00000001,0x00000002,0x00000003,0x00000004,0x00000005,0x00000008,'
+                     '0x0000000d,0x00000016,0x00000017,0x0000000e,0x0000000f,0x00000010,'
+                     '0x0000000a,0x0000000b,0x0000000c,0x00000009,0x00000099,0x00000013')
+        assert stdout.splitlines() == [
+            '9\t374\t%s\tDC1.example.test,DC2.example.test,SYSVOL,\t' % join,
+            '9\t1268\t%s\tDC1,DC2,SYSVOL,cxtion\t4660' % remote_co,
+            '4\t1268\t%s\tDC1,DC2,SYSVOL,cxtion\t4660' % remote_co,
+            '5\t1268\t%s\tDC1,DC2,SYSVOL,cxtion\t4660' % remote_co,
+            '0\t130\t%s\t\t' % ','.join(['0x00000002'] * 13),
+            '1\t0\t\t\t',
+            '16\t0\t\t\t',
+        ]
+
+    def test_frsrpc_change_order_file_name(self, cmd_tshark, capture_file, test_env):
+        '''The file name of a change order is a zero-padded UTF-16 array of
+        522 octets: short, 140 character and 261 character (no NUL) names
+        in big endian, the fields after it, and the reproducer of the
+        assertion on names without a NUL (frsrpc_filename_assert.py) ("FRSRPC:
+        Do not loop on a chunk size that wraps, do not assert on names").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Y', 'frsrpc.frsrpc_CommPktChunkData.remote_co && (tcp.port == 50002 || tcp.port == 50004)',
+                '-Tfields', '-eframe.number',
+                '-efrsrpc.frsrpc_CommPktChangeOrderCommand.file_name_length',
+                '-efrsrpc.CommPktChangeOrderCommand.file_name',
+                '-efrsrpc.frsrpc_CommPktChangeOrderCommand.padding1',
+                '-efrsrpc.frsrpc_CommPktChangeOrderCommand.padding4',
+                '-efrsrpc.frsrpc_CommPktChangeOrderCommand.flags',
+                '-efrsrpc.frsrpc_CommPktChangeOrderCommand.status',
+                '-efrsrpc.frsrpc_CommPktCoRecordExtensionWin2k.field_size',
+                '-efrsrpc.frsrpc_CommPktChangeOrderRecordExtension.field_size',
+                '-efrsrpc.frsrpc_CommPktDataExtensionRetryTimeout.count',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert len(lines) == 4
+        assert lines[0] == ['58', '34', 'scripts\\\\logon.cmd', '0', '0', '0x83743677',
+                            '0x00000018', '40', '72', '3']
+        assert lines[1] == ['60', '280', 'dir\\\\' + 'longname' * 17, '0', '0', '0x00000000',
+                            '0x00000099', '40', '72', '3']
+        assert lines[2] == ['62', '522', 'F' * 261, '0', '0', '0x83743677',
+                            '0x00000018', '40', '72', '3']
+        assert lines[3][0:2] == ['152', '16705']
+        assert lines[3][2] == '䅁' * 261
+        assert lines[3][3:5] == ['65', '65']
+
+    def test_frsrpc_promotion(self, cmd_tshark, capture_file, test_env):
+        '''FrsStartPromotionParent in NDR64: strings and the GUIDs in
+        their subcontexts.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frsrpc_coverage.pcap.gz'),
+                '-Y', 'frsrpc.opnum == 2 && tcp.port == 50003',
+                '-Tfields', '-efrsrpc.frsrpc_FrsStartPromotionParent.partner_princ_name',
+                '-efrsrpc.frsrpc_FrsStartPromotionParent.connection_guid',
+                '-efrsrpc.frsrpc_FrsStartPromotionParent.partner_guid',
+                '-efrsrpc.frsrpc_FrsStartPromotionParent.parent_guid',
+                '-efrsrpc.werror',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'DC2$@EXAMPLE.TEST\t01234567-89ab-cdef-0123-456789abcdef\t'
+            '11111111-2222-3333-4444-555555555555\t66666666-7777-8888-9999-aaaaaaaaaaaa\t',
+            '\t\t\tbbbbbbbb-cccc-dddd-eeee-ffffffffffff\t0x00000000',
+            '\t\t\t\t',
+            '\t\t\t\t0x00000005',
+        ]
+
+
+class TestDissectDcerpcFrstrans:
+    def test_frstrans_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 26 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frstrans_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 182
+        assert protocols.count('FRSTRANS') == 158
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_frstrans_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_frstrans_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order, interface and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frstrans_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t897e2e5f-93f3-4376-9c9c-fd2277495c27\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t897e2e5f-93f3-4376-9c9c-fd2277495c27\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t897e2e5f-93f3-4376-9c9c-fd2277495c27\t1\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_frstrans_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum 0-16 with its status; the same in all three
+        connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frstrans_coverage.pcap.gz'),
+                '-Y', 'frstrans',
+                '-Tfields', '-efrstrans.opnum', '-efrstrans.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 158
+        calls = [
+            '0\t\tCheckConnectivity request',
+            '0\t0x00000000\tCheckConnectivity response',
+            '0\t\tCheckConnectivity request',
+            '0\t0x000006ba\tCheckConnectivity response, Error: WERR_RPC_S_SERVER_UNAVAILABLE',
+            '1\t\tEstablishConnection request',
+            '1\t0x00000000\tEstablishConnection response',
+            '1\t\tEstablishConnection request',
+            '1\t0x00000000\tEstablishConnection response',
+            '1\t\tEstablishConnection request',
+            '1\t0x00000005\tEstablishConnection response, Error: WERR_ACCESS_DENIED',
+            '2\t\tEstablishSession request',
+            '2\t0x00000000\tEstablishSession response',
+            '2\t\tEstablishSession request',
+            '2\t0x00000005\tEstablishSession response, Error: WERR_ACCESS_DENIED',
+            '3\t\tRequestUpdates request',
+            '3\t0x00000000\tRequestUpdates response',
+            '3\t\tRequestUpdates request',
+            '3\t0x00000057\tRequestUpdates response, Error: WERR_INVALID_PARAMETER',
+            '4\t\tRequestVersionVector request',
+            '4\t0x00000000\tRequestVersionVector response',
+            '4\t\tRequestVersionVector request',
+            '4\t0x00000000\tRequestVersionVector response',
+            '4\t\tRequestVersionVector request',
+            '4\t0x00000015\tRequestVersionVector response, Error: WERR_NOT_READY',
+            '5\t\tAsyncPoll request',
+            '5\t0x00000000\tAsyncPoll response',
+            '5\t\tAsyncPoll request',
+            '5\t0x00000005\tAsyncPoll response, Error: WERR_ACCESS_DENIED',
+        ]
+        for op, name in ((6, 'FRSTRANS_REQUEST_RECORDS'), (7, 'FRSTRANS_UPDATE_CANCEL'),
+                         (8, 'FRSTRANS_RAW_GET_FILE_DATA'), (9, 'FRSTRANS_RDC_GET_SIGNATURES'),
+                         (10, 'FRSTRANS_RDC_PUSH_SOURCE_NEEDS'), (11, 'FRSTRANS_RDC_GET_FILE_DATA'),
+                         (12, 'FRSTRANS_RDC_CLOSE')):
+            calls += ['%d\t\t%s request FRSTRANS V1' % (op, name),
+                      '%d\t\t%s response FRSTRANS V1' % (op, name)]
+        calls += [
+            '13\t\tInitializeFileTransferAsync request',
+            '13\t0x00000000\tInitializeFileTransferAsync response',
+            '13\t\tInitializeFileTransferAsync request',
+            '13\t0x0000000e\tInitializeFileTransferAsync response, Error: WERR_OUTOFMEMORY',
+        ]
+        for op, name in ((14, 'FRSTRANS_OPNUM_0E_NOT_USED_ON_THE_WIRE'),
+                         (15, 'FRSTRANS_RAW_GET_FILE_DATA_ASYNC'),
+                         (16, 'FRSTRANS_RDC_GET_FILE_DATA_ASYNC')):
+            calls += ['%d\t\t%s request FRSTRANS V1' % (op, name),
+                      '%d\t\t%s response FRSTRANS V1' % (op, name)]
+        assert lines[0:52] == calls
+        assert lines[52:54] == ['17\t\tUnknown operation 17 request',
+                                '17\t\tUnknown operation 17 response']
+        assert lines[54:106] == calls
+        assert lines[106:158] == calls
+
+    def test_frstrans_updates(self, cmd_tshark, capture_file, test_env):
+        '''RequestUpdates, AsyncPoll and InitializeFileTransferAsync:
+        version vectors, updates, epoque vectors and every RDC filter
+        union arm decode the same in all three encodings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_frstrans_coverage.pcap.gz'),
+                '-Y', 'frstrans.opnum in {3, 5, 13}',
+                '-Tfields', '-efrstrans.frstrans_Update.name',
+                '-efrstrans.frstrans_Update.present',
+                '-efrstrans.frstrans_RequestUpdates.update_count',
+                '-efrstrans.frstrans_RequestUpdates.update_status',
+                '-efrstrans.frstrans_RequestUpdates.gvsn_version',
+                '-efrstrans.frstrans_VersionVector.low',
+                '-efrstrans.frstrans_VersionVector.high',
+                '-efrstrans.frstrans_EpoqueVector.year',
+                '-efrstrans.frstrans_EpoqueVector.milli_seconds',
+                '-efrstrans.frstrans_RdcParameters.rdc_chunker_algorithm',
+                '-efrstrans.frstrans_RdcParameterFilterMax.min_horizon_size',
+                '-efrstrans.frstrans_RdcParameterFilterPoint.max_chunk_size',
+                '-efrstrans.frstrans_InitializeFileTransferAsync.size_read',
+                '-efrstrans.frstrans_InitializeFileTransferAsync.is_end_of_file',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 36
+        calls = [
+            '\t\t\t\t\t1,101\t100,200\t\t\t\t\t\t\t',
+            'file1.txt,deleted.doc\t1,0\t2\t3\t201\t\t\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t\t\t\t\t\t\t',
+            '\t\t0\t2\t0\t\t\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t\t\t\t\t\t\t',
+            '\t\t\t\t\t1,3\t2,4\t2025\t999\t\t\t\t\t',
+            '\t\t\t\t\t\t\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t\t\t\t\t\t\t',
+            'file1.txt\t1\t\t\t\t\t\t\t\t\t\t\t\t',
+            'file1.txt\t1\t\t\t\t\t\t\t\t0,1,2,3\t128\t65535\t8\t0',
+            'b\t1\t\t\t\t\t\t\t\t\t\t\t\t',
+            'b\t1\t\t\t\t\t\t\t\t\t\t\t0\t1',
+        ]
+        assert lines[0:12] == calls
+        assert lines[12:24] == calls
+        assert lines[24:36] == calls
+
+
+class TestDissectDcerpcFsrvp:
+    def test_fsrvp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 31 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fsrvp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 212
+        assert protocols.count('FSRVP') == 188
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_fsrvp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_fsrvp_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order, interface and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fsrvp_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\ta8e0653c-2744-4389-a61d-7373df8b2292\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\ta8e0653c-2744-4389-a61d-7373df8b2292\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\ta8e0653c-2744-4389-a61d-7373df8b2292\t1\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_fsrvp_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum 0-12 with success and an error status; the same in
+        all three connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fsrvp_coverage.pcap.gz'),
+                '-Y', 'fsrvp',
+                '-Tfields', '-efsrvp.opnum', '-efsrvp.status', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 188
+        calls = [
+            '0\t\tGetSupportedVersion request FSRVP V1',
+            '0\t0x00000000\tGetSupportedVersion response',
+            '0\t\tGetSupportedVersion request FSRVP V1',
+            '0\t0xc0000022\tGetSupportedVersion response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED',
+            '1\t\tSetContext request',
+            '1\t0x00000000\tSetContext response',
+            '1\t\tSetContext request',
+            '1\t0x00000000\tSetContext response',
+            '1\t\tSetContext request',
+            '1\t0x00000000\tSetContext response',
+            '1\t\tSetContext request',
+            '1\t0x00000000\tSetContext response',
+            '1\t\tSetContext request',
+            '1\t0x8004231b\tSetContext response, Unknown error 0x8004231b, Error: Unknown NT status 0x8004231b',
+            '2\t\tStartShadowCopySet request',
+            '2\t0x00000000\tStartShadowCopySet response',
+            '2\t\tStartShadowCopySet request',
+            '2\t0x80042316\tStartShadowCopySet response, Unknown error 0x80042316, Error: Unknown NT status 0x80042316',
+            '3\t\tAddToShadowCopySet request',
+            '3\t0x00000000\tAddToShadowCopySet response',
+            '3\t\tAddToShadowCopySet request',
+            '3\t0x80042308\tAddToShadowCopySet response, Unknown error 0x80042308, Error: Unknown NT status 0x80042308',
+            '4\t\tCommitShadowCopySet request',
+            '4\t0x00000000\tCommitShadowCopySet response',
+            '4\t\tCommitShadowCopySet request',
+            '4\t0x00000102\tCommitShadowCopySet response, STATUS_TIMEOUT, Error: STATUS_TIMEOUT',
+            '5\t\tExposeShadowCopySet request',
+            '5\t0x00000000\tExposeShadowCopySet response',
+            '5\t\tExposeShadowCopySet request',
+            '5\t0x00000102\tExposeShadowCopySet response, STATUS_TIMEOUT, Error: STATUS_TIMEOUT',
+            '12\t\tPrepareShadowCopySet request',
+            '12\t0x00000000\tPrepareShadowCopySet response',
+            '12\t\tPrepareShadowCopySet request',
+            '12\t0x00000102\tPrepareShadowCopySet response, STATUS_TIMEOUT, Error: STATUS_TIMEOUT',
+            '6\t\tRecoveryCompleteShadowCopySet request',
+            '6\t0x00000000\tRecoveryCompleteShadowCopySet response',
+            '6\t\tRecoveryCompleteShadowCopySet request',
+            '6\t0x80042301\tRecoveryCompleteShadowCopySet response, Unknown error 0x80042301, Error: Unknown NT status 0x80042301',
+            '7\t\tAbortShadowCopySet request',
+            '7\t0x00000000\tAbortShadowCopySet response',
+            '7\t\tAbortShadowCopySet request',
+            '7\t0x80042301\tAbortShadowCopySet response, Unknown error 0x80042301, Error: Unknown NT status 0x80042301',
+            '8\t\tIsPathSupported request',
+            '8\t0x00000000\tIsPathSupported response',
+            '8\t\tIsPathSupported request',
+            '8\t0xc0000022\tIsPathSupported response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED',
+            '9\t\tIsPathShadowCopied request',
+            '9\t0x00000000\tIsPathShadowCopied response',
+            '9\t\tIsPathShadowCopied request',
+            '9\t0xc0000022\tIsPathShadowCopied response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED',
+            '10\t\tGetShareMapping request',
+            '10\t0x00000000\tGetShareMapping response',
+            '10\t\tGetShareMapping request',
+            '10\t0x80042308\tGetShareMapping response, Unknown error 0x80042308, Error: Unknown NT status 0x80042308',
+            '10\t\tGetShareMapping request',
+            '10\t0x80042308\tGetShareMapping response, Unknown error 0x80042308, Error: Unknown NT status 0x80042308',
+            '10\t\tGetShareMapping request',
+            '10\t0x80042308\tGetShareMapping response, Unknown error 0x80042308, Error: Unknown NT status 0x80042308',
+            '11\t\tDeleteShareMapping request',
+            '11\t0x00000000\tDeleteShareMapping response',
+            '11\t\tDeleteShareMapping request',
+            '11\t0x80042501\tDeleteShareMapping response, Unknown error 0x80042501, Error: Unknown NT status 0x80042501',
+        ]
+        assert lines[0:62] == calls
+        assert lines[62:64] == ['13\t\tUnknown operation 13 request',
+                                '13\t\tUnknown operation 13 response']
+        assert lines[64:126] == calls
+        assert lines[126:188] == calls
+
+    def test_fsrvp_values(self, cmd_tshark, capture_file, test_env):
+        '''SetContext contexts, IsPathSupported with and without an owner
+        name, a negative compatibility, and GetShareMapping with a full
+        mapping, a mapping without names, a NULL mapping and an unknown
+        level, the same in all three encodings.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_fsrvp_coverage.pcap.gz'),
+                '-Y', 'fsrvp.opnum in {1, 8, 9, 10}',
+                '-Tfields', '-efsrvp.fsrvp_SetContext.Context',
+                '-efsrvp.fsrvp_IsPathSupported.SupportedByThisProvider',
+                '-efsrvp.fsrvp_IsPathSupported.OwnerMachineName',
+                '-efsrvp.fsrvp_IsPathShadowCopied.ShadowCopyCompatibility',
+                '-efsrvp.fsrvp_GetShareMapping.Level',
+                '-efsrvp.fssagent_share_mapping_1.ShadowCopyId',
+                '-efsrvp.fssagent_share_mapping_1.ShareNameUNC',
+                '-efsrvp.fssagent_share_mapping_1.ShadowCopyShareName',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 78
+        values = [
+            '0\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '16\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '25\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '9\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '67108880\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t1\tFS1\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t0\t\t\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t\t\t-1\t\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t\t\t0\t\t\t\t',
+            '\t\t\t\t1\t\t\t',
+            '\t\t\t\t\taaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\t\\\\\\\\fs1.example.com\\\\share\t\\\\\\\\fs1.example.com\\\\share@{00000000-0000-0000-0000-000000000001}',
+            '\t\t\t\t1\t\t\t',
+            '\t\t\t\t\taaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\t\t',
+            '\t\t\t\t1\t\t\t',
+            '\t\t\t\t\t\t\t',
+            '\t\t\t\t2\t\t\t',
+            '\t\t\t\t\t\t\t',
+        ]
+        assert lines[0:26] == values
+        assert lines[26:52] == values
+        assert lines[52:78] == values
+
+
+class TestDissectDcerpcInitshutdown:
+    def test_initshutdown_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64) with a bind and 7 calls each (plus an unknown opnum in the
+        first), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_initshutdown_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 68
+        assert protocols.count('INITSHUTDOWN') == 44
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_initshutdown_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_initshutdown_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order, interface version and transfer
+        syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_initshutdown_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_if_ver', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t894de0c0-0d55-11d3-a322-00c04fa321a1\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t894de0c0-0d55-11d3-a322-00c04fa321a1\t1\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t894de0c0-0d55-11d3-a322-00c04fa321a1\t1\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_initshutdown_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum with NULL and non-NULL host names and messages,
+        timeouts, reasons and WERROR codes; the same in all three
+        connections.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_initshutdown_coverage.pcap.gz'),
+                '-Y', 'initshutdown',
+                '-Tfields', '-einitshutdown.opnum',
+                '-einitshutdown.initshutdown_Init.hostname',
+                '-einitshutdown.initshutdown_InitEx.hostname',
+                '-einitshutdown.initshutdown_Abort.server',
+                '-elsarpc.lsa.string',
+                '-einitshutdown.initshutdown_Init.timeout',
+                '-einitshutdown.initshutdown_InitEx.timeout',
+                '-einitshutdown.initshutdown_InitEx.reason',
+                '-einitshutdown.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 44
+        calls = [
+            '0\t23644\t\t\tSystem maintenance\t30\t\t\t\tInit request',
+            '0\t\t\t\t\t\t\t\t0x00000000\tInit response',
+            '0\t\t\t\t\t0\t\t\t\tInit request',
+            '0\t\t\t\t\t\t\t\t0x0000045b\tInit response, Error: WERR_SHUTDOWN_IN_PROGRESS',
+            '0\t83\t\t\t\t4294967295\t\t\t\tInit request',
+            '0\t\t\t\t\t\t\t\t0x00000005\tInit response, Error: WERR_ACCESS_DENIED',
+            '1\t\t\t23644\t\t\t\t\t\tAbort request',
+            '1\t\t\t\t\t\t\t\t0x00000000\tAbort response',
+            '1\t\t\t\t\t\t\t\t\tAbort request',
+            '1\t\t\t\t\t\t\t\t0x0000045c\tAbort response, Error: WERR_NO_SHUTDOWN_IN_PROGRESS',
+            '2\t\t23644\t\tInstalling updates\t\t600\t2147745793\t\tInitEx request',
+            '2\t\t\t\t\t\t\t\t0x00000000\tInitEx response',
+            '2\t\t\t\t\t\t5\t1073741824\t\tInitEx request',
+            '2\t\t\t\t\t\t\t\t0x0badc0de\tInitEx response, Error: Unknown DOS error 0x0badc0de',
+        ]
+        assert lines[0:14] == calls
+        assert lines[14:16] == ['3\t\t\t\t\t\t\t\t\tUnknown operation 3 request',
+                                '3\t\t\t\t\t\t\t\t\tUnknown operation 3 response']
+        assert lines[16:30] == calls
+        assert lines[30:44] == calls
+
+    def test_initshutdown_message(self, cmd_tshark, capture_file, test_env):
+        '''The lsa_StringLarge message of Init in NDR64 (the third
+        connection): length, size and the conformant varying string; and
+        the empty message in big endian.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_initshutdown_coverage.pcap.gz'),
+                '-Y', 'frame.number in {34, 52}',
+                '-V', '-O', 'initshutdown',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.strip() for l in stdout.splitlines()]
+        start = lines.index('Init shutdown service, Init')
+        assert lines[start:start + 18] == [
+            'Init shutdown service, Init',
+            'Operation: Init (0)',
+            'Pointer to Hostname (uint16)',
+            'Referent ID: 0x00020004',
+            'Hostname: 83',
+            'Pointer to Message (lsa_StringLarge)',
+            'Referent ID: 0x00020008',
+            'Message',
+            'Length: 0',
+            'Size: 2',
+            'Pointer to String (uint16):',
+            'Referent ID: 0x0002000c',
+            'Max Count: 1',
+            'Offset: 0',
+            'Actual Count: 0',
+            'Timeout: 4294967295',
+            'Force Apps: 0',
+            'Do Reboot: 1',
+        ]
+        start = lines.index('Init shutdown service, Init', start + 1)
+        assert lines[start + 3:start + 19] == [
+            'Referent ID: 0x0000000000020004',
+            'Hostname: 23644',
+            'Pointer to Message (lsa_StringLarge)',
+            'Referent ID: 0x0000000000020008',
+            'Message',
+            'Length: 36',
+            'Size: 38',
+            'Pointer to String (uint16): System maintenance',
+            'Referent ID: 0x000000000002000c',
+            'Max Count: 19',
+            'Offset: 0',
+            'Actual Count: 18',
+            'String: System maintenance',
+            'Timeout: 30',
+            'Force Apps: 1',
+            'Do Reboot: 1',
+        ]
+
+
+class TestDissectDcerpcIwbemlevel1login:
+    def test_iwbemlevel1login_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: a little endian and a big endian connection with
+        a bind and calls of every opnum, and the reproducer connection,
+        and no malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 88
+        assert protocols.count('IWBEMLEVEL1LOGIN') == 64
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_iwbemlevel1login_calls(self, cmd_tshark, capture_file, test_env):
+        '''The opnum, status and Info column of every response, the same
+        in both byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Y', 'IWbemLevel1Login && dcerpc.pkt_type == 2 && tcp.dstport <= 50002',
+                '-Tfields', '-eIWbemLevel1Login.opnum', '-eIWbemLevel1Login.werror',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        calls = []
+        for op in range(3):
+            calls += ['%d\t0x00000000\tiwbemlevel1login_opnum%d response' % (op, op),
+                      '%d\t0x%08x\tiwbemlevel1login_opnum%d response, Error: Unknown DOS error 0x%08x'
+                      % (op, 0x80041001 + op, op, 0x80041001 + op)]
+        err = ', Error: Unknown DOS error 0x80041003'
+        calls += ['3\t0x00000000\tEstablishPosition response',
+                  '3\t0x80041003\tEstablishPosition response' + err,
+                  '4\t0x00000000\tRequestChallenge response',
+                  '4\t0x80041003\tRequestChallenge response' + err,
+                  '5\t0x00000000\tWBEMLogin response',
+                  '5\t0x80041003\tWBEMLogin response' + err,
+                  '6\t0x00000000\tNTLMLogin response',
+                  '6\t0x00000000\tNTLMLogin response',
+                  '6\t0x80041008\tNTLMLogin response, Error: Unknown DOS error 0x80041008']
+        assert lines == calls + ['7\t\tUnknown operation 7 response'] + calls
+
+    def test_iwbemlevel1login_requests(self, cmd_tshark, capture_file, test_env):
+        '''The strings, flags and context of the requests.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Y', 'IWbemLevel1Login.opnum in {4, 5, 6} && dcerpc.pkt_type == 0 && tcp.srcport <= 50002',
+                '-Tfields', '-eIWbemLevel1Login.RequestChallenge.reserved1',
+                '-eIWbemLevel1Login.RequestChallenge.reserved2',
+                '-eIWbemLevel1Login.WBEMLogin.reserved1', '-eIWbemLevel1Login.WBEMLogin.reserved2',
+                '-eIWbemLevel1Login.WBEMLogin.reserved3', '-eIWbemLevel1Login.WBEMLogin.reserved4',
+                '-eIWbemLevel1Login.NTLMLogin.wszNetworkResource',
+                '-eIWbemLevel1Login.NTLMLogin.wszPreferredLocale',
+                '-eIWbemLevel1Login.NTLMLogin.lFlags', '-eIWbemLevel1Login.NTLMLogin.pCtx',
+            ), encoding='utf-8', env=test_env)
+        reqs = [
+            r'\\\\SRV01\\root\\cimv2' + '\talice' + '\t' * 8,
+            '\t' * 9,
+            '\t\ten-US\t' + ','.join(str(i) for i in range(16, 32)) + '\t0\t7\t\t\t\t',
+            '\t\t\t\t-1\t7\t\t\t\t',
+            '\t' * 6 + r'\\\\.\\root\\cimv2' + '\tMS_409\t128\t0',
+            '\t' * 8 + '0\t',
+            '\t' * 8 + '0\t',
+        ]
+        assert stdout.splitlines() == reqs * 2
+
+    def test_iwbemlevel1login_responses(self, cmd_tshark, capture_file, test_env):
+        '''The locale version, the challenge, and the namespace OBJREFs
+        with their IPIDs; the same in both byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Y', 'IWbemLevel1Login.opnum in {3, 4, 5, 6} && dcerpc.pkt_type == 2 && tcp.dstport <= 50002',
+                '-Tfields', '-eIWbemLevel1Login.EstablishPosition.LocaleVersion',
+                '-eIWbemLevel1Login.RequestChallenge.reserved3',
+                '-eIWbemLevel1Login.IWbemServices.count', '-edcom.iid', '-edcom.oxid', '-edcom.oid',
+            ), encoding='utf-8', env=test_env)
+        ns = '\t9556dc99-828c-11cf-a37e-00aa003240c7\t0x0a0b0c0d01020304\t0x1a1b1c1d11121314'
+        resps = [
+            '1033' + '\t' * 5,
+            '0' + '\t' * 5,
+            '\t' + ','.join(str(i) for i in range(160, 176)) + '\t' * 4,
+            '\t' + ','.join(['0'] * 16) + '\t' * 4,
+            '\t\t190' + ns,
+            '\t' * 5,
+            '\t\t116' + ns,
+            '\t\t124' + ns,
+            '\t' * 5,
+        ]
+        assert stdout.splitlines() == resps * 2
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Y', 'dcom.stdobjref && tcp.dstport <= 50002',
+                '-Tfields', '-edcom.ipid',
+            ), encoding='utf-8', env=test_env)
+        ipids = ['0000b004-0d40-5678-1122-334455667788,0000c004-0e50-1234-5678-9abcdef0000%d' % i
+                 for i in (1, 2, 3)]
+        assert stdout.splitlines() == ipids * 2
+
+    def test_iwbemlevel1login_namespace_length(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "IWbemLevel1Login: Step over the whole
+        namespace array" (frame 85): an 80-octet array holding a 72-octet
+        OBJREF; the status after the array is 0x80041003 (unfixed, the
+        octets after the OBJREF were taken as the status, 0xaaaaaaaa).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemlevel1login_coverage.pcap.gz'),
+                '-Y', 'frame.number == 85',
+                '-Tfields', '-eIWbemLevel1Login.IWbemServices.count', '-edcom.oxid', '-edcom.oid',
+                '-edcom.ipid', '-eIWbemLevel1Login.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == ('80\t0x0000000000001111\t0x0000000000002222\t'
+                          '11111111-2222-3333-4444-555555555555\t0x80041003\t'
+                          'NTLMLogin response, Error: Unknown DOS error 0x80041003\n')
+
+
+class TestDissectDcerpcIwbemloginclientid:
+    def test_iwbemloginclientid_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: IWbemLoginClientID and IWbemLoginClientIDEx, each
+        in an NDR little endian and a big endian connection with a bind
+        and every opnum (plus an unknown opnum in little endian), and no
+        malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemloginclientid_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 80
+        assert protocols.count('IWBEMLOGINCLIENTID') == 22
+        assert protocols.count('IWBEMLOGINCLIENTIDEX') == 26
+        assert protocols.count('DCERPC') == 8
+        assert protocols.count('TCP') == 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_iwbemloginclientid_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_iwbemloginclientid_calls(self, cmd_tshark, capture_file, test_env):
+        '''IWbemLoginClientID: every opnum, the client machine name and
+        process ID of SetClientInfo, WERROR codes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemloginclientid_coverage.pcap.gz'),
+                '-Y', 'IWbemLoginClientID',
+                '-Tfields', '-eIWbemLoginClientID.opnum',
+                '-eIWbemLoginClientID.SetClientInfo.wszClientMachine',
+                '-eIWbemLoginClientID.SetClientInfo.lClientProcId',
+                '-eIWbemLoginClientID.SetClientInfo.lReserved',
+                '-eIWbemLoginClientID.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 22
+        set_client_info = [
+            '3\tWORKSTATION1\t4242\t0\t\tSetClientInfo request',
+            '3\t\t\t\t0x00000000\tSetClientInfo response',
+            '3\t\t4294967295\t1\t\tSetClientInfo request',
+            '3\t\t\t\t0x80041003\tSetClientInfo response, Error: Unknown DOS error 0x80041003',
+        ]
+        assert lines[0:6] == [
+            '0\t\t\t\t\tiwbemloginclientid_opnum0 request IWBEMLOGINCLIENTID V0',
+            '0\t\t\t\t0x00000000\tiwbemloginclientid_opnum0 response',
+            '1\t\t\t\t\tiwbemloginclientid_opnum1 request IWBEMLOGINCLIENTID V0',
+            '1\t\t\t\t0x00000000\tiwbemloginclientid_opnum1 response',
+            '2\t\t\t\t\tiwbemloginclientid_opnum2 request IWBEMLOGINCLIENTID V0',
+            '2\t\t\t\t0x00000005\tiwbemloginclientid_opnum2 response, Error: WERR_ACCESS_DENIED',
+        ]
+        assert lines[6:10] == set_client_info
+        assert lines[10:12] == ['4\t\t\t\t\tUnknown operation 4 request',
+                                '4\t\t\t\t\tUnknown operation 4 response']
+        assert lines[13] == '0\t\t\t\t0x00000005\tiwbemloginclientid_opnum0 response, Error: WERR_ACCESS_DENIED'
+        assert lines[15] == '1\t\t\t\t0x80070005\tiwbemloginclientid_opnum1 response, Error: Unknown DOS error 0x80070005'
+        assert lines[18:22] == set_client_info
+
+    def test_iwbemloginclientidex_calls(self, cmd_tshark, capture_file, test_env):
+        '''IWbemLoginClientIDEx: SetClientInfoEx with both, no and only
+        one of the machine names, and the FILETIME of the process
+        creation.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemloginclientid_coverage.pcap.gz'),
+                '-Y', 'IWbemLoginClientIDEx.opnum == 3',
+                '-Tfields',
+                '-eIWbemLoginClientIDEx.SetClientInfoEx.ClientMachine',
+                '-eIWbemLoginClientIDEx.SetClientInfoEx.ClientMachineFQDN',
+                '-eIWbemLoginClientIDEx.SetClientInfoEx.ClientProcId',
+                '-eIWbemLoginClientIDEx.FILETIME.dwLowDateTime',
+                '-eIWbemLoginClientIDEx.FILETIME.dwHighDateTime',
+                '-eIWbemLoginClientIDEx.SetClientInfoEx.Reserved',
+                '-eIWbemLoginClientIDEx.werror', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        calls = [
+            'WORKSTATION1\tworkstation1.example.test\t4242\t3577643008\t30975666\t0\t\tSetClientInfoEx request',
+            '\t\t\t\t\t\t0x00000000\tSetClientInfoEx response',
+            '\t\t1\t0\t0\t7\t\tSetClientInfoEx request',
+            '\t\t\t\t\t\t0x00000005\tSetClientInfoEx response, Error: WERR_ACCESS_DENIED',
+            '\thost.example.test\t99\t4294967295\t2147483647\t0\t\tSetClientInfoEx request',
+            '\t\t\t\t\t\t0x00000000\tSetClientInfoEx response',
+        ]
+        assert stdout.splitlines() == calls + calls
+
+    def test_iwbemloginclientid_orpc(self, cmd_tshark, capture_file, test_env):
+        '''The DCOM ORPCTHIS of SetClientInfo (big endian) and the
+        ORPCTHAT of its response, with an extent array, and the IPID from
+        the object UUID of the request.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemloginclientid_coverage.pcap.gz'),
+                '-Y', 'IWbemLoginClientID.opnum == 3 && dcom.extent.size',
+                '-Tfields', '-eframe.number', '-edcom.version_major',
+                '-edcom.version_minor', '-edcom.this.uuid',
+                '-edcom.extent.array_count', '-edcom.extent.size',
+                '-edcom.extent.id', '-edcom.ipid',
+            ), encoding='utf-8', env=test_env)
+        this = '5\t7\t5a5a5a5a-1111-4222-8333-444455556666\t2\t4\t3f2e1d0c-aaaa-4bbb-8ccc-0123456789ab\t0000a401-0f5c-0000-9e3b-7a1c2d4e5f60'
+        that = '\t\t\t2\t4\t3f2e1d0c-aaaa-4bbb-8ccc-0123456789ab\t0000a401-0f5c-0000-9e3b-7a1c2d4e5f60'
+        assert stdout.splitlines() == ['12\t' + this, '13\t' + that,
+                                       '32\t' + this, '33\t' + that]
+
+
+class TestDissectDcerpcIwbemservices:
+    def test_iwbemservices_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: a little endian and a big endian connection with
+        a bind and calls of every opnum, and the four reproducer
+        connections, and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 226
+        assert protocols.count('IWBEMSERVICES') == 178
+        assert protocols.count('DCERPC') == 12
+        assert protocols.count('TCP') == 36
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_iwbemservices_calls(self, cmd_tshark, capture_file, test_env):
+        '''The opnum and status of every response in the little endian
+        and the big endian connection.'''
+        def expected(le):
+            calls = [(op, 0x80041001 + op if le else 0) for op in range(6)]
+            calls += [(3, 0)] + [(6, 0)] * 15 + [(6, 0x80041002)]
+            calls += [(op, 0x80041001 + op if le else 0) for op in range(7, 24)]
+            calls += [(24, 0), (24, 0x80041002)]
+            return ['%d\t0x%08x' % c for c in calls]
+        for port, le in ((50001, True), (50002, False)):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                    '-Y', 'IWbemServices && dcerpc.pkt_type == 2 && tcp.port == %d' % port,
+                    '-Tfields', '-eIWbemServices.opnum', '-eIWbemServices.werror',
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            if le:
+                assert lines[-1] == '25\t'          # unknown opnum
+                lines = lines[:-1]
+            assert lines == expected(le)
+
+    def test_iwbemservices_requests(self, cmd_tshark, capture_file, test_env):
+        '''GetObject with extents, a context with an interface pointer
+        and an object, and ExecMethod, in both byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number in {22, 116}',
+                '-Tfields', '-edcom.extent.size', '-edcom.extent.id', '-edcom.ipid',
+                '-eIWbemServices.GetObject.lFlags', '-eIWbemServices.IWbemContext.u',
+                '-eIWbemServices.MInterfacePointer.ulCntData',
+                '-eIWbemServices.IWbemClassObject.count', '-edcom.objref.size',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '16,8\t01020304-0506-0708-090a-0b0c0d0e0f10,f1f19680-4d2a-11ce-a66a-0020af6e72f4\t'
+            '0000a404-0c60-1234-8899-aabbccddeeff\t131072\t1\t8\t197\t149'] * 2
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'IWbemServices.opnum == 24 && dcerpc.pkt_type == 0',
+                '-Tfields', '-eIWbemServices.ExecMethod.strObjectPath',
+                '-eIWbemServices.ExecMethod.strMethodName', '-eIWbemServices.ExecMethod.lFlags',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'Win32_Service.Name="Spooler"\tStartService\t0', '\t\t16'] * 2
+
+    def test_iwbemservices_objref(self, cmd_tshark, capture_file, test_env):
+        '''The OBJREFs of the GetObject responses: custom (WMIO and an
+        unknown IID), standard, handler and unknown flags, with their
+        OXID, OID and IPID; the same in both byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'dcom.objref && dcerpc.pkt_type == 2 && tcp.dstport <= 50002',
+                '-Tfields', '-edcom.objref.flags', '-edcom.iid', '-edcom.oxid', '-edcom.oid',
+                '-edcom.objref.size',
+            ), encoding='utf-8', env=test_env)
+        wmio = 'dc12a681-737f-11cf-884d-00aa004b2e24'
+        wbem = '9556dc99-828c-11cf-a37e-00aa003240c7'
+        unk = '00000000-0000-0000-c000-000000000046'
+        null = '00000000-0000-0000-0000-000000000000'
+        o1, o2 = '0x0102030405060708', '0x1112131415161718'
+        objrefs = [
+            '0x00000004\t%s\t\t\t1724' % wmio,
+            '0x00000001\t%s\t%s\t%s\t' % (wmio, o1, o2),
+            '0x00000002\t%s\t%s\t%s\t' % (unk, o1, o2),
+            '0x00000001\t%s\t%s\t%s\t' % (wbem, o1, o2),
+            '0x00000001\t%s\t%s\t%s\t' % (wbem, o1, o2),
+            '0x00000001\t%s\t0x0000000000000000\t0x0000000000000000\t' % wbem,
+            '0x00000001\t%s\t0x1111222233334444\t0x5555666677778888\t' % null,
+            '0x00000001\t%s\t0x2122232425262728\t0x3132333435363738\t' % wbem,
+            '0x00000001\t%s\t%s\t0x4142434445464748\t' % (wbem, o1),
+            '0x00000004\t%s\t\t\t0' % null,
+            '0x00000004\t0c733a8a-2a1c-11ce-ade5-00aa0044773d\t\t\t6',
+            '0x00000008\t%s\t\t\t' % unk,
+            '0x00000004\t%s\t\t\t9' % wmio,
+            '0x00000004\t%s\t\t\t91' % wmio,
+        ]
+        assert stdout.splitlines() == objrefs * 2
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number in {23, 117}',
+                '-Tfields', '-edcom.dualstringarray.tower_id', '-edcom.dualstringarray.network_addr',
+                '-edcom.dualstringarray.security_authn_svc',
+                '-edcom.dualstringarray.security_princ_name', '-edcom.dualstringarray.mult_ip',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0x0007,0x0007,0x0099,0x001f\t192.0.2.60,192.0.2.61,SRV01,E9007400E9000000\t'
+            '0x000a,0x0009\t,host/srv01.example.com\t1'] * 2
+
+    def test_iwbemservices_wmio_class(self, cmd_tshark, capture_file, test_env):
+        '''The WMIO class of frame 21 (and 115, big endian NDR): the
+        decoration, derivation, qualifiers of every integer type, the
+        properties that share a PropertyInfo and the methods whose
+        signatures share their objects.'''
+        for frame in (21, 115):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                    '-Y', 'frame.number == %d' % frame, '-V', '-O', 'IWbemServices',
+                ), encoding='utf-8', env=test_env)
+            lines = [line.strip() for line in stdout.splitlines()]
+            for text in ('CIM Server Name: SRV01', 'CIM Namespace: root\\cimv2',
+                         'Class Name Reference: CIM_Service', 'Class Name Reference: Win32_Service',
+                         'Derivation: CIM_Service', 'Derivation: CIM_LogicalElement',
+                         'Qualifier Value: CIMWin32',
+                         'Qualifier Value: {8502C4D9-5FBB-11D2-AAC1-006008C78BC7}',
+                         'Qualifier Value: -1033', 'Qualifier Value: -5', 'Qualifier Value: 200',
+                         'Qualifier Value: -300', 'Qualifier Value: 65000',
+                         'Qualifier Value: 4000000000', 'Qualifier Value: 9223372036854775808',
+                         'Qualifier Value: 20261101120000.000000+000',
+                         'Qualifier Value: Win32_ComputerSystem.Name="SRV01"',
+                         'Qualifier Value: cimwin32', 'Qualifier Value: NULL',
+                         'Qualifier Name: Unknown Index 99', 'CIM Type: CIM_ARRAY_OBJECT (0x0000200d)',
+                         'Property Name Ref: Name', 'Property Name Ref: State',
+                         'Property Name Ref: Alias', 'Property Name Ref: write',
+                         'Methodname: StartService', 'Methodname: StopService',
+                         'Property Name Ref: Timeout', 'Property Name Ref: ReturnValue'):
+                assert text in lines
+            assert lines.count('Property Info (already dissected)') == 2
+            assert lines.count('Inputsignature (already dissected)') == 1
+            assert lines.count('Outputsignature (already dissected)') == 1
+            assert lines.count('Qualifier') == 48
+
+    def test_iwbemservices_wmio_exponential(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "WMIO: Dissect each heap entry once": a chain
+        of 20 objects whose method signatures all point at the next one.
+        Each object is dissected once (unfixed, 4^19 times).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number == 193',
+                '-Tfields', '-ewmio.objectflags', '-ewmio.methodsignature.offset',
+            ), encoding='utf-8', env=test_env)
+        flags, offsets = stdout.rstrip('\n').split('\t')
+        assert len(flags.split(',')) == 20
+        assert len(offsets.split(',')) == 76
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number == 193', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.count('signature (already dissected)') == 57
+
+    def test_iwbemservices_wmio_property_quadratic(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "WMIO: Dissect each heap entry once": 2400
+        property lookups that share a PropertyInfo with 3300 qualifiers;
+        the PropertyInfo and its qualifiers are dissected once.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number == 223',
+                '-Tfields', '-ewmio.property_lookup.propertyinforef', '-ewmio.declaration_order',
+                '-ewmio.cim_type',
+            ), encoding='utf-8', env=test_env)
+        refs, order, types = stdout.rstrip('\n').split('\t')
+        assert len(refs.split(',')) == 2400
+        assert order == '0'
+        assert len(types.split(',')) == 3301
+
+    def test_iwbemservices_wmio_small_fixes(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of the small WMIO fixes (frame 203): the label
+        of a Unicode derivation, a UINT8 qualifier of 200, a UINT16
+        qualifier that keeps its label, and an unknown dictionary index.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number == 203', '-V', '-O', 'IWbemServices',
+            ), encoding='utf-8', env=test_env)
+        lines = [line.strip() for line in stdout.split('Current Class')[1].splitlines()]
+        assert lines.count('Derivation: Ab') == 2
+        assert 'Qualifier Value: 200' in lines
+        assert 'Qualifier Value: 4660' in lines
+        assert lines.count('Qualifier') == 3
+        assert 'Qualifier Name: Unknown Index 99' in lines
+
+    def test_iwbemservices_dcom_extent(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "DCOM: Put a registered extent ID on its own
+        octets": the extent ID is at offset 134 of frames 212 and 213,
+        registered or not.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_iwbemservices_coverage.pcap.gz'),
+                '-Y', 'frame.number in {212, 213}', '-Tpdml',
+            ), encoding='utf-8', env=test_env)
+        ids = [(line.split(' pos="')[1].split('"')[0], line.split(' show="')[1].split('"')[0])
+               for line in stdout.splitlines() if '<field name="dcom.extent.id" ' in line]
+        assert ids == [('134', '01020304-0506-0708-090a-0b0c0d0e0f10'),
+                       ('134', '9556dc99-828c-11cf-a37e-00aa003240c7')]
+
+
+class TestDissectDcerpcKrb5rpc:
+    def test_krb5rpc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: the reproducer, connectionless calls in both
+        byte orders and two TCP connections with a bind; no malformed
+        packets or warnings (such as "Long frame") in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_krb5rpc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 52
+        assert protocols.count('KRB5RPC') == 36
+        assert protocols.count('DCERPC') == 4
+        assert protocols.count('TCP') == 12
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_krb5rpc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_krb5rpc_kerberos_length(self, cmd_tshark, capture_file, test_env):
+        '''The reproducer of "KRB5RPC: Add the Kerberos length to the
+        offset": a request and a response that a KRB-ERROR fills
+        exactly. dissect_kerberos_main() returned the length in its own
+        tvb and it was used as the offset in the stub, so the request
+        was shown with a "Long frame".'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_krb5rpc_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 2',
+                '-Tfields', '-edcerpc.dg_frag_len', '-ekrb5rpc.sendto_kdc_rqst_keysize',
+                '-ekrb5rpc.sendto_kdc_resp_len', '-ekrb5rpc.sendto_kdc_resp_keysize',
+                '-ekerberos.msg_type', '-ekerberos.error_code', '-ekerberos.realm',
+                '-e_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '88\t80\t\t\t30\t6\tEXAMPLE.TEST\t',
+            '96\t\t80\t80\t30\t6\tEXAMPLE.TEST\t',
+        ]
+
+    def test_krb5rpc_calls(self, cmd_tshark, capture_file, test_env):
+        '''The sendto_kdc arguments and the Kerberos messages they carry,
+        the same in every byte order and transport.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_krb5rpc_coverage.pcap.gz'),
+                '-Y', 'krb5rpc && frame.number > 2',
+                '-Tfields', '-edcerpc.drep.byteorder', '-ekrb5rpc.opnum',
+                '-ekrb5rpc.sendto_kdc_rqst_keysize', '-ekrb5rpc.sendto_kdc_rqst_spare1',
+                '-ekrb5rpc.sendto_kdc_resp_len', '-ekrb5rpc.sendto_kdc_resp_max',
+                '-ekrb5rpc.sendto_kdc_resp_spare1', '-ekrb5rpc.sendto_kdc_resp_keysize',
+                '-ekerberos.msg_type', '-ekerberos.error_code', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 34
+        calls = [
+            '0\t184\t184\t\t\t\t\t10\t\tAS-REQ',
+            '0\t\t\t94\t4096\t0\t94\t30\t25\tKRB Error: KRB5KDC_ERR_PREAUTH_REQUIRED',
+            '0\t184\t184\t\t\t\t\t10\t\tAS-REQ',
+            '0\t\t\t267\t4096\t0\t267\t11\t\tAS-REP',
+            '0\t413\t413\t\t\t\t\t12,14\t\tTGS-REQ',
+            '0\t\t\t111\t4096\t0\t111\t30\t60\tKRB Error: KRB5KRB_ERR_GENERIC',
+            '0\t413\t413\t\t\t\t\t12,14\t\tTGS-REQ',
+            '0\t\t\t94\t4096\t0\t94\t30\t7\tKRB Error: KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN',
+        ]
+        le = ['1\t' + c for c in calls]
+        be = ['0\t' + c for c in calls]
+        assert lines[0:8] == le       # connectionless
+        assert lines[8:16] == be
+        assert lines[16:24] == le     # TCP
+        assert lines[24:26] == ['1\t1\t\t\t\t\t\t\t\t\tUnknown operation 1 request',
+                                '1\t1\t\t\t\t\t\t\t\t\tUnknown operation 1 response']
+        assert lines[26:34] == be
+
+    def test_krb5rpc_kerberos_fields(self, cmd_tshark, capture_file, test_env):
+        '''Kerberos fields decoded inside the krb5 blob of the first
+        AS-REQ, AS-REP and TGS-REQ.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_krb5rpc_coverage.pcap.gz'),
+                '-Y', 'frame.number in {3, 6, 7}',
+                '-Tfields', '-ekrb5rpc.krb5', '-ekerberos.CNameString',
+                '-ekerberos.SNameString', '-ekerberos.nonce', '-ekerberos.ENCTYPE',
+                '-ekerberos.etype',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert [len(l[0]) // 2 for l in lines] == [184, 267, 413]
+        assert [l[1:] for l in lines] == [
+            ['alice', 'krbtgt,EXAMPLE.TEST', '19088743', '18,17,23', ''],
+            ['alice', 'krbtgt,EXAMPLE.TEST', '', '', '18,18'],
+            ['alice', 'krbtgt,EXAMPLE.TEST,host,server.example.test', '19088743', '18,17,23', '18,18'],
+        ]
+
+
+class TestDissectDcerpcLsa:
+    def test_lsa_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three connections (NDR little endian, big endian,
+        NDR64), and no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 1639
+        assert protocols.count('LSARPC') == 1610
+        assert protocols.count('DCERPC') == 11
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_lsa_bind(self, cmd_tshark, capture_file, test_env):
+        '''The three binds: byte order and transfer syntax.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.drep.byteorder', '-edcerpc.cn_bind_to_uuid',
+                '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '1\t12345778-1234-abcd-ef00-0123456789ab\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '0\t12345778-1234-abcd-ef00-0123456789ab\t8a885d04-1ceb-11c9-9fe8-08002b104860',
+            '1\t12345778-1234-abcd-ef00-0123456789ab\t71710533-beba-4937-8319-b5dbef9ccc36',
+        ]
+
+    def test_lsa_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum is called in the little endian connection; the 64
+        opnums with parameters also in big endian and NDR64. Every request
+        has its response, and the status codes.'''
+        expected = {
+            50001: (390, set(range(134)),
+                    {'0x00000000': 227, '0xc0000002': 22, '0xc0000022': 93}),
+            50002: (208, None, {'0x00000000': 208}),
+            50003: (208, None, {'0x00000000': 208}),
+        }
+        for port, (calls, opnums, status) in expected.items():
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                    '-Y', 'lsarpc && tcp.port == %d' % port,
+                    '-Tfields', '-edcerpc.pkt_type', '-elsarpc.opnum', '-elsarpc.status',
+                ), encoding='utf-8', env=test_env)
+            # a reassembled PDU lists the packet type of every fragment
+            lines = [l.split('\t') for l in stdout.splitlines()]
+            lines = [[l[0].split(',')[-1]] + l[1:] for l in lines]
+            requests = [l for l in lines if l[0] == '0']
+            responses = [l for l in lines if l[0] == '2']
+            assert len(requests) == calls
+            assert len(responses) == calls
+            seen = {int(l[1]) for l in requests}
+            if opnums is not None:
+                assert seen == opnums
+            else:
+                assert len(seen) == 64
+            counts = {}
+            for l in responses:
+                if l[2]:
+                    counts[l[2]] = counts.get(l[2], 0) + 1
+            assert counts == status
+
+    def test_lsa_union_levels(self, cmd_tshark, capture_file, test_env):
+        '''Every arm of lsa_PolicyInformation, lsa_TrustedDomainInfo and
+        lsa_DomainInformationPolicy (also with minimal values in the little
+        endian connection).'''
+        for port, times in ((50001, 2), (50002, 1), (50003, 1)):
+            for field, levels in (('lsa_QueryInfoPolicy', 14),
+                                  ('lsa_QueryTrustedDomainInfo', 15),
+                                  ('lsa_QueryDomainInformationPolicy', 3)):
+                stdout = subprocess.check_output((cmd_tshark,
+                        '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                        '-Y', 'tcp.port == %d && lsarpc.%s.level' % (port, field),
+                        '-Tfields', '-elsarpc.%s.level' % field,
+                    ), encoding='utf-8', env=test_env)
+                assert stdout.split() == [str(i) for i in range(1, levels + 1)] * times
+
+    def test_lsa_sec_desc_access_rights(self, cmd_tshark, capture_file, test_env):
+        '''QuerySecurity responses on a policy, account, secret, trusted
+        domain and unknown handle: the ACE access masks are decoded with
+        the specific rights of the handle type opened before.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 756 && frame.number <= 775 && dcerpc.pkt_type == 0',
+                '-Tfields', '-elsarpc.opnum', '-edcerpc.nt.open_frame',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '3\t749', '4\t749', '3\t751', '4\t751', '3\t753', '4\t753',
+            '3\t755', '4\t755', '3\t', '4\t']
+        for frame, rights in ((757, 'LSA Policy specific rights'),
+                              (761, 'LSA Account specific rights'),
+                              (765, 'LSA Secret specific rights'),
+                              (769, 'LSA Trusted specific rights'),
+                              (773, 'Specific rights')):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                    '-Y', 'frame.number == %d' % frame,
+                    '-V', '-O', 'lsarpc',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.count(rights + ': 0x') == 3
+            assert 'NT Error: STATUS_SUCCESS (0x00000000)' in stdout
+
+    def test_lsa_efs_blob(self, cmd_tshark, capture_file, test_env):
+        '''The EFS policy blob of QueryDomainInformationPolicy and
+        SetDomainInformationPolicy level 2 is handed to GPEF: two keys with
+        a SID and an X.509 certificate each.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'gpef',
+                '-Tfields', '-eframe.number', '-elsarpc.efs.blob_size', '-egpef.key_count',
+                '-egpef.efskey.length1', '-egpef.efskey.cert_length', '-ex509sat.uTF8String',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert [l.split('\t')[0] for l in lines] == ['395', '400', '1178', '1183', '1602', '1607']
+        for l in lines:
+            assert l.split('\t')[1:] == ['703', '2', '348,347', '292,291',
+                                         'EFS Recovery CA,Administrator,EFS Recovery CA,EFS Recovery']
+
+    def test_lsa_efs_key_position(self, cmd_tshark, capture_file, test_env):
+        '''Each EfsKey item starts at its key (before the fix every key
+        item started at the start of the blob).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'frame.number == 395',
+                '-T', 'pdml',
+            ), encoding='utf-8', env=test_env)
+        def attr(line, name):
+            return line.split(' %s="' % name)[1].split('"')[0]
+        blob = [attr(l, 'pos') for l in stdout.splitlines() if '<proto name="gpef"' in l]
+        keys = [(attr(l, 'size'), attr(l, 'pos')) for l in stdout.splitlines()
+                if '<field name="gpef.efskey"' in l]
+        assert blob == ['98']
+        assert keys == [('348', '106'), ('347', '454')]
+
+    def test_lsa_fragmented_lookup(self, cmd_tshark, capture_file, test_env):
+        '''A LookupSids2 request and response split into DCE/RPC fragments
+        of 400 octets: 40 SIDs and 40 names after reassembly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'lsarpc.opnum == 57 && frame.number >= 776 && frame.number <= 780 && lsarpc.lsa_SidArray.num_sids',
+                '-Tfields', '-eframe.number', '-elsarpc.lsa_SidArray.num_sids',
+                '-elsarpc.lsa_TransNameArray2.count', '-elsarpc.lsa.string',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.split('\t') for l in stdout.splitlines()]
+        assert [l[:2] for l in lines] == [['778', '40']]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_lsa_coverage.pcap.gz'),
+                '-Y', 'frame.number == 780',
+                '-Tfields', '-elsarpc.lsa_TransNameArray2.count', '-elsarpc.lsa.string',
+            ), encoding='utf-8', env=test_env)
+        count, names = stdout.strip().split('\t')
+        assert count == '40'
+        assert names.split(',')[2:] == ['user%02d' % i for i in range(40)]
+
+
+class TestDissectDcerpcMapi:
+    def test_mapi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The connection-oriented DCE/RPC MAPI (EMSMDB) coverage capture:
+        six binds and their calls, and no malformed packets or warnings in
+        one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert protocols.count("MAPI") == 484
+        assert protocols.count('DCERPC') == 16
+        assert protocols.count('TCP') == 36
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_mapi_binds(self, cmd_tshark, capture_file, test_env):
+        '''Six binds to the MAPI interface, five NDR (little and big
+        endian) and one NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.cn_bind_to_uuid', '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 6
+        assert all(line.startswith('a4f1db00-ca47-1067-b31f-00dd010662da') for line in lines)
+        syntaxes = [line.split('\t')[1] for line in lines]
+        assert syntaxes.count('8a885d04-1ceb-11c9-9fe8-08002b104860') == 5   # NDR
+        assert syntaxes.count('71710533-beba-4937-8319-b5dbef9ccc36') == 1   # NDR64
+
+    def test_mapi_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every EMSMDB opnum 0-14 appears as a request and a response.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'mapi',
+                '-Tfields', '-edcerpc.opnum', '-edcerpc.pkt_type',
+            ), encoding='utf-8', env=test_env)
+        req = set()
+        resp = set()
+        for line in stdout.splitlines():
+            opnum, pkt = line.split('\t')
+            (req if pkt == '0' else resp).add(int(opnum))
+        assert req == set(range(0, 15))
+        assert resp == set(range(0, 15))
+
+    def test_mapi_rop_coverage(self, cmd_tshark, capture_file, test_env):
+        '''Every ROP request opnum and response opnum the dissector knows
+        is exercised (the switch arms of RopRequest and RopReply).'''
+        def distinct(field):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                    '-Tfields', '-e' + field,
+                ), encoding='utf-8', env=test_env)
+            ids = set()
+            for line in stdout.splitlines():
+                ids.update(x for x in line.split(',') if x)
+            return ids
+        assert len(distinct('mapi.RopInput.RopId')) == 119
+        assert len(distinct('mapi.RopOutput.RopId')) == 121
+
+    def test_mapi_clientinfo(self, cmd_tshark, capture_file, test_env):
+        '''An AUX_PERF_CLIENTINFO block whose string and address offsets
+        are correct decodes its machine name, user name, IPv4 address and
+        MAC address.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'mapi.AUX_PERF_CLIENTINFO.MachineName == "CLIENT01"',
+                '-Tfields', '-emapi.AUX_PERF_CLIENTINFO.UserName',
+                '-emapi.AUX_PERF_CLIENTINFO.ClientIP',
+                '-emapi.AUX_PERF_CLIENTINFO.MacAddress',
+            ), encoding='utf-8', env=test_env)
+        first = stdout.splitlines()[0].split('\t')
+        assert first == ['user1', '192.0.2.50', '02:00:00:00:00:50']
+
+    def test_mapi_compressed_rop(self, cmd_tshark, capture_file, test_env):
+        '''LZ77-compressed RPC_HEADER_EXT buffers are decompressed and the
+        ROPs inside them are dissected.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'mapi.RPC_HEADER_EXT_Flags.RHEF_Compressed == 1',
+                '-Tfields', '-eframe.number',
+                '-emapi.RopInput.RopId', '-emapi.RopOutput.RopId',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) > 40
+        # at least one compressed frame decoded a ROP from the inflated data
+        assert any(line.split('\t')[1] or line.split('\t')[2] for line in lines)
+
+    def test_mapi_sync_upload_buffer(self, cmd_tshark, capture_file, test_env):
+        '''RopSynchronizationUploadStateStreamContinue and
+        ...ImportMessageMove carry uint32-sized byte buffers; the sizes are
+        checked against the data ("MAPI: Do not let a buffer size move the
+        offset back"), and the buffers decode.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'mapi.SyncUploadStateStreamContinue_req.StreamData',
+                '-Tfields', '-emapi.SyncUploadStateStreamContinue_req.StreamData',
+            ), encoding='utf-8', env=test_env)
+        assert '73746174652d73747265616d2d64617461' in stdout   # "state-stream-data"
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'mapi.SyncImportMessageMove_req.SourceFolderId',
+                '-Tfields', '-emapi.SyncImportMessageMove_req.SourceFolderId',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() != ''
+
+    def test_mapi_obfuscated_rpc(self, cmd_tshark, capture_file, test_env):
+        '''EcDoRpc (opnum 2) carries XOR-0xA5 obfuscated MAPI buffers; they
+        are deobfuscated and the single ROP in each decodes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mapi_coverage.pcap.gz'),
+                '-Y', 'dcerpc.opnum == 2 && dcerpc.pkt_type == 0',
+                '-Tfields', '-emapi.EcDoRpcMapiRequest.opnum',
+            ), encoding='utf-8', env=test_env)
+        opnums = [x for x in stdout.split() if x]
+        assert len(opnums) >= 10
+
+
+class TestDissectDcerpcMdssvc:
+    def test_mdssvc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: a little endian and a big endian connection with
+        a bind and calls of every opnum, and the reproducer connection,
+        and no malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 58
+        assert protocols.count('MDSSVC') == 34
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_mdssvc_calls(self, cmd_tshark, capture_file, test_env):
+        '''The opnum and Info column of every call, the same in both
+        byte orders.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Y', 'mdssvc && tcp.port in {50001, 50002}',
+                '-Tfields', '-emdssvc.opnum', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        calls = ['0\topen request', '0\topen response', '1\tunknown1 request',
+                 '1\tunknown1 response'] + ['2\tcmd request', '2\tcmd response'] * 4 + [
+                 '3\tclose request', '3\tclose response']
+        assert stdout.splitlines() == calls + [
+            '4\tUnknown operation 4 request', '4\tUnknown operation 4 response'] + calls
+
+    def test_mdssvc_open(self, cmd_tshark, capture_file, test_env):
+        '''open, unknown1 and close: paths, handle, uid, gid and flags.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Y', 'mdssvc.opnum in {0, 1, 3} && tcp.port in {50001, 50002}',
+                '-Tfields', '-emdssvc.mdssvc_open.device_id', '-emdssvc.mdssvc_open.share_mount_path',
+                '-emdssvc.mdssvc_open.share_name', '-emdssvc.mdssvc_open.share_path',
+                '-emdssvc.mdssvc_open.handle', '-emdssvc.mdssvc_unknown1.uid',
+                '-emdssvc.mdssvc_unknown1.gid', '-emdssvc.mdssvc_unknown1.flags',
+                '-emdssvc.mdssvc_close.status',
+            ), encoding='utf-8', env=test_env)
+        lines = [
+            '42\t/Volumes/share\tshare' + '\t' * 6,
+            '42\t\t\t/srv/share\t000000004142434445464748494a4b4c4d4e4f50\t\t\t\t',
+            '\t' * 5 + '501\t20\t\t',
+            '\t' * 7 + '1795162113\t',
+            '\t' * 8,
+            '\t' * 8 + '0',
+        ]
+        assert stdout.splitlines() == lines * 2
+
+    def test_mdssvc_spotlight(self, cmd_tshark, capture_file, test_env):
+        '''The Spotlight request of the cmd calls in little and big endian
+        Spotlight data and NDR: strings, a UTF-16 string with and without
+        BOM, integers, booleans, nulls, a UUID, CNIDs, a nested FileMeta
+        blob and an unknown element type.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Y', 'frame.number in {10, 12, 34, 36}',
+                '-Tfields', '-eafp.endianness', '-eafp.string', '-eafp.utf_16_string',
+                '-eafp.int64', '-eafp.bool', '-eafp.cnid', '-eafp.spotlight.uuid',
+                '-eafp.query_type', '-eafp.num_toc_entries', '-eafp.toc_offset', '-eafp.query_len',
+            ), encoding='utf-8', env=test_env)
+        common = ('fetchAttributes:forOIDArray:context:,kMDItemDisplayName,kMDItemFSSize\t'
+                  'Résumé.txt,BigEndian\t'
+                  '0x0000000000001234,0x0000000000005678,0x0000000000001000,'
+                  '0x0000000000000007,0x0000000000000009\t1,0,1\t101,102\t'
+                  '00010203-0405-0607-0809-0a0b0c0d0e0f\tUnknown\t1,10\t528,24\t616,40')
+        le = '0x0000000000000000,0x0000000000000001\t' + common
+        be = '0x0000000000000001,0x0000000000000000\t' + common
+        assert stdout.splitlines() == [le, be, le, be]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Y', 'frame.number == 11',
+                '-Tfields', '-emdssvc.mdssvc_blob.length', '-eafp.string', '-eafp.cnid',
+            ), encoding='utf-8', env=test_env)
+        assert stdout == '176\tkMDItemPath,/Volumes/share/Résumé.txt\t101\n'
+
+    def test_mdssvc_blob_bounds(self, cmd_tshark, capture_file, test_env):
+        '''"MDSSVC: Handle a NULL Spotlight blob, limit it to its length":
+        a reply blob with 8 octets after the Spotlight data (frames 15
+        and 39) and a NULL reply blob (frames 17 and 41, and frame 55 of
+        the reproducer) are followed by the right unkn9 (unfixed, 0 and a
+        malformed packet).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mdssvc_coverage.pcap.gz'),
+                '-Y', 'mdssvc.opnum == 2 && dcerpc.pkt_type == 2',
+                '-Tfields', '-eframe.number', '-emdssvc.mdssvc_cmd.fragment',
+                '-emdssvc.mdssvc_blob.length', '-emdssvc.mdssvc_blob.size',
+                '-emdssvc.mdssvc_cmd.unkn9',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '11\t1\t176\t176\t0',
+            '13\t1\t176\t176\t0',
+            '15\t2\t184\t184\t1432778632',
+            '17\t0\t0\t0\t287454020',
+            '35\t1\t176\t176\t0',
+            '37\t1\t176\t176\t0',
+            '39\t2\t184\t184\t1432778632',
+            '41\t0\t0\t0\t287454020',
+            '53\t7\t40\t40\t287454020',
+            '55\t7\t0\t0\t287454020',
+        ]
+
+
+class TestDissectDcerpcMessenger:
+    def test_messenger_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three TCP connections (NDR little endian, big
+        endian, NDR64) with a bind and three calls each (plus an unknown
+        opnum in the first), and connectionless calls in both byte orders;
+        no malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_messenger_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 56
+        assert protocols.count('Messenger') == 32
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_messenger_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_messenger_calls(self, cmd_tshark, capture_file, test_env):
+        '''Server, client and message strings (with and without the
+        terminating NUL, and empty) and the return codes, the same in
+        every encoding and transport.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_messenger_coverage.pcap.gz'),
+                '-Y', 'messenger',
+                '-Tfields', '-edcerpc.drep.byteorder', '-emessenger.opnum',
+                '-emessenger.server', '-emessenger.client', '-emessenger.message',
+                '-emessenger.rc', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 32
+        calls = [
+            '0\tWORKSTATION1\tADMIN\tThe server will restart in 5 minutes.\t\tNetrSendMessage request',
+            '0\t\t\t\t0x00000000\tNetrSendMessage response',
+            '0\tPC2\tALICE\t\t\tNetrSendMessage request',
+            '0\t\t\t\t0xc0000022\tNetrSendMessage response, STATUS_ACCESS_DENIED',
+            '0\tPC3\tBOB\tno terminating NUL\t\tNetrSendMessage request',
+            '0\t\t\t\t0x00000103\tNetrSendMessage response, STATUS_PENDING',
+        ]
+        le = ['1\t' + c for c in calls]
+        be = ['0\t' + c for c in calls]
+        assert lines[0:6] == le
+        assert lines[6:8] == ['1\t1\t\t\t\t\tUnknown operation 1 request',
+                              '1\t1\t\t\t\t\tUnknown operation 1 response']
+        assert lines[8:14] == be
+        assert lines[14:20] == le     # NDR64
+        assert lines[20:26] == le     # connectionless
+        assert lines[26:32] == be
+
+    def test_messenger_ndr64_strings(self, cmd_tshark, capture_file, test_env):
+        '''The NDR64 string counts are 8 octets: the request carries the
+        same three strings in a longer stub.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_messenger_coverage.pcap.gz'),
+                '-Y', 'messenger.opnum == 0 && dcerpc.pkt_type == 0 && tcp',
+                '-Tfields', '-edcerpc.cn_frag_len', '-edcerpc.array.max_count',
+                '-edcerpc.array.actual_count',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines()[::3] == [
+            '122\t13,6,38\t13,6,38',
+            '122\t13,6,38\t13,6,38',
+            '158\t13,6,38\t13,6,38',
+        ]
+
+
+class TestDissectDcerpcMgmt:
+    def test_mgmt_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three TCP connections (NDR little endian, big
+        endian, NDR64) with a bind and six calls each (plus an unknown
+        opnum in the first), and connectionless calls in both byte orders;
+        no malformed packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mgmt_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 86
+        assert protocols.count('MGMT') == 62
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_mgmt_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_mgmt_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum by name, the inq_princ_name arguments, principal
+        name and status, the same in every encoding and transport.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mgmt_coverage.pcap.gz'),
+                '-Y', 'mgmt',
+                '-Tfields', '-edcerpc.drep.byteorder', '-emgmt.opnum',
+                '-emgmt.proto', '-emgmt.princ_size', '-emgmt.princ_name',
+                '-emgmt.rc', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 62
+        calls = [
+            '0\t\t\t\t\trpc__mgmt_inq_if_ids request MGMT V1',
+            '0\t\t\t\t\trpc__mgmt_inq_if_ids response',
+            '1\t\t\t\t\trpc__mgmt_inq_stats request',
+            '1\t\t\t\t\trpc__mgmt_inq_stats response',
+            '2\t\t\t\t\trpc__mgmt_is_server_listening request MGMT V1',
+            '2\t\t\t\t\trpc__mgmt_is_server_listening response',
+            '3\t\t\t\t\trpc__mgmt_stop_server_listening request MGMT V1',
+            '3\t\t\t\t\trpc__mgmt_stop_server_listening response',
+            '4\t0x00000010\t1024\t\t\trpc__mgmt_inq_princ_name request',
+            '4\t\t\thost/server.example.test@EXAMPLE.TEST\t0x00000000\trpc__mgmt_inq_princ_name response',
+            '4\t0x0000000a\t0\t\t\trpc__mgmt_inq_princ_name request',
+            '4\t\t\t\t0xc0000022\trpc__mgmt_inq_princ_name response, STATUS_ACCESS_DENIED',
+        ]
+        le = ['1\t' + c for c in calls]
+        be = ['0\t' + c for c in calls]
+        assert lines[0:12] == le
+        assert lines[12:14] == ['1\t5\t\t\t\t\tUnknown operation 5 request',
+                                '1\t5\t\t\t\t\tUnknown operation 5 response']
+        assert lines[14:26] == be
+        assert lines[26:38] == le     # NDR64
+        assert lines[38:50] == le     # connectionless
+        assert lines[50:62] == be
+
+    def test_mgmt_stub_data(self, cmd_tshark, capture_file, test_env):
+        '''The opnums without stub dissectors show their stubs as data.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_mgmt_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 7 && frame.number <= 13',
+                '-Tfields', '-edcerpc.stub_data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '04000200010000000100000008000200'
+            '80bda8af8a7dc911bef408002b102989'
+            '0100000000000000',
+            '04000000',
+            '04000000040000006400000063000000070000000600000000000000',
+            '',
+            '0100000000000000',
+            '',
+            'd6a0c916',
+        ]
+
+
+class TestDissectDcerpcNetlogon:
+    def test_netlogon_protocols(self, cmd_tshark, capture_file, features, test_env):
+        '''Frame counts: three connections with every opnum (NDR little
+        endian, big endian, NDR64), two secure channel connections with
+        no session key, one that negotiates a sealing key, one that
+        decrypts passwords and opaque buffers, and one Kerberos ticket.
+        The ticket's keys are in the capture. No malformed packets or
+        warnings in one and two passes, and no Kerberos preference.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 791
+        assert protocols.count('RPC_NETLOGON') == 688
+        assert protocols.count('DCERPC') == 18
+        assert protocols.count('TCP') == 84
+        assert protocols.count('KRB5') == 1
+        if not features.have_kerberos:
+            # Without Kerberos the ticket is not decrypted and warns.
+            return
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_netlogon_binds(self, cmd_tshark, capture_file, test_env):
+        '''The binds and the alter context: byte order, transfer syntax,
+        and the NL_AUTH_MESSAGE of the SEC_CHAN (68) auth type.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'dcerpc.pkt_type == 11 || dcerpc.pkt_type == 14',
+                '-Tfields', '-eframe.number', '-edcerpc.drep.byteorder',
+                '-edcerpc.cn_bind_trans_id', '-edcerpc.auth_type',
+                '-enetlogon.secchan.nl_auth_message.message_flags',
+                '-enetlogon.secchan.nl_auth_message.nb_domain',
+                '-enetlogon.secchan.nl_auth_message.dns_host',
+            ), encoding='utf-8', env=test_env)
+        ndr = '8a885d04-1ceb-11c9-9fe8-08002b104860'
+        ndr64 = '71710533-beba-4937-8319-b5dbef9ccc36'
+        assert stdout.splitlines() == [
+            '4\t1\t%s\t\t\t\t' % ndr,
+            '232\t1\t%s\t68\t0x00000003\tEXAMPLE\t' % ndr,
+            '240\t0\t%s\t\t\t\t' % ndr,
+            '453\t1\t%s\t\t\t\t' % ndr64,
+            '676\t1\t%s\t68\t0x0000001f\tEXAMPLE\tws01.example.test' % ndr,
+            '692\t0\t%s\t68\t0x0000001f\tEXAMPLE\tws01.example.test' % ndr,
+            '708\t1\t%s\t\t\t\t' % ndr,
+            '756\t1\t%s\t\t\t\t' % ndr,
+        ]
+
+    def test_netlogon_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum the dissector knows is called in each byte order and
+        in NDR64, and every request has its response.'''
+        opnums = set(range(47)) | {48, 54, 59}
+        for port, calls in ((50001, 105), (50002, 98), (50003, 98)):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'rpc_netlogon && tcp.port == %d' % port,
+                    '-Tfields', '-edcerpc.pkt_type', '-enetlogon.opnum',
+                ), encoding='utf-8', env=test_env)
+            # a reassembled PDU lists the packet type of every fragment
+            lines = [l.split('\t') for l in stdout.splitlines()]
+            requests = [l for l in lines if l[0].split(',')[-1] == '0']
+            responses = [l for l in lines if l[0] == '2']
+            assert len(requests) == calls
+            assert len(responses) == calls
+            assert {int(l[1]) for l in requests} == opnums
+
+    def test_netlogon_strings_byte_order(self, cmd_tshark, capture_file, test_env):
+        '''UTF-16 strings, counted strings and the cleartext password of
+        NetrServerPasswordSet2 decode the same in all three connections.'''
+        for port in (50001, 50002, 50003):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == %d && netlogon.opnum == 0' % port,
+                    '-Tfields', '-enetlogon.acct_name', '-enetlogon.logon_script',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                'alice\t', 'Administrator\tlogon.cmd', 'alice\t', '\t']
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == %d && netlogon.new_password' % port,
+                    '-Tfields', '-enetlogon.new_password',
+                ), encoding='utf-8', env=test_env)
+            expected = ['S3cret-Passw0rd'] * 2
+            if port == 50001:
+                expected += ['S3cret-Passw0rd', 'S3cret-Passw0rd!']
+            assert stdout.splitlines() == expected
+
+    def test_netlogon_logon_levels(self, cmd_tshark, capture_file, test_env):
+        '''Every logon information level (1-8 and an unknown one) and
+        every validation level (1-7 and an unknown one).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'tcp.port == 50002 && netlogon.opnum == 2 && dcerpc.pkt_type == 0',
+                '-Tfields', '-enetlogon.level16',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['1,1', '2,2', '3,3', '4,4', '5,5', '6,6', '7,7', '8,8',
+                                  '2,2', '1,1', '9,9', '8,8', '8,8', '8,8', '8,8', '8,8']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'tcp.port == 50002 && netlogon.opnum == 2 && dcerpc.pkt_type == 2',
+                '-Tfields', '-enetlogon.validation_level',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['1', '2', '3', '4', '5', '6', '7', '7',
+                                  '6', '3', '8', '7', '7', '7', '7', '7']
+
+    def test_netlogon_claims(self, cmd_tshark, capture_file, test_env):
+        '''The claims of NetrLogonSamLogon validation level 7: NDR32 MES
+        blobs uncompressed, LZNT1, XPRESS and XPRESS+HUFF compressed (and
+        an unknown format, undecodable compressed data and an empty blob,
+        shown as bytes), with string, int64, uint64 and boolean claims.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'tcp.port == 50001 && netlogon.claims_compression_format',
+                '-Tfields', '-eframe.number', '-enetlogon.claims_compression_format',
+                '-enetlogon.claim_id',
+            ), encoding='utf-8', env=test_env)
+        ids = ','.join(('ad://ext/department', 'ad://ext/level', 'ad://ext/clearance',
+                        'ad://ext/manager'))
+        full = ids + ',ad://ext/unknown'
+        assert stdout.splitlines() == [
+            '26\t0,2\t%s,%s' % (full, full),
+            '29\t0,2\t%s,%s' % (full, full),
+            '38\t3,4\t%s,%s' % (full, full),
+            '40\t2,5\t%s' % ids,
+            '42\t1\t',
+            '44\t2,3\t',
+            '46\t4\t',
+            '182\t0,2\t%s,%s' % (full, full),
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'frame.number == 38',
+                '-Tfields', '-enetlogon.claim_string_value', '-enetlogon.claim_int64_value',
+                '-enetlogon.claim_uint64_value', '-enetlogon.claim_boolean_value',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '\t'.join((
+            'Engineering,Research,Engineering,Research', '5,-2,5,-2', '3,3', '1,0,1,0'))
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'frame.number == 38', '-x',
+            ), encoding='utf-8', env=test_env)
+        assert 'Claims XPRESS decompressed' in stdout
+        assert 'Claims XPRESS+HUFF decompressed' in stdout
+
+    def test_netlogon_deltas(self, cmd_tshark, capture_file, test_env):
+        '''NetrDatabaseDeltas, Sync, Sync2 and Redo: every delta type
+        (and an unknown one) in DELTA_ENUM, DELTA_ID_UNION and
+        DELTA_UNION.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'tcp.port == 50003 && netlogon.delta_type',
+                '-Tfields', '-enetlogon.opnum', '-enetlogon.delta_type',
+            ), encoding='utf-8', env=test_env)
+        every = ','.join('%d,%d,%d' % (t, t, t) for t in list(range(1, 23)) + [99])
+        assert stdout.splitlines() == [
+            '7\t' + every, '7\t' + every, '8\t1,1,1,5,5,5,13,13,13',
+            '16\t2,2,2,8,8,8,9,9,9,12,12,12', '17\t14,14,14,16,16,16,18,18,18']
+
+    def test_netlogon_authenticate(self, cmd_tshark, capture_file, test_env):
+        '''The negotiate flags of NetrServerAuthenticate2/3/Kerberos and
+        NetrLogonGetCapabilities are read little endian in all three
+        connections; NetrServerAuthenticateKerberos gives a zero session
+        key, which only cleartext data and an alter context use.'''
+        for port in (50001, 50002, 50003):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == %d && netlogon.neg_flags' % port,
+                    '-Tfields', '-enetlogon.opnum', '-enetlogon.neg_flags',
+                ), encoding='utf-8', env=test_env)
+            expected = ['15\t0xffffffff'] * 2 + ['21\t0x612fffff'] * 2 + \
+                ['26\t0xffffffff'] * 2 + ['26\t0x00000000'] * 2 + ['59\t0x612fffff'] * 2
+            if port == 50001:
+                expected += ['15\t0x000047ff'] * 2 + ['26\t0x000001ff'] * 2
+            assert stdout.splitlines() == expected
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                '-Y', 'tcp.port == 50001 && _ws.expert.message contains "session key"',
+                '-Tfields', '-eframe.number', '-e_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        learned = 'session key learned in frame 210 (00000000) from ServerAuthenticateKerberos(WS02) at frame 210'
+        assert stdout.splitlines() == [
+            '148\tNot encrypted and no session key found nor needed',
+            '150\tNot encrypted and no session key found nor needed',
+            '152\tNo session key found',
+            '156\tNo session key found',
+            '210\tzero session key',
+            '222\tNot encrypted with ' + learned,
+            '224\tNot encrypted with ' + learned,
+            '232\tUsing ' + learned,
+            '233\tUsing ' + learned,
+        ]
+
+    def test_netlogon_secchan_verifiers(self, cmd_tshark, capture_file, test_env):
+        '''Two DCE/RPC requests in one frame, each with a SEC_CHAN
+        verifier, and their two responses in one frame: each verifier is
+        dissected, in one pass and in two (fixed in "Netlogon: Dissect
+        every secure channel verifier, free the claims pointers"). The
+        keyed connection appends 24 more verifiers, and the password
+        connection appends two that sit between a challenge and its
+        authenticate reply.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'netlogon.secchan.verifier',
+                    '-Tfields', '-eframe.number', '-enetlogon.secchan.signalg',
+                    '-enetlogon.secchan.sealalg', '-enetlogon.secchan.flags',
+                    '-enetlogon.secchan.seq', '-enetlogon.secchan.digest',
+                    '-enetlogon.secchan.nonce',
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            pair = [
+                '\t0x0077,0x0077\t0xffff,0xffff\t0000,0000\t1100000000000000,2200000000000000'
+                '\ta1a2a3a4a5a6a7a8,a2a3a4a5a6a7a8a9\t0001020304050607,0001020304050607',
+                '\t0x0077,0x0077\t0xffff,0xffff\t0000,8000\t3300000000000000,3400000000000000'
+                '\t1011121314151617,1011121314151617\t2021222324252627,2021222324252627',
+                '\t0x0013\t0xffff\t0000\t4400000000000000\t5555555555555555\t',
+                '\t0x0013\t0xffff\t0000\t4500000000000000\t5656565656565656\t',
+                '\t0x0077\t0x007a\t0000\t6161616161616161\t6262626262626262\t6363636363636363',
+                '\t0x0077\t0x007a\t0000\t6464646464646464\t6565656565656565\t6666666666666666',
+                '\t0x0013\t0x001a\t0000\t6161616161616161\t6262626262626262\t6363636363636363',
+                '\t0x0013\t0x001a\t0000\t6464646464646464\t6565656565656565\t6666666666666666',
+            ]
+            keyed = [
+                '712\t0x0013\t0xffff\t0000\t91e5912b2eab4311\t9091929394959697\t8081828384858687',
+                '713\t0x0013\t0xffff\t0000\t921082052209efd3\t9091929394959697\t8081828384858687',
+                '714\t0x0013\t0x001a\t0000\t921082052209efd3\t9091929394959697\t8081828384858687',
+                '715\t0x0013\t0x001a\t0000\t936ed53c11656441\t9091929394959697\t8081828384858687',
+                '718\t0x0077\t0xffff\t0000\t4e0b3bae509e06a7\t9091929394959697\t8081828384858687',
+                '719\t0x0077\t0xffff\t0000\t4d0b3bae509e06a7\t9091929394959697\t8081828384858687',
+                '720\t0x0077\t0x007a\t0000\t4d0b3bae509e06a7\t9091929394959697\t8081828384858687',
+                '721\t0x0077\t0x007a\t0000\t4c0b3bae509e06a7\t9091929394959697\t8081828384858687',
+                '726\t0x0013\t0xffff\t0000\tad301ece581fb0e0\t9091929394959697\t8081828384858687',
+                '727\t0x0013\t0xffff\t0000\taef423d964a0c155\t9091929394959697\t8081828384858687',
+                '728\t0x0013\t0xffff\t0000\taef423d964a0c155\t9091929394959697\t',
+                '729\t0x0013\t0xffff\t0000\tafda1221f5567b37\t9091929394959697\t',
+                '730\t0x0013\t0x001a\t0000\tafda1221f5567b37\t9091929394959697\t8d96b14ba963b239',
+                '731\t0x0013\t0x001a\t0000\ta81d26b4d287a58c\t9091929394959697\tce7d407f1c3aa660',
+                '736\t0x0077\t0xffff\t0000\t399a761ee0387954\t9091929394959697\t8081828384858687',
+                '737\t0x0077\t0xffff\t0000\t3a9a761ee0387954\t9091929394959697\t8081828384858687',
+                '738\t0x0077\t0x007a\t0000\t3a9a761ee0387954\t9091929394959697\tcefd896283abb922',
+                '739\t0x0077\t0x007a\t0000\t3b9a761ee0387954\t9091929394959697\tc39d1d0ce016b790',
+                '740\t0x0077\t0x007a\t0000\t3b9a761ee0387954\t9091929394959697\t',
+                '741\t0x0077\t0x007a\t0000\t3c9a761ee0387954\t9091929394959697\t',
+                '746\t0x0077\t0xffff\t0000\tc1770fdfe91bab2e\t9091929394959697\t8081828384858687',
+                '747\t0x0077\t0xffff\t0000\tc2770fdfe91bab2e\t9091929394959697\t8081828384858687',
+                '748\t0x0077\t0x007a\t0000\tc2770fdfe91bab2e\t9091929394959697\tf14573cf081c1a7c',
+                '749\t0x0077\t0x007a\t0000\tc3770fdfe91bab2e\t9091929394959697\t165bcb4b3574c213',
+                '760\t0x0013\t0xffff\t0000\t91e23f0b29e406a8\t9091929394959697\t8081828384858687',
+                '761\t0x0013\t0xffff\t0000\t92170fd42da0985b\t9091929394959697\t8081828384858687',
+            ]
+            assert lines == ['%d%s' % (678 + i, p) for i, p in enumerate(pair)] + \
+                ['%d%s' % (694 + i, p) for i, p in enumerate(pair)] + keyed
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'frame.number == 678', '-V',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.count('Secure Channel Verifier') == 2
+            assert stdout.count('Operation: NetrLogonGetCapabilities (21)') == 2
+
+    def test_netlogon_schannel_keys(self, cmd_tshark, capture_file, test_env):
+        '''Port 50006 negotiates session keys from the NT password
+        SchannelCover. With that password, ServerAuthenticate2/3 report
+        the AES, MD5 and DES keys and the sealed GetCapabilities stubs
+        decrypt to level 1; the two Kerberos calls keep a zero key, so
+        their privacy stubs stay encrypted. Without the password nothing
+        on this connection is decrypted, and neither way is malformed.
+        One pass and two passes agree. The password is not in the
+        capture: the suite passes it as an NTLMSSP credential.'''
+        cred = ('-o', 'uat:ntlmssp_creds:"NT Password","SchannelCover"')
+        aes = 'Using session key learned in frame 725 (45807f4f) from <NT Password 1>'
+        md5 = 'Using session key learned in frame 735 (3d593e66) from <NT Password 1>'
+        des = 'Using session key learned in frame 745 (95ff0e2e) from <NT Password 1>'
+        experts = [
+            '711\tzero session key',
+            '717\tzero session key',
+            '725\tAES authenticated using <NT Password 1> (e883f4d0...),session key (45807f4fd8c3688f1db70993f15a9cee)',
+        ] + ['%d\t%s' % (n, aes) for n in range(726, 732)] + [
+            '735\tMD5 authenticated using <NT Password 1> (e883f4d0...),session key (3d593e663106ac4a6633968a9fcba4b0)',
+        ] + ['%d\t%s' % (n, md5) for n in range(736, 742)] + [
+            '745\tDES authenticated using <NT Password 1> (e883f4d0...),session key (95ff0e2e0ff12ec20000000000000000)',
+        ] + ['%d\t%s' % (n, des) for n in range(746, 750)]
+        privacy = ['714\t', '715\t', '720\t', '721\t'] + \
+            ['%d\t1' % n for n in (730, 731, 738, 739, 740, 741, 748, 749)]
+        sealed = ['%d\t' % n for n in (714, 715, 720, 721, 730, 731, 738, 739, 740, 741, 748, 749)]
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes, *cred,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == 50006 && _ws.expert.message contains "session key"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == experts
+            stdout = subprocess.check_output((cmd_tshark, *passes, *cred,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == 50006 && dcerpc.auth_level == 6',
+                    '-Tfields', '-eframe.number', '-enetlogon.level',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == privacy
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == 50006 && dcerpc.auth_level == 6',
+                    '-Tfields', '-eframe.number', '-enetlogon.level',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == sealed
+            for extra in (cred, ()):
+                stdout = subprocess.check_output((cmd_tshark, *passes, *extra,
+                        '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                        '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                        '-Tfields', '-eframe.number',
+                    ), encoding='utf-8', env=test_env)
+                assert count_output(stdout) == 0
+
+    def test_netlogon_session_key_buffers(self, cmd_tshark, capture_file, test_env):
+        '''Port 50007 decrypts netr_CryptPassword and the OpaqueBuffer
+        with the AES and STRONGKEY session keys of SchannelCover. A
+        plaintext length that does not survive decryption is reported
+        unusable, and the DES key has no cipher. One pass and two passes
+        agree.'''
+        cred = ('-o', 'uat:ntlmssp_creds:"NT Password","SchannelCover"')
+        aes = 'session key learned in frame 763 (3d5cc643) from <NT Password 1>'
+        md5 = 'session key learned in frame 775 (76464ee5) from <NT Password 1>'
+        des = 'session key learned in frame 783 (dea7a40f) from <NT Password 1>'
+        experts = [
+            '763\tAES authenticated using <NT Password 1> (e883f4d0...),session key (3d5cc643e8ea656cc842f84e32ad5544)',
+            '764\tUsed ' + aes,
+            '766\tUnusable ' + aes,
+            '768\tUsing ' + aes,
+            '770\tUnusable ' + aes,
+            '775\tMD5 authenticated using <NT Password 1> (e883f4d0...),session key (76464ee5eeb30ade2cc909934279374e)',
+            '776\tUsed ' + md5,
+            '778\tUsing ' + md5,
+            '783\tDES authenticated using <NT Password 1> (e883f4d0...),session key (dea7a40faa629c710000000000000000)',
+        ]
+        # Frame 784 embeds libgcrypt's error text, which is translated.
+        des_prefix = '784\tDecryption not possible ('
+        des_suffix = ') with ' + des
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes, *cred,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == 50007 && _ws.expert.message contains "session key"',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            lines = stdout.splitlines()
+            assert lines[:-1] == experts
+            assert lines[-1].startswith(des_prefix)
+            assert lines[-1].endswith(des_suffix)
+            stdout = subprocess.check_output((cmd_tshark, *passes, *cred,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'tcp.port == 50007 && netlogon.new_password',
+                    '-Tfields', '-eframe.number', '-enetlogon.new_password',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['764\tCover-Passw0rd', '776\tCover-Passw0rd']
+
+    def test_netlogon_pac(self, cmd_tshark, capture_file, features, test_env):
+        '''The UDP ticket's PAC is PAC_LOGON_INFO, PAC_S4U_DELEGATION_INFO
+        and PAC_DEVICE_INFO. The decryption secrets block is enough:
+        no keytab and no Kerberos preference. The whole capture,
+        including the TICKET_INFO blobs, has no malformed packets and
+        no warning, in one pass and in two.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires Kerberos.')
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', 'udp.port == 88',
+                    '-Tfields', '-ekerberos.pac.type', '-enetlogon.s4u2proxytarget',
+                    '-enetlogon.transited_service', '-enetlogon.rid',
+                    '-enetlogon.acct_name',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.strip() == (
+                '1,11,14,6,7\tcifs/files.coverage.test\thost/ws01.coverage.test'
+                '\t1104,1107\talice')
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_netlogon_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+
+class TestDissectDcerpcNspi:
+    def test_nspi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three TCP connections (NDR little endian, big
+        endian, NDR64) with a bind and the NSPI calls; no malformed
+        packets or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 200
+        assert protocols.count('NSPI') == 176
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_nspi_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum by name, with the MAPI status of the responses,
+        the same in every encoding; failed calls in the first
+        connection.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Y', 'nspi',
+                '-Tfields', '-edcerpc.drep.byteorder', '-enspi.opnum',
+                '-enspi.MAPISTATUS_status', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 176
+        ok = '\t0x00000000\t'
+        calls = ['0\t\tNspiBind request', '0' + ok + 'NspiBind response']
+        calls += ['3\t\tNspiQueryRows request', '3' + ok + 'NspiQueryRows response'] * 2
+        calls += ['5\t\tNspiGetMatches request', '5' + ok + 'NspiGetMatches response'] * 5
+        calls += ['7\t\tNspiDNToEph request', '7' + ok + 'NspiDNToEph response']
+        calls += ['9\t\tNspiGetProps request', '9' + ok + 'NspiGetProps response'] * 2
+        calls += ['12\t\tNspiGetHierarchyInfo request', '12' + ok + 'NspiGetHierarchyInfo response']
+        for op, name in ((2, 'NspiUpdateStat'), (4, 'NspiSeekEntries'),
+                         (6, 'NspiResortRestriction'), (8, 'NspiGetPropList'),
+                         (10, 'NspiCompareDNTs'), (11, 'NspiModProps'),
+                         (13, 'NspiGetTemplateInfo'), (14, 'NspiModLInkAtt'),
+                         (15, 'NspiDeleteEntries'), (16, 'NspiQueryColumns'),
+                         (17, 'NspiGetNamesFromIDs'), (18, 'NspiGetIDsFromNames'),
+                         (19, 'NspiResolveNames'), (20, 'NspiResolveNamesW')):
+            calls += ['%d\t\t%s request NSPI V56' % (op, name),
+                      '%d\t\t%s response NSPI V56' % (op, name)]
+        unbind = ['1\t\tNspiUnbind request', '1' + ok + 'NspiUnbind response']
+        nf = '\t0x8004010f\t'
+        errors = ['0\t\tNspiBind request',
+                  '0\t0x80040111\tNspiBind response, Status: MAPI_E_LOGON_FAILED']
+        for op, name in ((3, 'NspiQueryRows'), (5, 'NspiGetMatches'),
+                         (12, 'NspiGetHierarchyInfo'), (7, 'NspiDNToEph'),
+                         (9, 'NspiGetProps')):
+            errors += ['%d\t\t%s request' % (op, name),
+                       '%d%s%s response, Status: MAPI_E_NOT_FOUND' % (op, nf, name)]
+        errors += unbind
+        errors += ['1\t\tNspiUnbind request',
+                   '1' + nf + 'NspiUnbind response, Status: MAPI_E_NOT_FOUND']
+        le = ['1\t' + c for c in calls + errors]
+        be = ['0\t' + c for c in calls + unbind]
+        ndr64 = ['1\t' + c for c in calls + unbind]
+        assert lines == le + be + ndr64
+
+    def test_nspi_propvalues(self, cmd_tshark, capture_file, test_env):
+        '''NspiGetProps returns a row with every SPropValue arm of the
+        IDL; the values are the same in NDR, big endian NDR and NDR64.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Y', 'nspi.opnum == 9 && dcerpc.pkt_type == 2 && nspi.SRow.cValues == 18',
+                '-Tfields', '-enspi.SPropValue.value',
+                '-enspi.SPropValue_CTR.i', '-enspi.SPropValue_CTR.l',
+                '-enspi.SPropValue_CTR.b', '-enspi.SPropValue_CTR.lpszA',
+                '-enspi.SPropValue_CTR.lpszW', '-enspi.MAPIUID.ab',
+                '-enspi.FILETIME.dwLowDateTime', '-enspi.SPropValue_CTR.err',
+                '-enspi.SShortArray.lpi', '-enspi.MV_LONG_STRUCT.lpl',
+                '-enspi.LPSTR.lppszA', '-enspi.SBinary.cb',
+                '-enspi.SGuidArray.lpguid', '-enspi.MV_UNICODE_STRUCT.lpi',
+                '-enspi.SPropValue_CTR.null', '-enspi.SPropValue_CTR.object',
+                '-enspi.MAPISTATUS_status',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 3
+        assert lines[0] == lines[1] == lines[2]
+        assert lines[0].split('\t') == [
+            '0x00000002,0x00000003,0x0000000b,0x0000001e,0x00000102,'
+            '0x0000001f,0x00000048,0x00000040,0x0000000a,0x00001002,'
+            '0x00001003,0x0000101e,0x00001102,0x00001048,0x0000101f,'
+            '0x00001040,0x00000001,0x0000000d',
+            '1', '6', '1', 'Alice Example', 'Alice Exämple',
+            '0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255',
+            '3302352631,3302352631,3302352632', '0x8004010f',
+            '1,2,65534', '10,20,30', 'SMTP,EX', '28,3,0,5',
+            '286331153,572662306,858993459,1145324612', '65,66',
+            '0', '4660', '0x00000000',
+        ]
+
+    def test_nspi_or_restriction(self, cmd_tshark, capture_file, test_env):
+        '''An NspiGetMatches request with an RES_OR restriction is
+        decoded as such, and the arguments after it are decoded from the
+        right octets ("NSPI: Dissect OR restrictions"; before the fix the
+        OR arm was empty and unknown3 and REQ_properties were garbage).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Y', 'nspi.SRestriction_CTR.resOr && !nspi.SRestriction_CTR.resAnd',
+                '-Tfields', '-eframe.number', '-enspi.SAndRestriction.cRes',
+                '-enspi.SPropertyRestriction.ulPropTag',
+                '-enspi.SPropValue_CTR.lpszA', '-enspi.NspiGetMatches.unknown3',
+                '-enspi.SPropTagArray.aulPropTag',
+            ), encoding='utf-8', env=test_env)
+        expected = '\t2\t0x3001001e,0x3001001e\tAlice,Bob\t50\t' \
+                   '0x3001001e,0x0ffe0003,0x0fff0102,0x3001001f'
+        assert stdout.splitlines() == ['16' + expected, '92' + expected,
+                                       '154' + expected]
+
+    def test_nspi_nested_restriction(self, cmd_tshark, capture_file, test_env):
+        '''AND and OR restrictions nested eight levels deep, with an
+        empty AND, an OR without subrestrictions and a property
+        restriction without a value, decode completely.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Y', 'nspi.opnum == 5 && nspi.SAndRestriction.cRes == 4',
+                '-Tfields', '-eframe.number', '-enspi.property_type',
+                '-enspi.SAndRestriction.cRes', '-enspi.SPropertyRestriction.ulPropTag',
+                '-enspi.MAPIUID.ab', '-enspi.NspiGetMatches.unknown3',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert [l.split('\t')[0] for l in lines] == ['18', '94', '156']
+        for line in lines:
+            f = line.split('\t')
+            # rt and the union discriminator of every restriction
+            types = f[1].split(',')
+            assert types[0::2] == types[1::2]
+            assert [int(t, 16) for t in types[0::2]] == \
+                [1, 0, 1, 0, 1, 0, 1, 0, 0, 4, 0, 1, 4]
+            assert f[2] == '1,1,1,1,1,1,1,1,4,0,0'
+            assert f[3] == '0x0ffe0003,0x33020048'
+            assert f[4].startswith('160,161,') and f[4].endswith(
+                '220,167,64,200,192,66,16,26,180,185,8,0,43,47,225,130')
+            assert f[5] == '50'
+
+    def test_nspi_rows(self, cmd_tshark, capture_file, test_env):
+        '''Row sets, instance keys and distinguished names of
+        NspiQueryRows, NspiGetMatches, NspiDNToEph and
+        NspiGetHierarchyInfo in the first connection.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nspi_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 29 && nspi.opnum != 9 && nspi.opnum != 0',
+                '-Tfields', '-eframe.number', '-enspi.SRowSet.cRows',
+                '-enspi.SRow.cValues', '-enspi.SPropValue_CTR.lpszA',
+                '-enspi.instance_key.value', '-enspi.NspiQueryRows.instance_key',
+                '-enspi.NAME_STRING.str', '-enspi.NspiGetHierarchyInfo.unknown2',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8\t\t\t\t\t4097,4098\t\t',
+            '9\t2\t4,4\tAlice,Bob\t\t\t\t',
+            '10\t\t\t\t\t\t\t',
+            '11\t0\t\t\t\t\t\t',
+            '12\t\t\tAlice\t\t\t\t',
+            '13\t1\t4\tAlice\t4097\t\t\t',
+            '14\t\t\t\t\t\t\t',
+            '15\t1\t4\tBob\t4098\t\t\t',
+            '16\t\t\tAlice,Bob\t\t\t\t',
+            '17\t2\t4,4\tAlice,Bob\t4097,4098\t\t\t',
+            '18\t\t\t\t\t\t\t',
+            '19\t\t\t\t\t\t\t',
+            '20\t\t\t\t\t\t\t',
+            '21\t0\t\t\t\t\t\t',
+            '22\t\t\t\t\t\t/o=Example/ou=First Administrative Group/cn=Recipients/cn=alice\t',
+            '23\t\t\t\t4097,0\t\t\t',
+            '28\t\t\t\t\t\t\t0',
+            '29\t3\t9,9,0\tAlice Example\t\t\t\t42',
+        ]
+
+
+class TestDissectDcerpcNt:
+    '''The shared DCE/RPC helpers in packet-dcerpc-nt.c and
+    packet-dcerpc-ndr.c, reached through LSARPC, SAMR, WINREG, SRVSVC,
+    NETLOGON, SPOOLSS, DRSUAPI, WKSSVC, ATSVC, WITNESS, EVENTLOG and SMB2.'''
+
+    def test_dcerpc_nt_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts, and no malformed packets or warnings in one and
+        two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 536
+        expected = {'LSARPC': 146, 'SAMR': 148, 'WINREG': 28, 'SRVSVC': 14,
+                    'RPC_NETLOGON': 26, 'SPOOLSS': 10, 'DRSUAPI': 8, 'WKSSVC': 2,
+                    'ATSVC': 2, 'WITNESS': 2, 'EVENTLOG': 2, 'SMB2': 6,
+                    'DCERPC': 32, 'TCP': 110}
+        assert {p: protocols.count(p) for p in expected} == expected
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dcerpc_nt_binds(self, cmd_tshark, capture_file, test_env):
+        '''The interfaces, byte orders and transfer syntaxes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.cn_bind_to_uuid', '-edcerpc.drep.byteorder',
+                '-edcerpc.cn_bind_trans_id',
+            ), encoding='utf-8', env=test_env)
+        ndr, ndr64 = '8a885d04-1ceb-11c9-9fe8-08002b104860', '71710533-beba-4937-8319-b5dbef9ccc36'
+        lsa, samr = '12345778-1234-abcd-ef00-0123456789ab', '12345778-1234-abcd-ef00-0123456789ac'
+        netlogon = '12345678-1234-abcd-ef00-01234567cffb'
+        assert [l.split('\t') for l in stdout.splitlines()] == [
+            [lsa, '1', ndr], [lsa, '0', ndr], [lsa, '1', ndr64],
+            [samr, '1', ndr], [samr, '0', ndr], [samr, '1', ndr64],
+            ['338cd001-2244-31f1-aaaa-900038001003', '1', ndr],
+            ['4b324fc8-1670-01d3-1278-5a47bf6ee188', '1', ndr],
+            [netlogon, '1', ndr], [netlogon, '1', ndr64],
+            ['12345678-1234-abcd-ef00-0123456789ab', '1', ndr],
+            ['e3514235-4b06-11d1-ab04-00c04fc2dcd2', '1', ndr],
+            ['6bffd098-a112-3610-9833-46c3f87e345a', '1', ndr],
+            ['1ff70682-0a51-30e8-076d-740be8cee98b', '1', ndr],
+            ['ccd8c074-d0e5-4a40-92b4-d074faa6ba28', '1', ndr],
+            ['82273fdc-e32a-18c3-3f78-827929dc23ea', '1', ndr],
+        ]
+
+    @staticmethod
+    def _handle_frames(cmd_tshark, capture_file, test_env, passes, pkt_type):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'lsarpc && frame.number >= 40 && frame.number <= 115 && dcerpc.pkt_type == %d' % pkt_type,
+                '-Tfields', '-eframe.number', '-edcerpc.nt.open_frame', '-edcerpc.nt.close_frame',
+            ), encoding='utf-8', env=test_env)
+        return {int(l.split('\t')[0]): tuple(l.split('\t')[1:]) for l in stdout.splitlines()}
+
+    def test_dcerpc_nt_policy_handle_two_pass(self, cmd_tshark, capture_file, test_env):
+        '''The frames in which LSA policy handles are opened and closed, in
+        two passes: a handle closed four times (every close shows the open
+        and the first close; before "DCERPC: Spread policy handles over
+        the hash, do not grow on repeated closes" the later closes showed
+        only themselves), handles that share octets 4-7, a handle opened
+        again without a close, opened, closed and opened again (and closed
+        twice), a handle whose open is not in the capture, two opens of
+        one handle in one frame, a null handle and a failed open.'''
+        requests = self._handle_frames(cmd_tshark, capture_file, test_env, ('-2',), 0)
+        assert requests == {
+            # closed four times
+            40: ('', ''), 42: ('41', '44'), 44: ('41', '44'), 46: ('41', '44'),
+            48: ('41', '44'), 50: ('41', '44'),
+            # octets 4-7 shared by four handles
+            52: ('', ''), 54: ('', ''), 56: ('', ''), 58: ('', ''),
+            60: ('59', '74'), 62: ('57', '72'), 64: ('55', '70'), 66: ('53', '68'),
+            68: ('53', '68'), 70: ('55', '70'), 72: ('57', '72'), 74: ('59', '74'),
+            # opened again without a close
+            76: ('', ''), 78: ('77', ''), 80: ('', ''), 82: ('81', '84'), 84: ('81', '84'),
+            # opened, closed, opened, closed twice
+            86: ('', ''), 88: ('87', '88'), 90: ('', ''), 92: ('91', '94'), 94: ('91', '94'),
+            96: ('91', '94'),
+            # not opened in the capture; used after its close
+            98: ('', '100'), 100: ('', '100'), 102: ('', ''),
+            # two opens of one handle in frame 105
+            104: ('', ''), 106: ('105', '108'), 108: ('105', '108'),
+            # null handle, failed open, close of the first policy handle
+            110: ('', ''), 112: ('', ''), 114: ('7', '114'),
+        }
+        responses = self._handle_frames(cmd_tshark, capture_file, test_env, ('-2',), 2)
+        opens = {k: v for k, v in responses.items() if v != ('', '')}
+        assert opens == {
+            41: ('41', '44'), 53: ('53', '68'), 55: ('55', '70'), 57: ('57', '72'),
+            59: ('59', '74'), 77: ('77', ''), 81: ('77', ''), 87: ('87', '88'),
+            91: ('91', '94'), 105: ('105,105', '108,108'),
+        }
+
+    def test_dcerpc_nt_policy_handle_one_pass(self, cmd_tshark, capture_file, test_env):
+        '''In one pass the open frames are the same and a close frame is
+        known from the close on.'''
+        requests = self._handle_frames(cmd_tshark, capture_file, test_env, (), 0)
+        two = self._handle_frames(cmd_tshark, capture_file, test_env, ('-2',), 0)
+        assert {k: v[0] for k, v in requests.items()} == {k: v[0] for k, v in two.items()}
+        assert {k: v for k, v in requests.items() if v[1]} == {
+            44: ('41', '44'), 46: ('41', '44'), 48: ('41', '44'), 50: ('41', '44'),
+            68: ('53', '68'), 70: ('55', '70'), 72: ('57', '72'), 74: ('59', '74'),
+            84: ('81', '84'), 88: ('87', '88'), 94: ('91', '94'), 96: ('91', '94'),
+            100: ('', '100'), 108: ('105', '108'), 114: ('7', '114'),
+        }
+
+    def test_dcerpc_nt_handle_names(self, cmd_tshark, capture_file, test_env):
+        '''Handle names stored with the open (SAMR CreateUser2 and WINREG
+        OpenKey strings saved with PIDL_STR_SAVE, SPOOLSS OpenPrinterEx),
+        and SMB2 file ids tracked as GUID handles.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'frame.number in {7, 213, 262, 357, 462, 529, 532}', '-V',
+            ), encoding='utf-8', env=test_env)
+        lines = [l.strip() for l in stdout.splitlines()
+                 if 'Policy Handle:' in l or 'GUID handle' in l]
+        assert lines == [
+            'Policy Handle: lsa_OpenPolicy2(<...>)',
+            'Policy Handle: CreateUser2(carol1)',
+            'Policy Handle: CreateUser2(carol1)',
+            'Policy Handle: OpenKey(SOFTWARE\\Example)',
+            'Policy Handle: OpenPrinterEx(\\\\SRV01\\Printer1)',
+            'GUID handle, File: docs\\report.txt',
+            'GUID handle, File: docs\\report.txt',
+        ]
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'spoolss || smb2',
+                '-Tfields', '-eframe.number', '-e_ws.col.info',
+                '-edcerpc.nt.open_frame', '-edcerpc.nt.close_frame',
+            ), encoding='utf-8', env=test_env)
+        frames = {int(l.split('\t')[0]): l.split('\t')[1:] for l in stdout.splitlines()}
+        assert frames[455][1:] == ['455', '462']
+        # -Tfields escapes the backslashes
+        assert frames[462] == ['ClosePrinter request, OpenPrinterEx(\\\\\\\\SRV01\\\\Printer1)', '455', '462']
+        assert frames[529][1:] == ['529', '532']
+        assert frames[532][1:] == ['529', '532']
+
+    def test_dcerpc_nt_status_codes(self, cmd_tshark, capture_file, test_env):
+        '''NTSTATUS, DOS error, WERROR and HRESULT codes in the Info column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'frame.number in {113, 425, 457, 459}',
+                '-Tfields', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            'lsa_OpenPolicy2 response, STATUS_ACCESS_DENIED, Error: STATUS_ACCESS_DENIED',
+            'NetrLogonControl response, WERR_NOT_SUPPORTED',
+            'GetPrinter response, level 2, Insufficient buffer',
+            'GetCorePrinterDrivers response, HRES_E_ACCESSDENIED',
+        ]
+
+    def test_dcerpc_nt_netlogon(self, cmd_tshark, capture_file, test_env):
+        '''NETLOGON: counted strings, NTTIME and UNIX times, SIDs, group
+        attributes, SID_AND_ATTRIBUTES arrays, account flags, logon hours,
+        SID arrays, GUIDs and a claims blob in a MES header, in NDR and
+        NDR64.'''
+        env = dict(test_env, TZ='UTC')
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'rpc_netlogon && dcerpc.pkt_type == 2',
+                '-Tfields', '-E', 'aggregator=|', '-eframe.number', '-enetlogon.acct_name',
+                '-edcerpc.nt.domain_sid', '-edcerpc.nt.groups.attrs', '-edcerpc.nt.acct_ctrl',
+                '-edcerpc.nt.logonhours.divisions', '-edcerpc.nt.guid', '-ent.midl.version',
+                '-enetlogon.logon_time',
+            ), encoding='utf-8', env=env)
+        frames = {int(l.split('\t')[0]): l.split('\t')[1:] for l in stdout.splitlines()}
+        dom = 'S-1-5-21-1004336348-1177238915-682003330'
+        extra = '|S-1-18-1|%s-1200|S-1-5-32-544' % dom
+        groups = '0x00000007|0x0000001f|0x20000004'
+        nttime = '2024-01-17T21:20:00.000000000+0000'
+        assert frames[413] == ['alice', '', '', '', '', '', '', '2023-11-14T22:13:20.000000000+0000']
+        for ndr32, ndr64 in ((415, 437), (417, 439), (419, 441), (421, 443), (423, 445)):
+            assert frames[ndr32] == frames[ndr64]
+        assert frames[415] == ['alice', dom, groups, '', '', '', '', nttime]
+        assert frames[417] == ['alice', dom + extra, groups + '|0x00000007|0x20000007|0x0000001f',
+                               '', '', '', '', nttime]
+        assert frames[419] == frames[417]
+        assert frames[421] == ['', '', '', '', '', '', '1', '']
+        assert frames[423] == ['carol', '%s-1106|%s-1107|S-1-5-32-545' % (dom, dom), '', '0x00000ffd',
+                               '168', '', '', nttime]
+        assert frames[427][5] == 'a3a2a1a0-a5a4-a7a6-a8a9-aaabacadaeaf'
+
+    def test_dcerpc_nt_samr(self, cmd_tshark, capture_file, test_env):
+        '''SAMR: LSA strings in the Info column, SID arrays, NTTIME in all
+        three encodings, the access rights of the handle type in security
+        descriptors.'''
+        env = dict(test_env, TZ='UTC')
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'samr.opnum in {5, 12, 16, 36, 50} || samr.opnum == 3 && dcerpc.pkt_type == 2',
+                '-Tfields', '-E', 'aggregator=|', '-eframe.number', '-e_ws.col.info',
+                '-edcerpc.nt.domain_sid', '-esamr.samr_UserInfo21.last_logon',
+                '-esamr.user.access_mask',
+            ), encoding='utf-8', env=env)
+        frames = {int(l.split('\t')[0]): l.split('\t')[1:] for l in stdout.splitlines()}
+        dom = 'S-1-5-21-1004336348-1177238915-682003330'
+        assert frames[184][0] == 'LookupDomain request, EXAMPLE'
+        assert frames[200][1] == '%s-1011|%s-1012' % (dom, dom)
+        assert frames[212][0] == 'CreateUser2 request, carol1'
+        for f in (222, 296, 335):
+            assert frames[f][2] == '2023-06-18T07:01:54.590053400+0000'
+
+    def test_dcerpc_nt_other_helpers(self, cmd_tshark, capture_file, test_env):
+        '''28 octet SIDs, NTTIME_1sec and data blobs (DRSUAPI), the uint32
+        level in the Info column (WKSSVC), a NUL terminated UTF-16 name
+        (WITNESS), a NUL terminated ASCII string (EVENTLOG).'''
+        env = dict(test_env, TZ='UTC')
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_nt_coverage.pcap.gz'),
+                '-Y', 'frame.number in {472, 476, 490, 511, 521}',
+                '-Tfields', '-E', 'aggregator=|', '-eframe.number', '-e_ws.col.info',
+                '-edcerpc.nt.domain_sid', '-edrsuapi.drsuapi_DsReplicaMetaData.originating_change_time',
+                '-edcerpc.nt.blob.data', '-ewitness.witness_ResourceChange.name',
+                '-eeventlog.eventlog_Record.raw_data',
+            ), encoding='utf-8', env=env)
+        frames = {int(l.split('\t')[0]): l.split('\t')[1:] for l in stdout.splitlines()}
+        assert frames[472][3] == '0a0000000102030405060708090a'
+        assert frames[476][1] == '|'.join(['S-1-5-21-286331153-572662306-858993459-500'] * 7)
+        assert frames[476][2] == '|'.join(['2022-06-18T04:26:40.000000000+0000'] * 6)
+        assert frames[476][3] == '616263|616263'
+        assert frames[490][0] == 'NetWkstaGetInfo request Level:100'
+        assert frames[511][4] == 'share01'
+        assert frames[521][5] == 'raw data'
+
+
+class TestDissectDcerpcDceSmall2:
+    # Opnum names of the interfaces that only register them, in opnum order
+    OPNUMS = {
+        'rdaclif': [
+            'lookup', 'replace', 'get_access', 'test_access',
+            'test_access_on_behalf', 'get_manager_types',
+            'get_printstring', 'get_referral',
+            'get_mgr_types_semantics'],
+        'rep_proc': [
+            'CheckReplicationConfig',
+            'AllCheckReplicationConfig', 'KeepFilesAlive',
+            'GetVolChangedFiles', 'GetRepStatus',
+            'GetRepServerStatus', 'UpdateSelf', 'Probe',
+            'GetOneRepStatus', 'GetServerInterfaces'],
+        'roverride': [
+            'roverride_get_login_info',
+            'roverride_check_passwd',
+            'roverride_is_passwd_overridden',
+            'roverride_get_by_unix_num',
+            'roverride_get_group_info',
+            'roverride_check_group_passwd',
+            'roverride_is_grp_pwd_overridden'],
+        'rs_attr': [
+            'rs_attr_cursor_init', 'rs_attr_lookup_by_id',
+            'rs_attr_lookup_no_expand',
+            'rs_attr_lookup_by_name', 'rs_attr_update',
+            'rs_attr_test_and_update', 'rs_attr_delete',
+            'rs_attr_get_referral', 'rs_attr_get_effective'],
+        'rs_attr_schema': [
+            'create_entry', 'delete_entry', 'update_entry',
+            'cursor_init', 'scan', 'lookup_by_name',
+            'lookup_by_id', 'get_referral', 'get_acl_mgrs',
+            'aclmgr_strings'],
+        'rs_bind': [
+            'get_update_site'],
+        'rsec_login': [
+            'rsec_login_get_trusted_preauth'],
+        'pnp': [
+            'PNP_Disconnect', 'PNP_Connect', 'PNP_GetVersion',
+            'PNP_GetGlobalState', 'PNP_InitDetection',
+            'PNP_ReportLogOn', 'PNP_ValidateDeviceInstance',
+            'PNP_GetRootDeviceInstance',
+            'PNP_GetRelatedDeviceInstance',
+            'PNP_EnumerateSubKeys', 'PNP_GetDeviceList',
+            'PNP_GetDeviceListSize', 'PNP_GetDepth',
+            'PNP_GetDeviceRegProp', 'PNP_SetDeviceRegProp',
+            'PNP_GetClassInstance', 'PNP_CreateKey',
+            'PNP_DeleteRegistryKey', 'PNP_GetClassCount',
+            'PNP_GetClassName', 'PNP_DeleteClassKey',
+            'PNP_GetInterfaceDeviceAlias',
+            'PNP_GetInterfaceDeviceList',
+            'PNP_GetInterfaceDeviceListSize',
+            'PNP_RegisterDeviceClassAssociation',
+            'PNP_UnregisterDeviceClassAssociation',
+            'PNP_GetClassRegProp', 'PNP_SetClassRegProp',
+            'PNP_CreateDevInst', 'PNP_DeviceInstanceAction',
+            'PNP_GetDeviceStatus', 'PNP_SetDeviceProblem',
+            'PNP_DisableDevInst', 'PNP_UninstallDevInst',
+            'PNP_AddID', 'PNP_RegisterDriver',
+            'PNP_QueryRemove', 'PNP_RequestDeviceEject',
+            'PNP_IsDockStationPresent', 'PNP_RequestEjectPC',
+            'PNP_HwProfFlags', 'PNP_GetHwProfInfo',
+            'PNP_AddEmptyLogConf', 'PNP_FreeLogConf',
+            'PNP_GetFirstLogConf', 'PNP_GetNextLogConf',
+            'PNP_GetLogConfPriority', 'PNP_AddResDes',
+            'PNP_FreeResDes', 'PNP_GetNextResDes',
+            'PNP_GetResDesData', 'PNP_GetResDesDataSize',
+            'PNP_ModifyResDes', 'PNP_DetectResourceConflict',
+            'PNP_QueryResConfList', 'PNP_SetHwProf',
+            'PNP_QueryArbitratorFreeData',
+            'PNP_QueryArbitratorFreeSize', 'PNP_RunDetection',
+            'PNP_RegisterNotification',
+            'PNP_UnregisterNotification',
+            'PNP_GetCustomDevProp', 'PNP_GetVersionInternal',
+            'PNP_GetBlockedDriverInfo',
+            'PNP_GetServerSideDeviceInstallFlags',
+            'PNP_GetObjectPropKeys', 'PNP_GetObjectProp',
+            'PNP_SetObjectProp', 'PNP_InstallDevInst',
+            'PNP_ApplyPowerSettings',
+            'PNP_DriverStoreAddDriverPackage',
+            'PNP_DriverStoreDeleteDriverPackage',
+            'PNP_RegisterServiceNotification',
+            'PNP_SetActiveService', 'PNP_DeleteServiceDevices'],
+        'rras': [
+            'MprAdminServerGetInfo', 'RasAdminConnectionEnum',
+            'RasAdminConnectionGetInfo',
+            'RasAdminConnectionClearStats', 'RasAdminPortEnum',
+            'RasAdminPortGetInfo', 'RasAdminPortClearStats',
+            'RasAdminPortReset', 'RasAdminPortDisconnect',
+            'RouterInterfaceTransportSetGlobalInfo',
+            'RouterInterfaceTransportGetGlobalInfo',
+            'RouterInterfaceGetHandle', 'RouterInterfaceCreate',
+            'RouterInterfaceGetInfo', 'RouterInterfaceSetInfo',
+            'RouterInterfaceDelete',
+            'RouterInterfaceTransportRemove',
+            'RouterInterfaceTransportAdd',
+            'RouterInterfaceTransportGetInfo',
+            'RouterInterfaceTransportSetInfo',
+            'RouterInterfaceEnum', 'RouterInterfaceConnect',
+            'RouterInterfaceDisconnect',
+            'RouterInterfaceUpdateRoutes',
+            'RouterInterfaceQueryUpdateResult',
+            'RouterInterfaceUpdatePhonebookInfo',
+            'MIBEntryCreate', 'MIBEntryDelete', 'MIBEntrySet',
+            'MIBEntryGet', 'MIBEntryGetFirst',
+            'MIBEntryGetNext', 'MIBGetTrapInfo',
+            'MIBSetTrapInfo', 'RasAdminConnectionNotification',
+            'RasAdminSendUserMessage', 'RouterDeviceEnum',
+            'RouterInterfaceTransportCreate',
+            'RouterInterfaceDeviceGetInfo',
+            'RouterInterfaceDeviceSetInfo',
+            'RouterInterfaceSetCredentialsEx',
+            'RouterInterfaceGetCredentialsEx',
+            'RasAdminConnectionRemoveQuarantine'],
+    }
+    # Microsoft interfaces, carried over TCP with a bind and no big endian call
+    CO = ('pnp', 'rras')
+
+    def test_dcerpc_dce_small2_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: a request and response for every opnum of each
+        interface (the connectionless ones also once in big endian), two
+        TCP connections with a bind (PNP and RRAS); no malformed packets
+        or warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_dce_small2_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 360
+        assert protocols.count('PNP') == 150
+        assert protocols.count('rdaclif') == 20
+        assert protocols.count('REP_PROC') == 22
+        assert protocols.count('roverride') == 16
+        assert protocols.count('RRAS') == 86
+        assert protocols.count('RS_ATTR') == 20
+        assert protocols.count('rs_attr_schema') == 22
+        assert protocols.count('RS_BIND') == 4
+        assert protocols.count('rsec_login') == 4
+        assert protocols.count('DCERPC') == 4
+        assert protocols.count('TCP') == 12
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_dce_small2_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_dcerpc_dce_small2_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every opnum is shown by its name, in the request and in the
+        response matched to it; the big endian call of each
+        connectionless interface comes last.'''
+        for proto, names in self.OPNUMS.items():
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('dcerpc_dce_small2_coverage.pcap.gz'),
+                    '-Y', proto,
+                    '-Tfields', '-e' + proto + '.opnum', '-edcerpc.drep.byteorder',
+                    '-e_ws.col.info',
+                ), encoding='utf-8', env=test_env)
+            expected = []
+            for opnum, name in enumerate(names):
+                expected += ['%d\t1\t%s request' % (opnum, name),
+                             '%d\t1\t%s response' % (opnum, name)]
+            if proto not in self.CO:
+                expected += ['0\t0\t%s request' % names[0],
+                             '0\t0\t%s response' % names[0]]
+            assert stdout.splitlines() == expected, proto
+
+    def test_dcerpc_dce_small2_bind(self, cmd_tshark, capture_file, test_env):
+        '''The binds name the PNP (v1.0) and RRAS (v0.0) interfaces and
+        the responses are matched to their requests.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_dce_small2_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 11',
+                '-Tfields', '-edcerpc.cn_bind_to_uuid', '-edcerpc.cn_bind_if_ver',
+                '-edcerpc.cn_bind_if_ver_minor',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '8d9f4e40-a03d-11ce-8f69-08003e30051b\t1\t0',
+            '8f09f000-b7ed-11ce-bbd2-00001a181cad\t0\t0',
+        ]
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_dce_small2_coverage.pcap.gz'),
+                '-Y', 'dcerpc.pkt_type == 2 && (pnp || rras)',
+                '-Tfields', '-Eoccurrence=f', '-edcerpc.request_in',
+            ), encoding='utf-8', env=test_env)
+        frames = [int(x) for x in stdout.split()]
+        assert len(frames) == 75 + 43
+        assert frames[:2] == [114, 116]
+
+
+class TestDissectDcerpcRcg:
+    def test_rcg_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: an RDP connection request and RDPEAR frames
+        (Exported PDUs); no malformed packets or warnings in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rcg_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 65
+        assert protocols.count('RDP') == 1
+        assert protocols.count('RDPEAR') == 64
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rcg_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rcg_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every Kerberos and NTLM call, its input from the RDP server and
+        its output to the server (known from the connection request), the
+        status of outputs and call IDs no union arm handles.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rcg_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 2 && frame.number <= 59',
+                '-Tfields', '-erdp_ear.payload.package',
+                '-ercg.KerbCredIsoRemoteInput.CallId',
+                '-ercg.KerbCredIsoRemoteOutput.CallId',
+                '-ercg.KerbCredIsoRemoteOutput.Status',
+                '-ercg.NtlmCredIsoRemoteInput.CallId',
+                '-ercg.NtlmCredIsoRemoteOutput.CallId',
+                '-ercg.NtlmCredIsoRemoteOutput.Status',
+            ), encoding='utf-8', env=test_env)
+        kerb = [0x100, 0x101, 0x101, 0x102, 0x102, 0x103, 0x103, 0x104,
+                0x105, 0x105, 0x106, 0x107, 0x108, 0x109, 0x10a, 0x10b,
+                0x113, 0x114, 0x115, 0x116, 0x117, 0x118]
+        status = {2: '0xc000000d', 6: '0xc000018b'}
+        expected = []
+        for i, c in enumerate(kerb):
+            expected.append('Kerberos\t%d\t\t\t\t\t' % c)
+            expected.append('Kerberos\t\t%d\t%s\t\t\t' % (c, status.get(i, '0x00000000')))
+        for c in range(0x200, 0x205):
+            expected.append('NTLM\t\t\t\t%d\t\t' % c)
+            expected.append('NTLM\t\t\t\t\t%d\t0x00000000' % c)
+        expected += [
+            'Kerberos\t511\t\t\t\t\t',
+            'Kerberos\t\t511\t0xc0000002\t\t\t',
+            'NTLM\t\t\t\t767\t\t',
+            'NTLM\t\t\t\t\t767\t0xc0000002',
+        ]
+        assert stdout.splitlines() == expected
+
+    def test_rcg_unknown_package(self, cmd_tshark, capture_file, test_env):
+        '''A package other than Kerberos and NTLM is not dissected (it was
+        taken as NTLM before "RDPEAR: Free the NDR pointer list, do not
+        take an unknown package as NTLM"); nor is a sealed wrap token.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rcg_coverage.pcap.gz'),
+                '-Y', 'frame.number in {60,61,64}',
+                '-Tfields', '-eframe.number', '-erdp_ear.payload.package',
+                '-espnego.krb5.cfx_flags', '-erdp_ear.package.reservedheader',
+                '-ercg.NtlmCredIsoRemoteInput.CallId', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '60\tNegotiate\t0x00\t' + '00' * 16 + '\t\t',
+            '61\t\t0x06\t\t\t',
+            '64\tNegotiate\t0x00\t' + '00' * 16 + '\t\t',
+        ]
+
+    def test_rcg_values(self, cmd_tshark, capture_file, test_env):
+        '''Deferred pointers in the right order: names and strings, the
+        GSS-API and HMAC checksums, PAC credentials, double pointers,
+        crypto blobs, times and the NTLM response.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rcg_coverage.pcap.gz'),
+                '-Y', 'frame.number in {2,4,12,13,14,23,29,31,35,39,48,49,65}',
+                '-Tfields', '-eframe.number', '-erdp_ear.payload.version',
+                '-ercg.RPC_UNICODE_STRING.Buffer', '-ekerberos.cksumtype',
+                '-ercg.KERB_ASN1_DATA_CHECKSUM.Length',
+                '-ercg.SECPKG_SUPPLEMENTAL_CRED.CredentialSize',
+                '-ercg.HashS4UPreauthResp.ChecksumSize',
+                '-ercg.SignS4UPreauthDataResp.ChecksumSize',
+                '-ercg.KERB_RPC_CRYPTO_API_BLOB.cbData',
+                '-ercg.LARGE_INTEGER.QuadPart',
+                '-ercg.CreateDHKeyAgreementResp.KeyAgreementHandle',
+                '-ercg.Lm20GetNtlm3ChallengeResponseResp.Ntlm3ResponseLength',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '2\t0\t\t\t\t\t\t\t\t\t\t',
+            '4\t\t\t\t\t\t\t\t\t-3000000000\t\t',
+            '12\t\talice,EXAMPLE.TEST\t32771\t37\t\t\t\t\t72623859790382856\t\t',
+            '13\t\t\t\t\t\t\t\t\t133137663984140288\t\t',
+            '14\t\thost,server.example.test\t\t\t\t\t\t\t0\t\t',
+            '23\t\t\t16\t23\t\t\t\t\t\t\t',
+            '29\t\t\t\t\t\t16\t\t\t\t\t',
+            '31\t\t\t\t\t\t\t12\t\t\t\t',
+            '35\t\tNTLM,Kerberos\t\t\t40,24\t\t\t\t\t\t',
+            '39\t\t\t\t\t\t\t\t32,1,20\t\t8192\t',
+            '48\t\talice,EXAMPLE,SERVER\t\t\t\t\t\t\t\t\t',
+            '49\t\t\t\t\t\t\t\t\t\t\t24',
+            '65\t\t\t32771\t4\t\t\t\t\t72623859790382856\t\t',
+        ]
+
+
+class TestDissectDcerpcRdpdrSmartcard:
+    def test_rdpdr_smartcard_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is RDPDR (Exported PDUs) and none is malformed or
+        has a warning, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rdpdr_smartcard_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 137
+        assert protocols.count('RDPDR') == 137
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rdpdr_smartcard_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rdpdr_smartcard_calls(self, cmd_tshark, capture_file, test_env):
+        '''Smart card IOCTLs sent to the announced smart card device and
+        their completions, matched by completion ID; the NDR command is
+        decoded only for the IOCTLs the dissector knows.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rdpdr_smartcard_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 40 && frame.number <= 123',
+                '-Tfields', '-erdpdr.iocontrolcode', '-erdpdr.sc.returnCode',
+                '-erdpdr.sc.command', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 84
+        decoded = []
+        for req, resp in zip(lines[0::2], lines[1::2]):
+            code, rc, cmd, info = req.split('\t')
+            assert rc == ''
+            assert info.endswith(' req')
+            code2, rc2, cmd2, info2 = resp.split('\t')
+            assert code2 == ''
+            assert rc2 == '0x00000000'
+            assert info2 == info[:-4] + ' resp'
+            decoded.append((code, info[:-4], cmd != '', cmd2 != ''))
+        known = ['ESTABLISHCONTEXT', 'ISVALIDCONTEXT', 'LISTREADERSA',
+                 'LISTREADERSW', 'LISTREADERSA', 'GETDEVICETYPEID',
+                 'GETSTATUSCHANGEA', 'GETSTATUSCHANGEW', 'CONNECTA',
+                 'CONNECTW', 'BEGINTRANSACTION', 'STATE', 'STATUSA',
+                 'STATUSW', 'TRANSMIT', 'TRANSMIT', 'GETATTRIB',
+                 'READCACHEA', 'READCACHEW', 'WRITECACHEA', 'WRITECACHEW',
+                 'RECONNECT', 'ENDTRANSACTION', 'DISCONNECT', 'CANCEL']
+        long_return = ['ACCESSSTARTEDEVENT', 'INTRODUCEREADERGROUPA',
+                       'INTRODUCEREADERGROUPW', 'FORGETREADERGROUPA',
+                       'FORGETREADERGROUPW', 'INTRODUCEREADERA',
+                       'INTRODUCEREADERW', 'FORGETREADERA', 'FORGETREADERW',
+                       'ADDREADERTOGROUPA', 'ADDREADERTOGROUPW',
+                       'REMOVEREADERFROMGROUPA', 'REMOVEREADERFROMGROUPW',
+                       'SETATTRIB']
+        expected = [('SCARD_IOCTL_' + n, True, n != 'STATE') for n in known]
+        expected += [('SCARD_IOCTL_' + n, False, True) for n in long_return]
+        expected += [('SCARD_IOCTL_LOCATECARDSA', False, False),
+                     ('SCARD_IOCTL_CONTROL', False, False),
+                     ('SCARD_IOCTL_RELEASECONTEXT', True, True)]
+        assert [d[1:] for d in decoded] == expected
+        assert decoded[0][0] == '0x00090014'
+        assert decoded[-1][0] == '0x00090018'
+
+    def test_rdpdr_smartcard_values(self, cmd_tshark, capture_file, test_env):
+        '''Decoded values of deferred pointers: group and reader names
+        (char and wchar_t strings), reader states, protocols, the Transmit
+        receive length and cache lookup names and return codes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rdpdr_smartcard_coverage.pcap.gz'),
+                '-Y', 'frame.number in {44,50,51,52,53,54,56,59,65,69,71,76,77,83}',
+                '-Tfields', '-eframe.number',
+                '-escard_pack.ListReadersA_Call.mszGroups',
+                '-escard_pack.GetDeviceTypeId_Call.szReaderName',
+                '-escard_pack.GetDeviceTypeId_Return.dwDeviceId',
+                '-escard_pack.ReaderStateA.szReader',
+                '-escard_pack.ReaderStateW.szReader',
+                '-escard_pack.ReaderState_Return.cbAtr',
+                '-escard_pack.ConnectA_Call.szReader',
+                '-escard_pack.Connect_Return.dwActiveProtocol',
+                '-escard_pack.Status_Return.dwState',
+                '-escard_pack.Transmit_Return.cbRecvLength',
+                '-escard_pack.ReadCacheW_Call.szLookupName',
+                '-escard_pack.ReadCache_Return.ReturnCode',
+                '-escard_pack.Reconnect_Return.dwActiveProtocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '44\tSCard$\t\t\t\t\t\t\t\t\t\t\t\t',
+            '50\t\tExample Reader 0\t\t\t\t\t\t\t\t\t\t\t',
+            '51\t\t\t31\t\t\t\t\t\t\t\t\t\t',
+            # tshark escapes the backslashes of \\?PnP?\Notification
+            '52\t\t\t\tExample Reader 0,' + r'\\\\?PnP?\\Notification' + '\t' * 9,
+            '53\t\t\t\t\t\t24,0\t\t\t\t\t\t\t',
+            '54\t\t\t\t\tExample Reader 0\t\t\t\t\t\t\t\t',
+            '56\t\t\t\t\t\t\tExample Reader 0\t\t\t\t\t\t',
+            '59\t\t\t\t\t\t\t\t1\t\t\t\t\t',
+            '65\t\t\t\t\t\t\t\t\t6\t\t\t\t',
+            '69\t\t\t\t\t\t\t\t\t\t4\t\t\t',
+            '71\t\t\t\t\t\t\t\t\t\t0\t\t\t',
+            '76\t\t\t\t\t\t\t\t\t\t\tCache/W\t\t',
+            '77\t\t\t\t\t\t\t\t\t\t\t\t-2146434967\t',
+            '83\t\t\t\t\t\t\t\t\t\t\t\t\t2',
+        ]
+
+    def test_rdpdr_devices(self, cmd_tshark, capture_file, test_env):
+        '''The device list announce, device replies by name, file system
+        I/O requests linked to their completions (in two passes), the
+        create information, printer events and the reproducer of "RDPDR:
+        Free the NDR pointer list of smart card calls" (an announce in a
+        conversation of its own and EstablishContext requests).'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_rdpdr_smartcard_coverage.pcap.gz'),
+                '-Y', 'frame.number in {7,8,10,11,12,35,36,124,129,130,135,136}',
+                '-Tfields', '-eframe.number', '-erdpdr.devicetype',
+                '-erdpdr.dosname', '-erdpdr.ioresultframe',
+                '-erdpdr.iorequestframe', '-erdpdr.dr.create.info',
+                '-erdpdr.printer.printername', '-erdpdr.device',
+                '-escard_pack.EstablishContext_Call.dwScope', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '7\t0x00000020,0x00000008,0x00000004\tSCARD,C:,PRN1\t\t\t\t\t\t\tDevice list announce',
+            '8\t\t\t\t\t\t\t\t\tSCARD, status=0x0',
+            '10\t\t\t\t\t\t\t\t\t',
+            '11\t\t\t12\t\t\t\t\t\tFS IRP_MJ_CREATE',
+            '12\t\t\t\t11\t0x05\t\t\t\t',
+            '35\t\t\t36\t\t\t\t\t\tFS IRP_MJ_CREATE',
+            '36\t\t\t\t35\t\t\t\t\t',
+            '124\t\tPRN1\t\t\t\tPrinter\t\t\tRDPDR_ADD_PRINTER_EVENT',
+            '129\t\t\t\t\t\t\tPRN1\t\tPAKID_PRN_USING_XPS PRN1',
+            '130\t\t\t\t\t\t\t\t\tPAKID_PRN_USING_XPS',
+            '135\t0x00000020\tSCARD\t\t\t\t\t\t\tDevice list announce',
+            '136\t\t\t\t\t\t\t\t2\tSCARD_IOCTL_ESTABLISHCONTEXT req',
+        ]
+
+
+class TestDissectDcerpcRfr:
+    def test_rfr_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: three TCP connections (NDR little endian, big
+        endian, NDR64) with a bind and both opnums (plus a logon failure
+        and an unknown opnum in the first); no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rfr_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 52
+        assert protocols.count('RFR') == 28
+        assert protocols.count('DCERPC') == 6
+        assert protocols.count('TCP') == 18
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rfr_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rfr_calls(self, cmd_tshark, capture_file, test_env):
+        '''Both opnums by name, their arguments, the returned server names
+        through the double pointers (also NULL), known and unknown MAPI
+        status codes, the same in every encoding.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rfr_coverage.pcap.gz'),
+                '-Y', 'rfr',
+                '-Tfields', '-edcerpc.drep.byteorder', '-erfr.opnum',
+                '-erfr.RfrGetNewDSA.ulFlags',
+                '-erfr.RfrGetFQDNFromLegacyDN.ulFlags',
+                '-erfr.RfrGetFQDNFromLegacyDN.cbMailboxServerDN',
+                '-erfr.RfrGetNewDSA.ppszServer',
+                '-erfr.RfrGetFQDNFromLegacyDN.ppszServerFQDN',
+                '-erfr.MAPISTATUS_status', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 28
+        calls = [
+            '0\t0\t\t\t\t\t\tRfrGetNewDSA request',
+            '0\t\t\t\tdc1.example.test\t\t0x00000000\tRfrGetNewDSA response',
+            '0\t1\t\t\tdc2.example.test\t\t\tRfrGetNewDSA request',
+            '0\t\t\t\t\t\t0x8004010f\tRfrGetNewDSA response, Status: MAPI_E_NOT_FOUND',
+            '1\t\t0\t80\t\t\t\tRfrGetFQDNFromLegacyDN request',
+            '1\t\t\t\t\tmbx1.example.test\t0x00000000\tRfrGetFQDNFromLegacyDN response',
+            '1\t\t2\t10\t\t\t\tRfrGetFQDNFromLegacyDN request',
+            '1\t\t\t\t\t\t0x80070005\tRfrGetFQDNFromLegacyDN response, Status: Unknown MAPISTATUS error 0x80070005',
+        ]
+        extra = [
+            '1\t\t0\t80\t\t\t\tRfrGetFQDNFromLegacyDN request',
+            '1\t\t\t\t\t\t0x80040111\tRfrGetFQDNFromLegacyDN response, Status: MAPI_E_LOGON_FAILED',
+            '2\t\t\t\t\t\t\tUnknown operation 2 request',
+            '2\t\t\t\t\t\t\tUnknown operation 2 response',
+        ]
+        assert lines == (['1\t' + c for c in calls + extra] +
+                         ['0\t' + c for c in calls] +
+                         ['1\t' + c for c in calls])
+
+    def test_rfr_strings(self, cmd_tshark, capture_file, test_env):
+        '''The DNs of the requests, and the referent IDs of the double
+        pointers: the outer pointer NULL, the inner pointer NULL, both
+        set with an empty string.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rfr_coverage.pcap.gz'),
+                '-Y', 'frame.number in {6,7,8,9,10,12}',
+                '-Tfields', '-eframe.number', '-edcerpc.referent_id',
+                '-erfr.RfrGetNewDSA.pUserDN', '-erfr.RfrGetNewDSA.ppszUnused',
+                '-erfr.RfrGetFQDNFromLegacyDN.szMailboxServerDN',
+            ), encoding='utf-8', env=test_env)
+        user = '/o=Example/ou=Exchange Administrative Group/cn=Recipients/cn=alice'
+        server = '/o=Example/ou=Exchange Administrative Group/cn=Configuration/cn=Servers/cn=MBX1'
+        assert stdout.splitlines() == [
+            '6\t0x00020004\t%s\t\t' % user,
+            '7\t0x00020004,0x00020008\t\t\t',
+            '8\t0x00020004,0x00020008,0x0002000c,0x00020010\t%s\t\t' % user,
+            '9\t0x00020004,0x00020008,0x0002000c\t\t\t',
+            '10\t\t\t\t%s' % server,
+            '12\t\t\t\t/o=Ex/cn=X',
+        ]
+
+
+class TestDissectDcerpcRpriv:
+    def test_rpriv_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: every frame is rpriv; no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rpriv_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['rpriv'] * 16
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rpriv_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rpriv_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every call: opnum, byte order, the decoded request fields
+        and the Info column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rpriv_coverage.pcap.gz'),
+                '-Tfields',
+                '-erpriv.opnum',
+                '-edcerpc.drep.byteorder',
+                '-erpriv.get_eptgt_rqst_authn_svc',
+                '-erpriv.get_eptgt_rqst_authz_svc',
+                '-erpriv.get_eptgt_rqst_var1',
+                '-erpriv.get_eptgt_rqst_key_size2',
+                '-erpriv.get_eptgt_rqst_key_t',
+                '-erpriv.get_eptgt_rqst_key_t2',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0\t1\t\t\t\t\t\t\tget_ptgt request',
+            '0\t1\t\t\t\t\t\t\tget_ptgt response',
+            '1\t1\t\t\t\t\t\t\tbecome_delegate request',
+            '1\t1\t\t\t\t\t\t\tbecome_delegate response',
+            '2\t1\t\t\t\t\t\t\tbecome_impersonator request',
+            '2\t1\t\t\t\t\t\t\tbecome_impersonator response',
+            '3\t1\t2\t1\t16\t21,5\t/.../cell.example.com\talice\tget_eptgt request Request for: alice in /.../cell.example.com ',
+            '3\t1\t\t\t\t\t\t\tget_eptgt response',
+            '3\t1\t1\t0\t16\t14,15\t/.../c.example\thosts/srv1/self\tget_eptgt request Request for: hosts/srv1/self in /.../c.example ',
+            '3\t1\t\t\t\t\t\t\tget_eptgt response',
+            '3\t1\t0\t2\t0\t0,0\t\t\tget_eptgt request Request for:  in  ',
+            '3\t1\t\t\t\t\t\t\tget_eptgt response',
+            '3\t0\t2\t1\t16\t19,3\t/.../be.example.org\tbob\tget_eptgt request Request for: bob in /.../be.example.org ',
+            '3\t0\t\t\t\t\t\t\tget_eptgt response',
+            '0\t0\t\t\t\t\t\t\tget_ptgt request',
+            '0\t0\t\t\t\t\t\t\tget_ptgt response',
+        ]
+
+
+class TestDissectDcerpcRsAcct:
+    def test_rs_acct_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: every frame is RS_ACCT; no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_acct_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['RS_ACCT'] * 24
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rs_acct_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rs_acct_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every call: opnum, byte order, the decoded request fields
+        and the Info column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_acct_coverage.pcap.gz'),
+                '-Tfields',
+                '-ers_acct.opnum',
+                '-edcerpc.drep.byteorder',
+                '-ers_acct.lookup_rqst_var',
+                '-ers_acct.lookup_rqst_key_size',
+                '-ers_acct.lookup_rqst_key_t',
+                '-ers_acct.get_projlist_rqst_var1',
+                '-ers_acct.get_projlist_rqst_key_size',
+                '-ers_acct.get_projlist_rqst_key_t',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0\t1\t\t\t\t\t\t\tadd request',
+            '0\t1\t\t\t\t\t\t\tadd response',
+            '1\t1\t\t\t\t\t\t\tdelete request',
+            '1\t1\t\t\t\t\t\t\tdelete response',
+            '2\t1\t\t\t\t\t\t\trename request',
+            '2\t1\t\t\t\t\t\t\trename response',
+            '3\t1\t7\t6\talice\t\t\t\tlookup request Request for: alice ',
+            '3\t1\t\t\t\t\t\t\tlookup response',
+            '4\t1\t\t\t\t\t\t\treplace request',
+            '4\t1\t\t\t\t\t\t\treplace response',
+            '5\t1\t\t\t\t7\t6\talice\tget_projlist request Request for: alice',
+            '5\t1\t\t\t\t\t\t\tget_projlist response',
+            '3\t1\t1\t16\thosts/srv1/self\t\t\t\tlookup request Request for: hosts/srv1/self ',
+            '3\t1\t\t\t\t\t\t\tlookup response',
+            '3\t1\t2\t0\t\t\t\t\tlookup request Request (other)',
+            '3\t1\t\t\t\t\t\t\tlookup response',
+            '5\t1\t\t\t\t3\t3\tbob\tget_projlist request Request for: bob',
+            '5\t1\t\t\t\t\t\t\tget_projlist response',
+            '5\t1\t\t\t\t4\t0\t\tget_projlist request Request for: ',
+            '5\t1\t\t\t\t\t\t\tget_projlist response',
+            '3\t0\t7\t6\tcarol\t\t\t\tlookup request Request for: carol ',
+            '3\t0\t\t\t\t\t\t\tlookup response',
+            '5\t0\t\t\t\t7\t6\tcarol\tget_projlist request Request for: carol',
+            '5\t0\t\t\t\t\t\t\tget_projlist response',
+        ]
+
+
+    def test_rs_acct_projlist_labels(self, cmd_tshark, capture_file, test_env):
+        '''The get_projlist key size and key have their own labels (fixed
+        in "RS_ACCT: Do not let a key size move the offset back, fix
+        labels"; before it all three fields were labelled "Var1").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_acct_coverage.pcap.gz'),
+                '-Y', 'frame.number == 11', '-O', 'rs_acct', '-V',
+            ), encoding='utf-8', env=test_env)
+        tree = stdout[stdout.index('DCE/RPC RS_ACCT, get_projlist'):].splitlines()
+        assert tree[1:5] == [
+            '    Operation: get_projlist (5)',
+            '    Var1: 7',
+            '    Key Size: 6',
+            '    Key: alice',
+        ]
+
+
+class TestDissectDcerpcRsMisc:
+    def test_rs_misc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: every frame is rs_misc; no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_misc_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['rs_misc'] * 14
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rs_misc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rs_misc_calls(self, cmd_tshark, capture_file, test_env):
+        '''Every call: opnum, byte order, the decoded request fields
+        and the Info column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_misc_coverage.pcap.gz'),
+                '-Tfields',
+                '-ers_misc.opnum',
+                '-edcerpc.drep.byteorder',
+                '-ers_misc.login_get_info_rqst_var',
+                '-ers_misc.login_get_info_rqst_key_size',
+                '-ers_misc.login_get_info_rqst_key_t',
+                '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '0\t1\t7\t6\talice\tlogin_get_info requestrs_login_get_info Request for: alice ',
+            '0\t1\t\t\t\tlogin_get_info response',
+            '1\t1\t\t\t\twait_until_consistent request',
+            '1\t1\t\t\t\twait_until_consistent response',
+            '2\t1\t\t\t\tcheck_consistency request',
+            '2\t1\t\t\t\tcheck_consistency response',
+            '0\t1\t1\t15\thosts/srv1/self\tlogin_get_info requestrs_login_get_info Request for: hosts/srv1/self ',
+            '0\t1\t\t\t\tlogin_get_info response',
+            '0\t1\t2\t0\t\tlogin_get_info requestrs_login_get_info Request (other)',
+            '0\t1\t\t\t\tlogin_get_info response',
+            '0\t0\t7\t6\tcarol\tlogin_get_info requestrs_login_get_info Request for: carol ',
+            '0\t0\t\t\t\tlogin_get_info response',
+            '0\t0\t0\t0\t\tlogin_get_info requestrs_login_get_info Request (other)',
+            '0\t0\t\t\t\tlogin_get_info response',
+        ]
+
+
+class TestDissectDcerpcRsPgo:
+    OPNUMS = ['add', 'add', 'delete', 'delete', 'replace', 'replace',
+              'rename', 'get', 'get', 'get', 'get', 'get', 'get',
+              'key_transfer', 'key_transfer', 'key_transfer', 'key_transfer',
+              'key_transfer', 'key_transfer', 'add_member', 'add_member',
+              'delete_member', 'is_member', 'get_members']
+
+    def test_rs_pgo_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame counts: 24 calls (every opnum, the unions in every arm),
+        little endian and then big endian; no malformed packets or
+        warnings in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_pgo_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol', '-edcerpc.drep.byteorder',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert lines == ['RS_PGO\t1'] * 48 + ['RS_PGO\t0'] * 48
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('dcerpc_rs_pgo_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_rs_pgo_opnums(self, cmd_tshark, capture_file, test_env):
+        '''Every request is followed by its response, matched by opnum.'''
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('dcerpc_rs_pgo_coverage.pcap.gz'),
+                '-Tfields', '-edcerpc.pkt_type', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        names = [line.split('\t')[1].split(' ')[0] for line in stdout.splitlines()]
+        kinds = [line.split('\t')[0] for line in stdout.splitlines()]
+        assert names == [n for n in self.OPNUMS for _ in (0, 1)] * 2
+        assert kinds == ['0', '2'] * 48
+
+    def test_rs_pgo_flags(self, cmd_tshark, capture_file, test_env):
+        '''The PGO flags in the Info column: ":NONE" only for flags 0
+        (fixed in "RS_PGO: Stop at an oversize name, fix the flags and
+        query field types"; before it every frame showed ":NONE").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_pgo_coverage.pcap.gz'),
+                '-Y', 'rs_pgo.flags',
+                '-Tfields', '-eframe.number', '-ers_pgo.flags', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        got = []
+        for line in stdout.splitlines():
+            frame, flags, info = line.split('\t')
+            pgo = info.split('PgoFlags=')[1].split(' ')[0]
+            got.append((int(frame), flags, pgo))
+        expected = [
+            (1, '0x00000007', ':IS_AN_ALIAS:IS_REQUIRED:PROJLIST_OK'),
+            (3, '0x00000000', ':NONE'),
+            (9, '0x00000001', ':IS_AN_ALIAS'),
+            (11, '0x00000002', ':IS_REQUIRED'),
+            (16, '0x00000004', ':PROJLIST_OK'),
+            (18, '0x00000003', ':IS_AN_ALIAS:IS_REQUIRED'),
+            (20, '0x00000005', ':IS_AN_ALIAS:PROJLIST_OK'),
+            (22, '0x00000000', ':NONE'),
+        ]
+        assert got == expected + [(f + 48, v, s) for f, v, s in expected]
+
+    def test_rs_pgo_query_field_types(self, cmd_tshark, test_env):
+        '''The query and query key fields have the width they are read
+        with (8 and 16 bits; fixed in "RS_PGO: Stop at an oversize name,
+        fix the flags and query field types").'''
+        stdout = subprocess.check_output((cmd_tshark, '-G', 'fields'),
+                                         encoding='utf-8', env=test_env)
+        types = {}
+        for line in stdout.splitlines():
+            f = line.split('\t')
+            if len(f) > 3 and f[2] in ('rs_pgo.query', 'rs_pgo.query_key'):
+                types[f[2]] = f[3]
+        assert types == {'rs_pgo.query': 'FT_UINT8', 'rs_pgo.query_key': 'FT_UINT16'}
+
+    def test_rs_pgo_query_keys(self, cmd_tshark, capture_file, test_env):
+        '''get and key_transfer: every arm of the query key union (name,
+        id, unix number, next, none, unknown), the requested result type
+        and the get result with its PGO item.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dcerpc_rs_pgo_coverage.pcap.gz'),
+                '-Y', 'frame.number >= 15 && frame.number <= 38',
+                '-Tfields', '-ers_pgo.query', '-ers_pgo.query_key',
+                '-ers_pgo.name_principalName', '-ers_pgo.unix_num_key_t',
+                '-ers_pgo.query_result', '-ers_pgo.pname_principalName',
+                '-ers_pgo.unix_num',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '\t0\talice\t\t\t\t0',              # get NAME
+            '\t\talice\t\t0\tFull Name 0\t1,1001',
+            '\t1\t/.:/sec\t\t\t\t1',            # get ID
+            '\t\talice\t\t0\tFull Name 1\t2,1002',
+            '\t2\t/.:/sec\t1001\t\t\t2',        # get UNIX_NUM
+            '\t\talice\t\t0\tFull Name 2\t3,1003',
+            '\t3\tprincipal\t\t\t\t3',          # get NEXT
+            '\t\tbob\t\t0\tFull Name 3\t4,1004',
+            '\t4\t\t\t\t\t4',                   # get NONE
+            '\t\t\t\t387063811\t\t5',
+            '\t7\t\t\t\t\t5',                   # get, unknown arm
+            '\t\t\t\t387063811\t\t6',
+            '0\t1\t/.:/sec\t\t\t\t',            # key_transfer
+            '\t0\talice\t\t\t\t',
+            '1\t0\talice\t\t\t\t',
+            '\t1\t/.:/sec\t\t\t\t',
+            '2\t0\tcarol\t\t\t\t',
+            '\t1\t/.:/sec\t\t\t\t',
+            '3\t2\t/.:/sec\t4242\t\t\t',
+            '\t2\t/.:/sec\t4242\t\t\t',
+            '4\t3\tgroup\t\t\t\t',
+            '\t3\tgroup\t\t\t\t',
+            '9\t4\t\t\t\t\t',
+            '\t8\t\t\t\t\t',
+        ]
