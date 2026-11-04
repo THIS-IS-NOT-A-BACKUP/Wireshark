@@ -37,7 +37,6 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontMetricsF>
-#include <QFormLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -57,7 +56,6 @@
 #include <QModelIndex>
 #include <QMutex>
 #include <QMutexLocker>
-#include <QPainter>
 #include <QPalette>
 #include <QPersistentModelIndex>
 #include <QPlainTextEdit>
@@ -117,32 +115,42 @@ namespace
 {
 
 /**
- * @brief Process-global "live capture is forcing the debugger off" state.
+ * @brief Process-global "something is forcing the debugger off" state.
+ *
+ * The debugger is forced off while a live capture is running and while the
+ * Preferences dialog is open. Applying preferences can redissect packets
+ * from inside the modal dialog, and a breakpoint pause there would leave
+ * both the dialog and the debugger unusable, or let the dialog be deleted
+ * while it is still applying.
  *
  * The capture-session callback is registered at process start (before the
  * dialog exists), so this state is intentionally static and does not depend
  * on a live @ref LuaDebuggerDialog instance. The dialog observes the state
  * (via @ref isActive) when refreshing chrome, and updates the "restore on
- * stop" intent (via @ref setPrevEnabled) when the user toggles the
- * debugger toolbar during a capture.
+ * release" intent (via @ref setPrevEnabled) when the user toggles the
+ * debugger toolbar while suppressed.
  */
-class LuaDebuggerCaptureSuppression
+class LuaDebuggerSuppression
 {
   public:
-    /** @brief True when a live capture currently has the debugger force-disabled. */
+    /** @brief Why the debugger is forced off. Several can apply at once. */
+    enum Reason : unsigned
+    {
+        LiveCapture = 1u << 0,
+        Preferences = 1u << 1,
+    };
+
+    /** @brief True when any reason currently has the debugger force-disabled. */
     static bool isActive();
 
-#ifdef HAVE_LIBPCAP
-    /** @brief Enter suppression. Snapshots the user's pre-capture enabled
-     *  intent so we can restore it on @ref exit. Idempotent: returns true
-     *  iff this call actually transitioned the state. */
-    static bool enter();
+    /** @brief True when @p reason currently has the debugger force-disabled. */
+    static bool isActive(Reason reason);
 
-    /** @brief Exit suppression. Restores the snapshotted enabled intent
-     *  unless the user has since explicitly disabled the debugger.
-     *  Idempotent: returns true iff this call actually transitioned the state. */
-    static bool exit();
-#endif
+    /** @brief Add or remove @p reason and refresh the dialog if that changed
+     *  anything. The first reason snapshots the user's enabled intent; the
+     *  last one restores it unless the user has since explicitly disabled
+     *  the debugger. */
+    static void setSuppressed(Reason reason, bool suppressed);
 
     /** @brief Re-apply suppression at dialog startup so any constructor-time
      *  paths that re-enabled the core get reverted. */
@@ -153,63 +161,89 @@ class LuaDebuggerCaptureSuppression
     static void onCaptureSessionEvent(int event, struct _capture_session *cap_session, void *user_data);
 #endif
 
-    /** @brief Update the "restore on capture stop" intent. */
+    /** @brief Update the "restore on release" intent. */
     static void setPrevEnabled(bool enabled);
+
+  private:
+    /** @brief Add @p reason. Returns true iff it was not set yet. */
+    static bool enter(Reason reason);
+
+    /** @brief Remove @p reason. Returns true iff it was set. */
+    static bool exit(Reason reason);
 };
 
-bool g_captureSuppressionActive = false;
-/* User's enabled-state at the moment the live capture started; restored
- * when capture finishes. Meaningful only while @c g_captureSuppressionActive is true. */
-bool g_captureSuppressionPrevEnabled = false;
+unsigned g_suppressionReasons = 0;
+/* User's enabled-state at the moment the first reason was added; restored
+ * when the last one is removed. Meaningful only while @c g_suppressionReasons
+ * is non-zero. */
+bool g_suppressionPrevEnabled = false;
 
-bool LuaDebuggerCaptureSuppression::isActive()
+bool LuaDebuggerSuppression::isActive()
 {
-    return g_captureSuppressionActive;
+    return g_suppressionReasons != 0;
 }
 
-#ifdef HAVE_LIBPCAP
-bool LuaDebuggerCaptureSuppression::enter()
+bool LuaDebuggerSuppression::isActive(Reason reason)
 {
-    /* Suppress on the very first start-ish event of a session.
-     * "prepared" already commits us to a live capture, and the
-     * dumpcap child may begin writing packets before the
-     * "update_started" / "fixed_started" event arrives. */
-    if (g_captureSuppressionActive)
+    return (g_suppressionReasons & reason) != 0;
+}
+
+bool LuaDebuggerSuppression::enter(Reason reason)
+{
+    if (g_suppressionReasons & reason)
     {
         return false;
     }
-    g_captureSuppressionPrevEnabled = wslua_debugger_is_enabled();
-    g_captureSuppressionActive = true;
-    if (g_captureSuppressionPrevEnabled)
+    if (g_suppressionReasons == 0)
     {
-        wslua_debugger_set_enabled(false);
+        g_suppressionPrevEnabled = wslua_debugger_is_enabled();
+        if (g_suppressionPrevEnabled)
+        {
+            wslua_debugger_set_enabled(false);
+        }
     }
+    g_suppressionReasons |= reason;
     return true;
 }
 
-bool LuaDebuggerCaptureSuppression::exit()
+bool LuaDebuggerSuppression::exit(Reason reason)
 {
-    if (!g_captureSuppressionActive)
+    if (!(g_suppressionReasons & reason))
     {
         return false;
     }
-    const bool restore_enabled = g_captureSuppressionPrevEnabled;
-    g_captureSuppressionActive = false;
-    g_captureSuppressionPrevEnabled = false;
+    g_suppressionReasons &= ~static_cast<unsigned>(reason);
+    if (g_suppressionReasons != 0)
+    {
+        return true;
+    }
+    const bool restore_enabled = g_suppressionPrevEnabled;
+    g_suppressionPrevEnabled = false;
     /* Respect user_explicitly_disabled (unchecked toolbar or closed dialog):
-     * do not turn the core back on when capture ends. */
+     * do not turn the core back on when the suppression ends. */
     if (restore_enabled && wslua_debugger_may_auto_enable_for_breakpoints())
     {
         wslua_debugger_set_enabled(true);
     }
     return true;
 }
-#endif
 
-void LuaDebuggerCaptureSuppression::reconcileOnStartup(LuaDebuggerDialog *dialog)
+void LuaDebuggerSuppression::setSuppressed(Reason reason, bool suppressed)
+{
+    const bool state_changed = suppressed ? enter(reason) : exit(reason);
+    if (state_changed)
+    {
+        if (LuaDebuggerDialog *dialog = LuaDebuggerDialog::instanceIfExists())
+        {
+            dialog->refreshDebuggerStateUi();
+        }
+    }
+}
+
+void LuaDebuggerSuppression::reconcileOnStartup(LuaDebuggerDialog *dialog)
 {
     /* The capture-session callback is registered at process start, so by the
-     * time the dialog opens, g_captureSuppressionActive already reflects whether
+     * time the dialog opens, g_suppressionReasons already reflects whether
      * a live capture is in progress.
      *
      * What this method exists to fix: ctor init paths can re-enable the core
@@ -217,14 +251,14 @@ void LuaDebuggerCaptureSuppression::reconcileOnStartup(LuaDebuggerDialog *dialog
      * applyDialogSettings() → wslua_debugger_add_breakpoint, then
      * breakpointsController_.refreshFromEngine()
      * → ensureDebuggerEnabledForActiveBreakpoints can re-enable. */
-    if (!g_captureSuppressionActive)
+    if (g_suppressionReasons == 0)
     {
         return;
     }
     if (wslua_debugger_is_enabled())
     {
-        /* Force the core back off without touching g_captureSuppressionPrevEnabled
-         * — it was correctly snapshotted to the user's pre-capture intent. */
+        /* Force the core back off without touching g_suppressionPrevEnabled
+         * — it was correctly snapshotted to the user's pre-suppression intent. */
         wslua_debugger_set_enabled(false);
     }
     if (dialog)
@@ -234,43 +268,37 @@ void LuaDebuggerCaptureSuppression::reconcileOnStartup(LuaDebuggerDialog *dialog
 }
 
 #ifdef HAVE_LIBPCAP
-void LuaDebuggerCaptureSuppression::onCaptureSessionEvent(int event, struct _capture_session *cap_session,
-                                                          void *user_data)
+void LuaDebuggerSuppression::onCaptureSessionEvent(int event, struct _capture_session *cap_session,
+                                                   void *user_data)
 {
     Q_UNUSED(cap_session);
     Q_UNUSED(user_data);
 
-    bool state_changed = false;
-
     switch (event)
     {
+    /* Suppress on the very first start-ish event of a session.
+     * "prepared" already commits us to a live capture, and the
+     * dumpcap child may begin writing packets before the
+     * "update_started" / "fixed_started" event arrives. */
     case capture_cb_capture_prepared:
     case capture_cb_capture_update_started:
     case capture_cb_capture_fixed_started:
-        state_changed = enter();
+        setSuppressed(LiveCapture, true);
         break;
     case capture_cb_capture_update_finished:
     case capture_cb_capture_fixed_finished:
     case capture_cb_capture_failed:
-        state_changed = exit();
+        setSuppressed(LiveCapture, false);
         break;
     default:
         break;
     }
-
-    if (state_changed)
-    {
-        if (LuaDebuggerDialog *dialog = LuaDebuggerDialog::instanceIfExists())
-        {
-            dialog->refreshDebuggerStateUi();
-        }
-    }
 }
 #endif
 
-void LuaDebuggerCaptureSuppression::setPrevEnabled(bool enabled)
+void LuaDebuggerSuppression::setPrevEnabled(bool enabled)
 {
-    g_captureSuppressionPrevEnabled = enabled;
+    g_suppressionPrevEnabled = enabled;
 }
 
 /* Cross-thread coalescing queue for logpoint emissions.
@@ -365,7 +393,7 @@ extern "C" void onLogEmit(const char *file_path, int64_t line, const char *messa
 
 /** @brief Process-global registrar: wires the UI breakpoint-hit
  *  callback (and, when libpcap is available, the capture-session
- *  observer used by @ref LuaDebuggerCaptureSuppression) at process
+ *  observer used by @ref LuaDebuggerSuppression) at process
  *  start, and tears them down at process exit. */
 class UiCallbackProcessRegistrar
 {
@@ -374,7 +402,7 @@ class UiCallbackProcessRegistrar
     {
         wslua_debugger_register_ui_callback(onUiBreakpointHit);
 #ifdef HAVE_LIBPCAP
-        capture_callback_add(&LuaDebuggerCaptureSuppression::onCaptureSessionEvent, nullptr);
+        capture_callback_add(&LuaDebuggerSuppression::onCaptureSessionEvent, nullptr);
 #endif
     }
 
@@ -382,7 +410,7 @@ class UiCallbackProcessRegistrar
     {
         wslua_debugger_register_ui_callback(NULL);
 #ifdef HAVE_LIBPCAP
-        capture_callback_remove(&LuaDebuggerCaptureSuppression::onCaptureSessionEvent, nullptr);
+        capture_callback_remove(&LuaDebuggerSuppression::onCaptureSessionEvent, nullptr);
 #endif
     }
 };
@@ -417,7 +445,6 @@ void uninstallDialogCallbacks()
 } // namespace
 
 LuaDebuggerDialog *LuaDebuggerDialog::_instance = nullptr;
-int32_t LuaDebuggerDialog::currentTheme_ = WSLUA_DEBUGGER_THEME_AUTO;
 
 LuaDebuggerDialog *LuaDebuggerDialog::instanceIfExists()
 {
@@ -429,21 +456,16 @@ bool LuaDebuggerDialog::handleMainCloseIfPaused(QCloseEvent *event)
     return LuaDebuggerMainClosePolicy::handleMainCloseIfPaused(event);
 }
 
-int32_t LuaDebuggerDialog::currentTheme()
-{
-    return currentTheme_;
-}
-
 LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     : GeometryStateDialog(parent), ui(new Ui::LuaDebuggerDialog), variablesController_(this), stackController_(this),
       evalController_(this), breakpointsController_(this), filesController_(this), watchController_(this),
       codeTabsController_(this), pauseController_(this), reloadCoordinator_(this), keyRouter_(this),
       enabledCheckBox(nullptr), debuggerPaused(false), variablesSection(nullptr),
       watchSection(nullptr), stackSection(nullptr), breakpointsSection(nullptr), filesSection(nullptr),
-      evalSection(nullptr), settingsSection(nullptr), variablesTree(nullptr), variablesModel(nullptr),
+      evalSection(nullptr), variablesTree(nullptr), variablesModel(nullptr),
       watchTree(nullptr), watchModel(nullptr), stackTree(nullptr), stackModel(nullptr), fileTree(nullptr),
       fileModel(nullptr), breakpointsTree(nullptr), breakpointsModel(nullptr), evalInputEdit(nullptr),
-      evalOutputEdit(nullptr), evalButton(nullptr), evalClearButton(nullptr), themeComboBox(nullptr),
+      evalOutputEdit(nullptr), evalButton(nullptr), evalClearButton(nullptr),
       breakpointHeaderToggleButton_(nullptr), breakpointHeaderRemoveButton_(nullptr),
       breakpointHeaderRemoveAllButton_(nullptr), breakpointHeaderEditButton_(nullptr)
 {
@@ -581,9 +603,9 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
         connect(mainApp, &MainApplication::preferencesChanged, this, &LuaDebuggerDialog::onPreferencesChanged,
                 Qt::UniqueConnection);
         /*
-         * Connect to themeChanged signal to update code view themes when
-         * Wireshark's color scheme changes. This is important when the debugger
-         * theme preference is set to "Auto (follow color scheme)".
+         * Re-apply the code view colors when the theme or the light/dark
+         * color scheme changes; the editor's syntax colors come from the
+         * theme's "code" section.
          */
         connect(ThemeManager::instance(), &ThemeManager::themeChanged, this, &LuaDebuggerDialog::onColorsChanged,
                 Qt::UniqueConnection);
@@ -609,7 +631,7 @@ LuaDebuggerDialog::LuaDebuggerDialog(QWidget *parent)
     /* Reconcile with any live capture in progress AFTER all init paths
      * that may have re-enabled the core debugger (applyDialogSettings
      * / updateBreakpoints, including ensureDebuggerEnabledForActiveBreakpoints). */
-    LuaDebuggerCaptureSuppression::reconcileOnStartup(this);
+    LuaDebuggerSuppression::reconcileOnStartup(this);
 }
 
 LuaDebuggerDialog::~LuaDebuggerDialog()
@@ -737,7 +759,7 @@ void LuaDebuggerDialog::handlePause(const char *file_path, int64_t line)
     pauseController_.beginOuterFreeze();
 
     /* Note: live capture cannot be running here. The live-capture
-     * observer (LuaDebuggerCaptureSuppression::onCaptureSessionEvent) force-disables the debugger
+     * observer (LuaDebuggerSuppression::onCaptureSessionEvent) force-disables the debugger
      * for the duration of any capture, so wslua_debug_hook never
      * dispatches into us while dumpcap is feeding the pipe. That is
      * the only sane policy: suspending the pipe GSource for the
@@ -886,16 +908,16 @@ void LuaDebuggerDialog::onStepOut()
 
 void LuaDebuggerDialog::onDebuggerToggled(bool checked)
 {
-    if (LuaDebuggerCaptureSuppression::isActive())
+    if (LuaDebuggerSuppression::isActive())
     {
-        /* The checkbox is normally setEnabled(false) while a live
-         * capture is running, but a programmatic toggle (e.g. via
+        /* The checkbox is normally setEnabled(false) while the
+         * debugger is suppressed, but a programmatic toggle (e.g. via
          * QAbstractButton::click in tests, or any path that bypasses
          * the disabled state) must not be allowed to flip the core
          * enable on or off. Remember the user's intent so it is
-         * applied automatically when the capture stops, and re-sync
+         * applied automatically when the suppression ends, and re-sync
          * the checkbox to the (still suppressed) core state. */
-        LuaDebuggerCaptureSuppression::setPrevEnabled(checked);
+        LuaDebuggerSuppression::setPrevEnabled(checked);
         refreshDebuggerStateUi();
         return;
     }
@@ -1341,37 +1363,12 @@ void LuaDebuggerDialog::onPreferencesChanged()
     watchController_.refreshDisplay();
 }
 
-void LuaDebuggerDialog::onThemeChanged(int idx)
-{
-    if (themeComboBox)
-    {
-        int32_t theme = themeComboBox->itemData(idx).toInt();
-
-        /* Update static theme for CodeView syntax highlighting */
-        currentTheme_ = theme;
-
-        /* Store theme in our JSON settings */
-        if (theme == WSLUA_DEBUGGER_THEME_DARK)
-            settingsStore_.map()[LuaDebuggerSettingsKeys::Theme] = "dark";
-        else if (theme == WSLUA_DEBUGGER_THEME_LIGHT)
-            settingsStore_.map()[LuaDebuggerSettingsKeys::Theme] = "light";
-        else
-            settingsStore_.map()[LuaDebuggerSettingsKeys::Theme] = "auto";
-
-        applyCodeViewThemes();
-    }
-}
-
 void LuaDebuggerDialog::onColorsChanged()
 {
-    /*
-     * When Wireshark's color scheme changes and the debugger theme is set to
-     * "Auto (follow color scheme)", we need to re-apply themes to all code
-     * views. The applyCodeViewThemes() function will query
-     * ThemeManager::instance()->isDark() to determine the effective theme.
-     */
     applyCodeViewThemes();
     watchController_.refreshDisplay();
+    breakpointsController_.updateHeaderButtonState();
+    updateEnabledCheckboxIcon();
 }
 
 void LuaDebuggerDialog::updateStyleSheets()
@@ -1491,11 +1488,11 @@ void LuaDebuggerDialog::syncDebuggerToggleWithCore()
     bool previousState = enabledCheckBox->blockSignals(true);
     enabledCheckBox->setChecked(debuggerEnabled);
     enabledCheckBox->blockSignals(previousState);
-    /* Lock the toggle while a live capture is forcing the debugger
-     * off so the checkbox cannot drift out of sync with the core
+    /* Lock the toggle while a live capture or the Preferences dialog
+     * is forcing the debugger off so the checkbox cannot drift out of sync with the core
      * state, and the user gets an obvious "this is intentional, not
      * me" affordance. The disabled icon's tooltip explains why. */
-    enabledCheckBox->setEnabled(!LuaDebuggerCaptureSuppression::isActive());
+    enabledCheckBox->setEnabled(!LuaDebuggerSuppression::isActive());
 }
 
 void LuaDebuggerDialog::refreshDebuggerStateUi()
@@ -1515,9 +1512,13 @@ LuaDebuggerDialog::DebuggerUiStatus LuaDebuggerDialog::currentDebuggerUiStatus()
     }
     if (!debuggerEnabled)
     {
-        if (LuaDebuggerCaptureSuppression::isActive())
+        if (LuaDebuggerSuppression::isActive(LuaDebuggerSuppression::LiveCapture))
         {
             return DebuggerUiStatus::DisabledLiveCapture;
+        }
+        if (LuaDebuggerSuppression::isActive(LuaDebuggerSuppression::Preferences))
+        {
+            return DebuggerUiStatus::DisabledPreferences;
         }
         return DebuggerUiStatus::Disabled;
     }
@@ -1534,50 +1535,48 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
     // Create a colored circle icon to indicate enabled/disabled state.
     // Render at the screen's native pixel density so the circle stays
     // crisp on Retina / HiDPI displays instead of being upscaled from
-    // a 16x16 bitmap.
+    // a 16x16 bitmap. Use the toolbar icon size so the circle matches
+    // the action icons at every zoom level.
     const qreal dpr = enabledCheckBox->devicePixelRatioF();
-    /* The circle is drawn in a 16 unit design square, scaled to the zoomed icon size. */
-    const int iconSide = ZoomScaling::scaledPixels(16);
-    QPixmap pixmap(QSize(iconSide, iconSide) * dpr);
-    pixmap.setDevicePixelRatio(dpr);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.scale(iconSide / 16.0, iconSide / 16.0);
+    const int iconSide = ui->toolBar->iconSize().width();
 
     const DebuggerUiStatus uiStatus = currentDebuggerUiStatus();
+    const ThemeManager *const theme = ThemeManager::instance();
     QColor fill;
     switch (uiStatus)
     {
     case DebuggerUiStatus::Paused:
-        // Yellow circle for paused
-        fill = QColor("#FFC107");
+        // Warning-coloured circle for paused
+        fill = theme->color(ThemeManager::AccentWarning);
         enabledCheckBox->setToolTip(tr("Debugger is paused. Uncheck to disable."));
         break;
     case DebuggerUiStatus::Running:
-        // Green circle for enabled
-        fill = QColor("#28A745");
+        // Success-coloured circle for enabled
+        fill = theme->color(ThemeManager::AccentSuccess);
         enabledCheckBox->setToolTip(tr("Debugger is enabled. Uncheck to disable."));
         break;
     case DebuggerUiStatus::DisabledLiveCapture:
-        // Red circle with a "locked by live capture" tooltip so
+        // Error-coloured circle with a "locked by live capture" tooltip so
         // the user understands the toggle is inert by design.
-        fill = QColor("#DC3545");
+        fill = theme->color(ThemeManager::AccentError);
         enabledCheckBox->setToolTip(tr("Debugger is disabled while a live capture is running. "
                                        "Stop the capture to re-enable."));
         break;
+    case DebuggerUiStatus::DisabledPreferences:
+        fill = theme->color(ThemeManager::AccentError);
+        enabledCheckBox->setToolTip(tr("Debugger is disabled while the Preferences dialog is open. "
+                                       "Close it to re-enable."));
+        break;
     case DebuggerUiStatus::Disabled:
-        // Gray circle for disabled
-        fill = QColor("#808080");
+        // Outline-only circle for disabled
         enabledCheckBox->setToolTip(tr("Debugger is disabled. Check to enable."));
         break;
     }
 
-    // Thin darker rim gives the circle definition on both light and dark backgrounds.
-    painter.setBrush(fill);
-    painter.setPen(QPen(fill.darker(140), 1));
-    painter.drawEllipse(QRectF(2.5, 2.5, 12.0, 12.0));
-    painter.end();
+    // Every state has the ring in the button text colour; the other states
+    // fill it with their accent colour.
+    const QPixmap pixmap = luaDbgCircleIcon(false, fill, QApplication::palette().color(QPalette::ButtonText))
+                               .pixmap(QSize(iconSide, iconSide), dpr);
 
     /* Register the colored pixmap for BOTH QIcon::Normal and
      * QIcon::Disabled. The checkbox widget is disabled in the
@@ -1586,7 +1585,8 @@ void LuaDebuggerDialog::updateEnabledCheckboxIcon()
      * supplied, Qt synthesizes a Disabled pixmap by desaturating it.
      * macOS's Cocoa style does this subtly enough that the red stays
      * visible, but Linux styles (Fusion / Breeze / Adwaita / gtk3)
-     * desaturate aggressively, making the red circle look gray. */
+     * desaturate aggressively, making the red circle look gray.
+     * ContrastAdaptIcon's own Disabled mode would also dim it. */
     QIcon icon;
     icon.addPixmap(pixmap, QIcon::Normal);
     icon.addPixmap(pixmap, QIcon::Disabled);
@@ -1615,6 +1615,9 @@ void LuaDebuggerDialog::updateStatusLabel()
         break;
     case DebuggerUiStatus::DisabledLiveCapture:
         title += tr("Disabled (live capture)");
+        break;
+    case DebuggerUiStatus::DisabledPreferences:
+        title += tr("Disabled (preferences)");
         break;
     case DebuggerUiStatus::Disabled:
         title += tr("Disabled");
@@ -1676,14 +1679,15 @@ void LuaDebuggerDialog::updateWidgets()
 
 void LuaDebuggerDialog::ensureDebuggerEnabledForActiveBreakpoints()
 {
-    /* wslua_debugger owns enable *policy*; live capture gating is owned by
-     * LuaDebuggerCaptureSuppression: epan has no knowledge of the capture path. */
+    /* wslua_debugger owns enable *policy*; live capture and Preferences
+     * gating is owned by LuaDebuggerSuppression: epan has no knowledge of
+     * either. */
     const bool shouldBeEnabled = wslua_debugger_may_auto_enable_for_breakpoints();
-    if (LuaDebuggerCaptureSuppression::isActive())
+    if (LuaDebuggerSuppression::isActive())
     {
-        /* During live capture, snapshot desired post-capture state but do not
-         * flip the core debugger immediately. */
-        LuaDebuggerCaptureSuppression::setPrevEnabled(shouldBeEnabled);
+        /* While suppressed, snapshot the desired state for when the
+         * suppression ends, but do not flip the core debugger immediately. */
+        LuaDebuggerSuppression::setPrevEnabled(shouldBeEnabled);
         refreshDebuggerStateUi();
         return;
     }
@@ -1779,6 +1783,11 @@ void LuaDebugger::open(QWidget *parent)
 bool LuaDebugger::tryDeferMainWindowClose(QCloseEvent *event)
 {
     return LuaDebuggerDialog::handleMainCloseIfPaused(event);
+}
+
+void LuaDebugger::setSuppressedByPreferences(bool suppressed)
+{
+    LuaDebuggerSuppression::setSuppressed(LuaDebuggerSuppression::Preferences, suppressed);
 }
 
 /* Drain entry point: defined as a slot on LuaDebuggerDialog so
@@ -2083,33 +2092,9 @@ void LuaDebuggerDialog::createCollapsibleSections()
     splitter->addWidget(createFilesSection(this));
     splitter->addWidget(createEvaluateSection(this));
 
-    /* Settings panel is intentionally inline: a single QComboBox with no
-     * dedicated controller does not warrant its own translation unit. */
-    settingsSection = new CollapsibleSection(tr("Settings"), this);
-    QWidget *settingsWidget = new QWidget();
-    QFormLayout *settingsLayout = new QFormLayout(settingsWidget);
-    settingsLayout->setContentsMargins(4, 4, 4, 4);
-    settingsLayout->setSpacing(6);
-    ZoomScaling::scaleLayoutMetrics(settingsLayout);
-
-    themeComboBox = new QComboBox();
-    themeComboBox->addItem(tr("Auto (follow color scheme)"), WSLUA_DEBUGGER_THEME_AUTO);
-    themeComboBox->addItem(tr("Dark"), WSLUA_DEBUGGER_THEME_DARK);
-    themeComboBox->addItem(tr("Light"), WSLUA_DEBUGGER_THEME_LIGHT);
-    themeComboBox->setToolTip(tr("Color theme for the code editor"));
-    // Theme will be set by applyDialogSettings() later
-    settingsLayout->addRow(tr("Code View Theme:"), themeComboBox);
-
-    connect(themeComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &LuaDebuggerDialog::onThemeChanged);
-
-    settingsSection->setContentWidget(settingsWidget);
-    settingsSection->setExpanded(false);
-    splitter->addWidget(settingsSection);
-
     QList<int> sizes;
     int headerH = variablesSection->headerHeight();
-    sizes << 120 << 70 << 100 << headerH << 80 << headerH << headerH;
+    sizes << 120 << 70 << 100 << headerH << 80 << headerH;
     splitter->setSizes(sizes);
 
     /* Tell QSplitter that every section is allowed to absorb surplus
@@ -2129,8 +2114,8 @@ void LuaDebuggerDialog::createCollapsibleSections()
      * the splitter takes all extra height. */
     ui->leftPanelLayout->addStretch(0);
 
-    const QList<CollapsibleSection *> allSections = {variablesSection, watchSection, stackSection,   breakpointsSection,
-                                                     filesSection,     evalSection,  settingsSection};
+    const QList<CollapsibleSection *> allSections = {variablesSection, watchSection, stackSection,
+                                                     breakpointsSection, filesSection, evalSection};
     for (CollapsibleSection *s : allSections)
         connect(s, &CollapsibleSection::toggled, this, &LuaDebuggerDialog::updateLeftPanelStretch);
     updateLeftPanelStretch();
@@ -2141,8 +2126,8 @@ void LuaDebuggerDialog::updateLeftPanelStretch()
     if (!ui || !ui->leftSplitter || !ui->leftPanelLayout)
         return;
 
-    const QList<CollapsibleSection *> sections = {variablesSection, watchSection, stackSection,   breakpointsSection,
-                                                  filesSection,     evalSection,  settingsSection};
+    const QList<CollapsibleSection *> sections = {variablesSection, watchSection, stackSection,
+                                                  breakpointsSection, filesSection, evalSection};
 
     bool anyExpanded = false;
     int contentH = 0;

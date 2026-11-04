@@ -121,7 +121,6 @@ QString luaDebuggerSettingsFilePath();
 
 namespace LuaDebuggerSettingsKeys
 {
-constexpr const char *Theme = "theme";
 /** Last toolbar "Enable debugger" checkbox state (persisted across dialog instances). */
 constexpr const char *DebuggerEnabled = "debuggerEnabled";
 constexpr const char *MainSplitter = "mainSplitterState";
@@ -132,7 +131,6 @@ constexpr const char *SectionStack = "sectionStack";
 constexpr const char *SectionFiles = "sectionFiles";
 constexpr const char *SectionBreakpoints = "sectionBreakpoints";
 constexpr const char *SectionEval = "sectionEval";
-constexpr const char *SectionSettings = "sectionSettings";
 constexpr const char *SectionWatch = "sectionWatch";
 constexpr const char *Breakpoints = "breakpoints";
 constexpr const char *Watches = "watches";
@@ -742,89 +740,37 @@ QString watchItemExpansionKey(const QStandardItem *item);
 
 /* ===== from header_styles ===== */
 
-/**
- * @brief Create a selection-aware icon for tree icons (breakpoints, variables,
- * and watch) that applies a selected-row tint.
- *
- * @param base    The base icon to tint.
- * @param palette The palette to derive the selection tint from.
- * @return A @c QIcon that applies a tint when the row is selected.
- */
-QIcon luaDbgMakeSelectionAwareIcon(const QIcon &base, const QPalette &palette);
-
-
-/**
- * @brief Paint a glyph centred into a square pixmap and return it as an icon.
- *
- * Paints @p glyph centred into a square @p side x @p side pixmap (scaled by
- * @p dpr for HiDPI), sized so the glyph's inked extent fills the cell.
- *
- * @param glyph    The glyph string to paint.
- * @param side     The side length of the square pixmap in pixels.
- * @param dpr      The device pixel ratio for HiDPI scaling.
- * @param baseFont The font to use for painting the glyph.
- * @param color    The color to paint the glyph with.
- * @param margin   The margin around the glyph in pixels (default 1).
- * @return A @c QIcon containing the painted glyph.
- */
-QIcon luaDbgPaintedGlyphIcon(const QString &glyph, int side, qreal dpr,
-                             const QFont &baseFont, const QColor &color,
-                             int margin = 1);
-
-/**
- * @brief Creates an icon for a painted glyph button.
- *
- * Returns a header-button-flavoured QIcon with two pixmaps painted from
- *  @p glyph: a Normal pixmap in @c palette.color(Active, ButtonText) and
- *  a Disabled pixmap in @c palette.color(Disabled, ButtonText). The
- *  Disabled pixmap is added so QToolButton renders it directly when the
- *  button is disabled instead of falling back to QStyle::generatedIcon-
- *  Pixmap()'s synthesised filter (which on Linux produces a darker tone
- *  than the palette's disabled-text gray used by neighbouring text-only
- *  buttons).
- *
- * @param glyph The glyph to be displayed on the button.
- * @param side The size of the icon in pixels.
- * @param dpr The device pixel ratio.
- * @param baseFont The base font for rendering the glyph.
- * @param palette The color palette to use for rendering the glyph.
- * @param margin The margin around the glyph.
- * @return QIcon The created icon with both active and disabled states.
- */
-QIcon luaDbgPaintedGlyphButtonIcon(const QString &glyph, int side, qreal dpr,
-                                   const QFont &baseFont, const QPalette &palette,
-                                   int margin = 2);
-
-/** Fullwidth ＋/－ and flat tool button style for section headers. */
-extern const QString kLuaDbgHeaderPlus;
-extern const QString kLuaDbgHeaderMinus;
-/** Gear (U+2699 + U+FE0E text presentation) for the Edit Breakpoint
- *  header button. */
-extern const QString kLuaDbgHeaderEdit;
-/** Three stacked horizontal lines (U+2630 trigram for heaven) for the
- *  Active-column logpoint row indicator. */
-extern const QString kLuaDbgRowLog;
-/** Reference mark (U+203B) for the Active-column condition / hit-count
- *  row indicator. */
-extern const QString kLuaDbgRowExtras;
-/** Circled Latin capital letter X (U+24CD) for the Remove All header
- *  buttons (Watch and Breakpoints). */
-extern const QString kLuaDbgHeaderRemoveAll;
+/** Flat tool button style for section header buttons. */
 extern const QString kLuaDbgHeaderToolButtonStyle;
+/**
+ * @brief Return a Fluent circle icon for breakpoints and debugger state.
+ *
+ * @param actions Use the concentric variant, for breakpoints with a
+ *                condition, hit count or log message.
+ * @param fill    Fill colour, or an invalid colour for no fill.
+ * @param outline Outline ring colour, or an invalid colour for no ring.
+ *                With both valid the ring is drawn over the fill's edge.
+ * @return A cached icon; the Fluent circle covers 20/24 of its box.
+ */
+QIcon luaDbgCircleIcon(bool actions, const QColor &fill, const QColor &outline);
 
 /**
  * @brief Draws a breakpoint dot on the given painter.
+ *
+ * An enabled breakpoint is filled with the theme's error accent colour, a
+ * disabled one is drawn as an outline in @p outlineColor.
  *
  * @param painter The QPainter object to draw on.
  * @param dotLeft The left coordinate of the dot.
  * @param dotTop The top coordinate of the dot.
  * @param radius The radius of the dot.
  * @param enabled Whether the breakpoint is enabled.
- * @param hasExtras Whether the dot has additional extras.
+ * @param outlineColor The outline colour of a disabled breakpoint.
+ * @param hasExtras Whether the breakpoint has a condition, hit count or log message.
  * @param alpha The transparency level of the dot.
  */
 void luaDbgDrawBreakpointDot(QPainter &painter, qreal dotLeft, qreal dotTop, qreal radius, bool enabled,
-                             bool hasExtras = false, int alpha = 255);
+                             const QColor &outlineColor, bool hasExtras = false, int alpha = 255);
 
 /**
  * @brief Controls the state of the header toggle icon in the Lua debugger breakpoint list.
@@ -839,67 +785,21 @@ enum class LuaDbgBpHeaderIconMode
 /**
  * @brief Return the appropriate breakpoint header icon for the given mode.
  *
- * @param editorFont The font used in the editor.
- * @param mode       The breakpoint header icon mode.
- * @param headerSide The side length of the header icon in pixels.
- * @param dpr        The device pixel ratio for HiDPI scaling.
- * @return A @c QIcon for the breakpoint header in the given mode.
+ * @param mode The breakpoint header icon mode.
+ * @return A @c QIcon for the breakpoint header in the given mode, filled
+ *         when breakpoints are active and an outline otherwise.
  */
-QIcon luaDbgBreakpointHeaderIconForMode(const QFont *editorFont, LuaDbgBpHeaderIconMode mode, int headerSide,
-                                        qreal dpr);
-
-/**
- * @brief Style a Lua debugger header breakpoint toggle button.
- *
- * @param btn  The tool button to style.
- * @param side The side length of the button in pixels.
- */
-void styleLuaDebuggerHeaderBreakpointToggleButton(QToolButton *btn, int side);
-
-/**
- * @brief Style a Lua debugger header button with fitted text glyphs.
- *
- * @param btn       The tool button to style.
- * @param side      The side length of the button in pixels.
- * @param titleFont The font used for sizing the glyphs.
- * @param glyphs    The list of glyph strings to fit within the button.
- */
-void styleLuaDebuggerHeaderFittedTextButton(QToolButton *btn, int side, const QFont &titleFont,
-                                            const QStringList &glyphs);
-
-/**
- * @brief Style a Lua debugger header plus/minus button.
- *
- * @param btn       The tool button to style.
- * @param side      The side length of the button in pixels.
- * @param titleFont The font used for sizing the plus/minus glyph.
- */
-void styleLuaDebuggerHeaderPlusMinusButton(QToolButton *btn, int side, const QFont &titleFont);
+QIcon luaDbgBreakpointHeaderIconForMode(LuaDbgBpHeaderIconMode mode);
 
 /**
  * @brief Style a Lua debugger header icon-only button.
  *
- * @param btn  The tool button to style.
- * @param side The side length of the button in pixels.
+ * @param btn       The tool button to style.
+ * @param side      The side length of the button in pixels.
+ * @param iconGrow  Pixels to add to the default icon size, for icons that
+ *                  draw smaller than their neighbours.
  */
-void styleLuaDebuggerHeaderIconOnlyButton(QToolButton *btn, int side);
-
-/**
- * @brief Build a colored Break-on-Error toggle icon for the breakpoints
- *        section header.
- *
- * Paints a warning-sign glyph, red (#DC3545) when checked (active),
- * gray (disabled text color) when unchecked.
- *
- * @param checked   true to paint yellow, false to paint gray
- * @param side      icon size in pixels
- * @param dpr       device pixel ratio
- * @param titleFont font to use for glyph rendering
- * @param palette   palette for disabled text color
- * @return colored warning-sign icon
- */
-QIcon luaDbgErrorBreakHeaderIcon(bool checked, int side, qreal dpr,
-                                 const QFont &titleFont, const QPalette &palette);
+void styleLuaDebuggerHeaderIconOnlyButton(QToolButton *btn, int side, int iconGrow = 0);
 
 /* ===== from key_router ===== */
 

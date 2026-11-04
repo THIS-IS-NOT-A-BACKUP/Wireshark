@@ -9,8 +9,9 @@
 
 /**
  * @file
- * Code editor stack: editor view, gutter, syntax highlighter, theme
- * palette, font policy and the script-tabs controller.
+ * Code editor stack: editor view, gutter, theme palette, font policy
+ * and the script-tabs controller.  The syntax highlighter is in
+ * lua_syntax_highlighter.h.
  */
 
 #ifndef LUA_DEBUGGER_CODE_EDITOR_H
@@ -29,6 +30,8 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include <ui/qt/lua_debugger/lua_syntax_highlighter.h>
+
 class LuaDebuggerCodeView;
 class LuaDebuggerDialog;
 class QContextMenuEvent;
@@ -43,9 +46,10 @@ class QTreeView;
 /* ===== code_palette ===== */
 
 /**
- * @brief Single source of truth for the script editor's theme-aware colours.
+ * @brief Script editor colours, read from the theme's @c code section.
  *
- * Used by @ref LuaDebuggerCodeView to seed both its @c QPalette
+ * Filled from the ThemeManager::Code* tokens for the active light/dark
+ * mode. Used by @ref LuaDebuggerCodeView to seed both its @c QPalette
  * (@c applyEditorPalette) and the gutter painter
  * (@c lineNumberAreaPaintEvent), and by @c rebuildLineHighlights for the
  * paused-line stripe. Centralising the table here keeps the editor and
@@ -65,71 +69,11 @@ struct LuaDebuggerEditorPalette
     QColor pausedLine;
 };
 
-/** @brief Resolve the effective theme based on the debugger preference and
- *  Wireshark's current colour scheme when set to AUTO. */
-bool luaDebuggerThemeIsDark();
-
 /**
- * @brief Return the editor palette for the requested theme.
- * @param isDark Indicates whether the dark theme should be used.
- * @return LuaDebuggerEditorPalette The editor palette for the specified theme.
+ * @brief Return the editor palette of the active theme and light/dark mode.
+ * @return LuaDebuggerEditorPalette The editor palette.
  */
-LuaDebuggerEditorPalette luaDebuggerEditorPaletteFor(bool isDark);
-
-/* ===== lua_highlighter ===== */
-
-/**
- * @brief Syntax highlighter tuned for Lua keywords, strings, numbers,
- *        comments and Lua's long-bracket strings/comments.
- *
- * Theme-agnostic: takes a @c bool isDark at construction (and at
- * @ref setTheme) and pulls the matching colour table from a private
- * helper. No coupling to @c LuaDebuggerCodeView or @c LuaDebuggerDialog.
- */
-class LuaSyntaxHighlighter : public QSyntaxHighlighter
-{
-  public:
-    /** @brief Build the rule set for @p isDark and bind to @p parent's document. */
-    explicit LuaSyntaxHighlighter(QTextDocument *parent, bool isDark);
-
-    /** @brief Rebuild the rule set for the new theme and rehighlight. */
-    void setTheme(bool isDark);
-
-  protected:
-    /** @brief Apply highlighting to a single text block. */
-    void highlightBlock(const QString &text) override;
-
-  private:
-    /**
-     * @brief A single syntax highlighting rule pairing a regex pattern with a text format.
-     */
-    struct Rule
-    {
-        QRegularExpression pattern;  /**< Regular expression used to match tokens in source text. */
-        QTextCharFormat format;      /**< Text character format applied to matched tokens. */
-    };
-
-
-    QVector<Rule> rules_;                    /**< Ordered list of syntax highlighting rules applied in sequence. */
-    QTextCharFormat stringFormat_;           /**< Text format applied to string literals. */
-    QTextCharFormat commentFormat_;          /**< Text format applied to comment text. */
-    QRegularExpression singleLineComment_;   /**< Regular expression used to detect single-line comments. */
-
-    /** @brief Highlight multi-line strings or comments, preserving parser state. */
-    bool highlightLongBlock(const QString &text, bool isComment, bool continuingPrevious, qint32 eqCountFromState,
-                            qint32 &nextStateEqCount);
-    /** @brief Locate the beginning of a Lua long bracket token. */
-    qint32 findLongBlockStart(const QString &text, qint32 from, bool isComment, qint32 &eqCount,
-                              qint32 &tokenLength) const;
-    /** @brief Locate the closing delimiter for a Lua long bracket token. */
-    qint32 findLongBlockEnd(const QString &text, qint32 from, qint32 eqCount) const;
-
-    /**
-     * @brief Build the syntax-highlighting rules for @p isDark and store them in @c rules_.
-     * @param isDark Indicates whether the dark theme should be used.
-     */
-    void buildRules(bool isDark);
-};
+LuaDebuggerEditorPalette luaDebuggerEditorPalette();
 
 /* ===== code_view ===== */
 
@@ -194,7 +138,7 @@ class LuaDebuggerCodeView : public QPlainTextEdit
     /** @brief Refresh breakpoint markers in the gutter area. */
     void updateBreakpointMarkers();
 
-    /** @brief Re-apply theme colors from the current preference. */
+    /** @brief Re-apply theme colors from the active theme and color scheme. */
     void applyTheme();
 
     /**

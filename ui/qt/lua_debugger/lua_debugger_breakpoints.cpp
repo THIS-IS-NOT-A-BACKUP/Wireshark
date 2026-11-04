@@ -28,7 +28,6 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QFont>
-#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -49,11 +48,9 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPen>
-#include <QPixmap>
 #include <QPoint>
 #include <QPointer>
 #include <QRect>
-#include <QRectF>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -83,6 +80,8 @@
 #include "lua_debugger_settings.h"
 #include "lua_debugger_utils.h"
 #include "widgets/collapsible_section.h"
+#include <ui/qt/utils/themes/contrast_adapt_icon.h>
+#include <ui/qt/utils/themes/themed_icon.h>
 #include <ui/qt/utils/zoom_scaling.h>
 #include <epan/wslua/wslua_debugger.h>
 
@@ -254,63 +253,21 @@ void applyEditorMode(QWidget *editor, int modeIndex)
     valueEdit->selectAll();
 }
 
-QIcon makePauseIcon(const QPalette &palette)
+QIcon makePauseIcon(const QPalette &palette, int side, qreal dpr)
 {
-    const int side = 16;
-    const qreal dpr = 2.0;
+    const QString path = QStringLiteral(":/svg_icons/media-playback-pause.svg");
+    const QSize size(side, side);
 
-    /* Layout: two bars, 3 px wide, with a 2 px gap, occupying the
-     * central 8 px of a 16 px square. Rounded corners (1 px radius)
-     * match the visual weight of macOS / Windows 11 media glyphs. */
-    const qreal barW = 3.0;
-    const qreal gap = 2.0;
-    const qreal totalW = barW * 2 + gap;
-    const qreal x0 = (side - totalW) / 2.0;
-    const qreal y0 = 3.0;
-    const qreal h = side - 6.0;
-    const QRectF leftBar(x0, y0, barW, h);
-    const QRectF rightBar(x0 + barW + gap, y0, barW, h);
-
-    const auto drawBars = [&](QPainter *p, const QColor &color)
-    {
-        p->setPen(Qt::NoPen);
-        p->setBrush(color);
-        p->drawRoundedRect(leftBar, 1.0, 1.0);
-        p->drawRoundedRect(rightBar, 1.0, 1.0);
-    };
-
-    const auto makePixmap = [&]()
-    {
-        QPixmap pm(int(side * dpr), int(side * dpr));
-        pm.setDevicePixelRatio(dpr);
-        pm.fill(Qt::transparent);
-        return pm;
-    };
+    ThemedIcon offIcon(path, ThemeManager::PaletteText);
+    offIcon.setPalette(palette);
+    /* On: the stylesheet on the QToolButton supplies the colored
+     * rounded background that the bars sit on. */
+    ThemedIcon onIcon(path, ThemeManager::PaletteHighlightedText);
+    onIcon.setPalette(palette);
 
     QIcon out;
-
-    /* Off: bars in regular text color on transparent background. */
-    {
-        QPixmap pm = makePixmap();
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        drawBars(&p, palette.color(QPalette::Active, QPalette::ButtonText));
-        p.end();
-        out.addPixmap(pm, QIcon::Normal, QIcon::Off);
-    }
-
-    /* On: white bars on transparent background. The stylesheet on
-     * the QToolButton supplies the colored rounded background that
-     * the bars sit on. */
-    {
-        QPixmap pm = makePixmap();
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        drawBars(&p, palette.color(QPalette::Active, QPalette::HighlightedText));
-        p.end();
-        out.addPixmap(pm, QIcon::Normal, QIcon::On);
-    }
-
+    out.addPixmap(offIcon.pixmap(size, dpr), QIcon::Normal, QIcon::Off);
+    out.addPixmap(onIcon.pixmap(size, dpr), QIcon::Normal, QIcon::On);
     return out;
 }
 
@@ -655,17 +612,17 @@ QWidget *LuaDbgBreakpointConditionDelegate::createEditor(QWidget *parent, const 
     pauseChk->setCheckable(true);
     pauseChk->setFocusPolicy(Qt::TabFocus);
     pauseChk->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    /* Icon is drawn from the editor's own palette so the bars
+    /* Icon is tinted from the editor's own palette so the bars
      * automatically read white in dark mode and black in light
-     * mode — a fixed stock pixmap would be near-invisible in
-     * one of the two themes. */
-    pauseChk->setIcon(makePauseIcon(editor->palette()));
-    pauseChk->setIconSize(QSize(ZoomScaling::scaledPixels(16), ZoomScaling::scaledPixels(16)));
+     * mode. */
+    const int pauseSide = ZoomScaling::scaledPixels(16);
+    pauseChk->setIcon(makePauseIcon(editor->palette(), pauseSide, editor->devicePixelRatioF()));
+    pauseChk->setIconSize(QSize(pauseSide, pauseSide));
     /* Stylesheet drives the on/off background: transparent when
      * unchecked (just the bars on the cell background), full
      * Highlight-color rounded chip filling the button when
      * checked. The chip is the primary on/off signal; the icon
-     * colors (ButtonText vs HighlightedText) follow it.
+     * colors (Text vs HighlightedText) follow it.
      *
      * Using a stylesheet here also disables @c autoRaise (which
      * is no longer needed since we paint our own hover / pressed
@@ -1702,26 +1659,26 @@ void LuaDebuggerBreakpointsController::refreshFromEngine()
         }
 
         /* Cell icons render with @c QIcon::Selected mode when the row
-         * is selected; theme icons (QIcon::fromTheme) usually don't
-         * ship that mode, so a dark glyph against the dark blue
-         * selection background reads as an invisible blob in dark
-         * mode. luaDbgMakeSelectionAwareIcon synthesises the Selected
-         * pixmap from the tree's palette (HighlightedText) so every
-         * row indicator stays legible while the row is highlighted. */
-        const QPalette bpPalette = tree_->palette();
+         * is selected, so give that mode HighlightedText to keep every
+         * row indicator legible on the selection background. */
+        const auto rowIcon = [](const char *name, ThemeManager::ThemeToken token) {
+            return ThemedIcon(QStringLiteral(":/svg_icons/%1.svg").arg(QLatin1String(name)), token, token,
+                              ThemeManager::PaletteHighlightedText);
+        };
 
         if (!fileExists)
         {
-            /* Mark stale breakpoints with warning icon and gray text.
+            /* Mark stale breakpoints with warning icon and disabled text.
              * The "file not found" indicator stays on the Location cell
              * because it describes the *file*, not the breakpoint's
              * extras (condition / hit count / log message). */
-            locationItem->setIcon(luaDbgMakeSelectionAwareIcon(QIcon::fromTheme("dialog-warning"), bpPalette));
+            locationItem->setIcon(rowIcon("lua-debug-warning", ThemeManager::AccentWarning));
             tooltipLines.prepend(QObject::tr("File not found: %1").arg(normalizedPath));
-            activeItem->setForeground(QBrush(Qt::gray));
-            hitsItem->setForeground(QBrush(Qt::gray));
-            lineItem->setForeground(QBrush(Qt::gray));
-            locationItem->setForeground(QBrush(Qt::gray));
+            const QBrush staleText = tree_->palette().brush(QPalette::Disabled, QPalette::Text);
+            activeItem->setForeground(staleText);
+            hitsItem->setForeground(staleText);
+            lineItem->setForeground(staleText);
+            locationItem->setForeground(staleText);
             /* Disable the checkbox + inline editor for stale breakpoints */
             activeItem->setFlags(activeItem->flags() & ~Qt::ItemIsUserCheckable);
             activeItem->setCheckState(Qt::Unchecked);
@@ -1731,29 +1688,18 @@ void LuaDebuggerBreakpointsController::refreshFromEngine()
         {
             /* Extras indicator on the Active column, drawn after the
              * checkbox (Qt's standard cell layout: check indicator,
-             * decoration, then text). Mirrors the gutter dot's white
-             * core so users get a consistent at-a-glance cue both in
-             * the editor margin and in the Breakpoints list.
+             * decoration, then text).
              *
              * Indicator priority: condition error > logpoint >
              * conditional / hit count > plain. */
             if (condition_error)
             {
-                activeItem->setIcon(luaDbgMakeSelectionAwareIcon(QIcon::fromTheme("dialog-warning"), bpPalette));
+                activeItem->setIcon(rowIcon("lua-debug-warning", ThemeManager::AccentWarning));
             }
             else if (hasLog || hasCondition || hasHitTarget)
             {
-                /* Painted glyph from kLuaDbgRowLog or kLuaDbgRowExtras,
-                 * drawn in QPalette::Text and routed through
-                 * luaDbgMakeSelectionAwareIcon so the glyph stays legible
-                 * on the highlighted-row background. */
-                const QSize iconSz = tree_->iconSize();
-                const int side = (iconSz.isValid() && iconSz.height() > 0) ? iconSz.height() : 16;
-                const QColor pen = bpPalette.color(QPalette::Text);
-                const QString &glyph = hasLog ? kLuaDbgRowLog : kLuaDbgRowExtras;
-                QIcon icon = luaDbgPaintedGlyphIcon(glyph, side, host_->devicePixelRatioF(), host_->font(), pen,
-                                                    /*margin=*/2);
-                activeItem->setIcon(luaDbgMakeSelectionAwareIcon(icon, bpPalette));
+                activeItem->setIcon(
+                    rowIcon(hasLog ? "lua-debug-logpoint" : "lua-debug-condition", ThemeManager::PaletteText));
             }
         }
 
@@ -2151,10 +2097,6 @@ void LuaDebuggerBreakpointsController::updateHeaderButtonState()
 {
     if (toggleAllButton_)
     {
-        const int side = std::max(toggleAllButton_->height(), toggleAllButton_->width());
-        const qreal dpr = toggleAllButton_->devicePixelRatioF();
-        LuaDebuggerCodeView *const cv = host_->codeTabsController().currentCodeView();
-        const QFont *const editorFont = (cv && !cv->getFilename().isEmpty()) ? &cv->font() : nullptr;
         const unsigned n = wslua_debugger_get_breakpoint_count();
         bool allInactive = n > 0U;
         for (unsigned i = 0; allInactive && i < n; ++i)
@@ -2182,7 +2124,7 @@ void LuaDebuggerBreakpointsController::updateHeaderButtonState()
         }
         else if (allInactive)
         {
-            /* All BPs off: dot is gray (mirrors gutter); click activates all. */
+            /* All BPs off: dot is an outline (mirrors gutter); click activates all. */
             mode = LuaDbgBpHeaderIconMode::ActivateAll;
             toggleAllButton_->setEnabled(true);
             toggleAllButton_->setToolTip(QObject::tr("All breakpoints are inactive — click to activate all\n"
@@ -2191,7 +2133,7 @@ void LuaDebuggerBreakpointsController::updateHeaderButtonState()
         }
         else
         {
-            /* Any BP on (all-on or mix): dot is red (mirrors gutter); click
+            /* Any BP on (all-on or mix): dot is filled (mirrors gutter); click
              * deactivates all. */
             mode = LuaDbgBpHeaderIconMode::DeactivateAll;
             toggleAllButton_->setEnabled(true);
@@ -2199,27 +2141,7 @@ void LuaDebuggerBreakpointsController::updateHeaderButtonState()
                                                    "%1: add or remove on the current line in the editor")
                                              .arg(tglLineKeys));
         }
-        /* Cache the three icons keyed by (font, side, dpr); cursor moves
-         * fire updateHeaderButtonState() frequently and only the mode
-         * actually varies on hot paths. */
-        const QString cacheKey = QStringLiteral("%1/%2/%3")
-                                     .arg(editorFont != nullptr ? editorFont->key() : QGuiApplication::font().key())
-                                     .arg(side)
-                                     .arg(dpr);
-        if (cacheKey != headerIconCacheKey_)
-        {
-            headerIconCacheKey_ = cacheKey;
-            for (QIcon &cached : headerIconCache_)
-            {
-                cached = QIcon();
-            }
-        }
-        const int modeIdx = static_cast<int>(mode);
-        if (headerIconCache_[modeIdx].isNull())
-        {
-            headerIconCache_[modeIdx] = luaDbgBreakpointHeaderIconForMode(editorFont, mode, side, dpr);
-        }
-        toggleAllButton_->setIcon(headerIconCache_[modeIdx]);
+        toggleAllButton_->setIcon(luaDbgBreakpointHeaderIconForMode(mode));
     }
     /* The Edit and Remove header buttons share enable state: both act on
      * the breakpoint row(s) the user has selected, so a selection-only
@@ -2646,15 +2568,23 @@ CollapsibleSection *LuaDebuggerDialog::createBreakpointsSection(QWidget *parent)
         QToolButton *const bpErrBreakBtn = new QToolButton(bpHeaderBtnRow);
         breakpointHeaderBreakOnErrorButton_ = bpErrBreakBtn;
 
-        /* Refresh the icon and tooltip to reflect the current checked state. */
+        /* Refresh the icon and tooltip to reflect the current checked state.
+         * When on, the bug is filled with the theme's error colour, like
+         * enabled breakpoints, and carries an error badge in the same colour.
+         * When off, the bug is drawn as an outline in the button text colour,
+         * without the badge. */
         auto updateErrBreakChrome = [this]() {
             if (!breakpointHeaderBreakOnErrorButton_)
                 return;
             bool checked = breakpointHeaderBreakOnErrorButton_->isChecked();
-            /* Read the title row live: it changes with the text zoom. */
-            QIcon icon = luaDbgErrorBreakHeaderIcon(checked, breakpointsSection->titleButtonHeight(),
-                                                    devicePixelRatioF(), breakpointsSection->titleButtonFont(),
-                                                    palette());
+            const QColor errorColor = ThemeManager::instance()->color(ThemeManager::AccentError);
+            ContrastAdaptIcon icon("lua-debug-break-on-error");
+            icon.setTokenColors({
+                {ThemeManager::AccentError, checked ? errorColor : QColor(Qt::transparent)},
+                {ThemeManager::ExpertError, checked ? errorColor : QColor(Qt::transparent)},
+                {ThemeManager::PaletteText,
+                 checked ? QColor(Qt::transparent) : QApplication::palette().color(QPalette::ButtonText)},
+            });
             breakpointHeaderBreakOnErrorButton_->setIcon(icon);
             breakpointHeaderBreakOnErrorButton_->setToolTip(
                 checked ? tr("ON \u2014 Break on Lua errors")
@@ -2668,6 +2598,7 @@ CollapsibleSection *LuaDebuggerDialog::createBreakpointsSection(QWidget *parent)
         bpErrBreakBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
 
         connect(bpErrBreakBtn, &QToolButton::toggled, this, updateErrBreakChrome);
+        connect(ThemeManager::instance(), &ThemeManager::themeChanged, bpErrBreakBtn, updateErrBreakChrome);
         QToolButton *const bpTglBtn = new QToolButton(bpHeaderBtnRow);
         breakpointHeaderToggleButton_ = bpTglBtn;
         bpTglBtn->setAutoRaise(true);
@@ -2678,11 +2609,12 @@ CollapsibleSection *LuaDebuggerDialog::createBreakpointsSection(QWidget *parent)
         breakpointHeaderEditButton_ = bpEditBtn;
         bpEditBtn->setAutoRaise(true);
         bpEditBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
+        bpEditBtn->setIcon(ThemedIcon("capture-options"));
         bpEditBtn->setEnabled(false);
         bpEditBtn->setToolTip(tr("Edit Breakpoint"));
         QToolButton *const bpRemBtn = new QToolButton(bpHeaderBtnRow);
         breakpointHeaderRemoveButton_ = bpRemBtn;
-        bpRemBtn->setText(kLuaDbgHeaderMinus);
+        bpRemBtn->setIcon(ThemedIcon("lua-debug-remove"));
         bpRemBtn->setAutoRaise(true);
         bpRemBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
         bpRemBtn->setEnabled(false);
@@ -2692,42 +2624,27 @@ CollapsibleSection *LuaDebuggerDialog::createBreakpointsSection(QWidget *parent)
         breakpointHeaderRemoveAllButton_ = bpRemAllBtn;
         bpRemAllBtn->setAutoRaise(true);
         bpRemAllBtn->setStyleSheet(kLuaDbgHeaderToolButtonStyle);
+        bpRemAllBtn->setIcon(ThemedIcon("lua-debug-dismiss"));
         bpRemAllBtn->setEnabled(false);
         bpRemAllBtn->setToolTip(
             tr("Remove All Breakpoints (%1)").arg(kLuaDbgCtxRemoveAllBreakpoints.toString(QKeySequence::NativeText)));
-        /* The buttons are sized to the title row and the icons are painted at
-         * that size, so size them now and again whenever the section's title
-         * row changes (application font or zoom). */
-        const auto applyHeaderSizes = [this, bpErrBreakBtn, bpTglBtn, bpEditBtn, bpRemBtn, bpRemAllBtn,
-                                       updateErrBreakChrome]()
+        updateErrBreakChrome();
+        /* The buttons are sized to the title row, so size them now and again
+         * whenever the section's title row changes (application font or
+         * zoom). */
+        const auto applyHeaderSizes = [this, bpErrBreakBtn, bpTglBtn, bpEditBtn, bpRemBtn, bpRemAllBtn]()
         {
             const int side = breakpointsSection->titleButtonHeight();
-            const QFont titleFont = breakpointsSection->titleButtonFont();
             styleLuaDebuggerHeaderIconOnlyButton(bpErrBreakBtn, side);
-            updateErrBreakChrome();
-            styleLuaDebuggerHeaderBreakpointToggleButton(bpTglBtn, side);
-            /* Painted via luaDbgPaintedGlyphButtonIcon so the disabled
-             * pixmap is baked from the palette's disabled-text gray instead
-             * of QStyle::generatedIconPixmap()'s synthesised filter, keeping
-             * the disabled tone in step with the neighbouring +/- buttons. */
-            bpEditBtn->setIcon(luaDbgPaintedGlyphButtonIcon(kLuaDbgHeaderEdit, side, devicePixelRatioF(),
-                                                            titleFont, palette(), /*margin=*/2));
+            styleLuaDebuggerHeaderIconOnlyButton(bpTglBtn, side);
             styleLuaDebuggerHeaderIconOnlyButton(bpEditBtn, side);
-            styleLuaDebuggerHeaderPlusMinusButton(bpRemBtn, side, titleFont);
-            bpRemAllBtn->setIcon(luaDbgPaintedGlyphButtonIcon(kLuaDbgHeaderRemoveAll, side, devicePixelRatioF(),
-                                                              titleFont, palette(), /*margin=*/2));
-            styleLuaDebuggerHeaderIconOnlyButton(bpRemAllBtn, side);
-            /* The toggle-all icon follows the button size; repaint it. This
-             * does nothing until wireBreakpointsPanel() hands the buttons to
-             * the controller. */
-            breakpointsController_.updateHeaderButtonState();
+            styleLuaDebuggerHeaderIconOnlyButton(bpRemBtn, side, /*iconGrow=*/2);
+            styleLuaDebuggerHeaderIconOnlyButton(bpRemAllBtn, side, /*iconGrow=*/2);
         };
         applyHeaderSizes();
         /* Seed the toggle-all icon for the empty state; once the controller
          * has the buttons, updateHeaderButtonState() paints it per mode. */
-        bpTglBtn->setIcon(luaDbgBreakpointHeaderIconForMode(nullptr, LuaDbgBpHeaderIconMode::NoBreakpoints,
-                                                            breakpointsSection->titleButtonHeight(),
-                                                            bpTglBtn->devicePixelRatioF()));
+        bpTglBtn->setIcon(luaDbgBreakpointHeaderIconForMode(LuaDbgBpHeaderIconMode::NoBreakpoints));
         connect(breakpointsSection, &CollapsibleSection::titleMetricsChanged, bpHeaderBtnRow, applyHeaderSizes);
         bpHeaderBtnLayout->addWidget(bpErrBreakBtn);
         bpHeaderBtnLayout->addWidget(bpTglBtn);
