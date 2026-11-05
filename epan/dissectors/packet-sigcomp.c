@@ -5074,11 +5074,9 @@ dissect_sigcomp_common(tvbuff_t *tvb, packet_info *pinfo, proto_tree *sigcomp_tr
             offset++;
             proto_tree_add_item(sigcomp_tree,hf_sigcomp_nack_ver, tvb, offset, 1, ENC_BIG_ENDIAN);
             offset++;
-            octet = tvb_get_uint8(tvb, offset);
-            reason_ti = proto_tree_add_item(sigcomp_tree,hf_sigcomp_nack_reason_code, tvb, offset, 1, ENC_BIG_ENDIAN);
+            reason_ti = proto_tree_add_item_ret_uint(sigcomp_tree,hf_sigcomp_nack_reason_code, tvb, offset, 1, ENC_BIG_ENDIAN, &octet);
             offset++;
-            opcode = tvb_get_uint8(tvb, offset);
-            proto_tree_add_item(sigcomp_tree,hf_sigcomp_nack_failed_op_code, tvb, offset, 1, ENC_BIG_ENDIAN);
+            proto_tree_add_item_ret_uint8(sigcomp_tree,hf_sigcomp_nack_failed_op_code, tvb, offset, 1, ENC_BIG_ENDIAN, &opcode);
             offset++;
 
             /* Add expert item for NACK */
@@ -6015,7 +6013,7 @@ dissect_udvm_bytecode(tvbuff_t *udvm_tvb, packet_info* pinfo, proto_tree *sigcom
              */
             /* %requested_feedback_location */
             if ((msg_length-1) < offset) {
-                proto_tree_add_expert(sigcomp_udvm_tree, pinfo, &ei_sigcomp_all_remaining_parameters_zero, udvm_tvb, 0, -1);
+                proto_tree_add_expert_remaining(sigcomp_udvm_tree, pinfo, &ei_sigcomp_all_remaining_parameters_zero, udvm_tvb, 0);
                 return;
             }
             offset = dissect_udvm_multitype_operand(udvm_tvb, sigcomp_udvm_tree, offset, true, &start_offset, &value, &is_memory_address);
