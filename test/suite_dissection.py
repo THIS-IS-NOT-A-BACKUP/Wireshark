@@ -7211,7 +7211,8 @@ class TestDissectAnsiMap:
     def test_ansi_map_protocols(self, cmd_tshark, capture_file, test_env):
         '''Every operation, as Invoke and ReturnResult with all of its
         parameters, decodes without malformed packets or error expert infos,
-        in one and two passes.'''
+        in one and two passes. The NewlyAssignedIMSI of frames 308 and 311
+        holds non-decimal digits, which E.212 reports as malformed.'''
         stdout = subprocess.check_output((cmd_tshark, *ANSI_MAP_OPTS,
                 '-r', capture_file('ansi_map_coverage.pcap.gz'),
                 '-Tfields', '-e_ws.col.protocol',
@@ -7232,7 +7233,23 @@ class TestDissectAnsiMap:
                     '-Y', '_ws.malformed || _ws.expert.severity == error',
                     '-Tfields', '-eframe.number',
                 ), encoding='utf-8', env=test_env)
-            assert count_output(stdout) == 0
+            assert stdout.split() == ['308', '311']
+
+    def test_ansi_map_imsi(self, cmd_tshark, capture_file, test_env):
+        '''The IMSI parameters are decoded by E.212 and fire the "imsi" tap.'''
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_MAP_OPTS,
+                '-r', capture_file('ansi_map_coverage.pcap.gz'),
+                '-Y', 'frame.number == 9',
+                '-Tfields', '-eansi_map.imsi', '-ee212.imsi', '-ee212.mcc',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.strip() == '13004021436587f9\t310004123456789\t310'
+        stdout = subprocess.check_output((cmd_tshark, *ANSI_MAP_OPTS,
+                '-r', capture_file('ansi_map_coverage.pcap.gz'),
+                '-q', '-z', 'imsi',
+            ), encoding='utf-8', env=test_env)
+        rows = [line.split() for line in stdout.splitlines()]
+        # IMSI and first frame
+        assert ['310004123456789', '9'] in [row[:3:2] for row in rows]
 
     def test_ansi_map_bearer_data_once(self, cmd_tshark, capture_file, test_env):
         '''The SMS bearer data is handed to IS-637/IS-801 once, however
@@ -27719,7 +27736,7 @@ class TestDissectOran:
         for passes in ((), ('-2',)):
             stdout = subprocess.check_output((cmd_tshark, *passes,
                     '-r', capture_file('oran_coverage.pcap.gz'),
-                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Y', '_ws.malformed && _ws.expert.severity > warning',
                     '-Tfields', '-eframe.number',
                 ), encoding='utf-8', env=test_env)
             assert count_output(stdout) == 0
@@ -63963,3 +63980,4598 @@ class TestDissectGmrp:
                               '-Y', 'gmrp.protocol_id == 2', '-Tfields', '-eframe.number',
                               '-e_ws.expert.message', '-edata.len')
         assert stdout.splitlines() == ['23\tThis version of Wireshark only knows about protocol id = 1\t11']
+
+
+class TestDissectGnutella:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, fields, *args):
+        out = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('gnutella_coverage.pcap.gz'), *args, '-Tfields',
+                *[x for f in fields for x in ('-e', f)]), encoding='utf-8', env=test_env)
+        return out.splitlines()
+
+    def test_gnutella_protocols(self, cmd_tshark, capture_file, test_env):
+        '''24 of the 36 frames are Gnutella (PDUs, streams and segments of reassembled PDUs); none is
+        malformed or has an error expert info, in one and two passes.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['_ws.col.protocol'])
+        assert len(lines) == 36
+        assert lines.count('Gnutella') == 24
+        for passes in ((), ('-2',)):
+            lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'],
+                    *passes, '-Y', '_ws.malformed || _ws.expert.severity == "error"')
+            assert lines == []
+
+    def test_gnutella_info(self, cmd_tshark, capture_file, test_env):
+        '''Descriptor names, several PDUs in one segment, and reassembly of
+        a PDU split over two segments.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gnutella.header.payload', 'gnutella.header.size', '_ws.col.info'],
+                '-Y', 'gnutella.header')
+        assert [l.split('\t') for l in lines] == [
+            ['6', '0', '0', 'Ping'], ['7', '1', '14', 'Pong'],
+            ['8', '128', '13', 'Query'], ['9', '128', '2', 'Query'],
+            ['10', '128', '300', 'Query'], ['11', '129', '81', 'QueryHit'],
+            ['12', '129', '52', 'QueryHit'], ['13', '129', '27', 'QueryHit'],
+            ['14', '64', '26', 'Push'], ['15', '2', '7', 'Unknown'],
+            ['16', '127', '0', 'Unknown'],
+            ['17', '0,1,64', '0,14,26', 'Ping, Pong, Push'],
+            ['19', '128', '22', 'Query'], ['21', '1', '14', 'Pong'],
+            ['22', '128', '4096', 'Query'], ['31', '0', '0', 'Ping']]
+
+    def test_gnutella_size_32bit(self, cmd_tshark, capture_file, test_env):
+        '''The descriptor payload length is a 32-bit field: a Query with a
+        payload of 300 octets shows 300, not 44 (it was FT_UINT8).'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['gnutella.header.size', 'gnutella.query.search'],
+                '-Y', 'frame.number == 10')
+        assert len(lines) == 1
+        size, search = lines[0].split('\t')
+        assert size == '300'
+        assert search == 'x' * 298
+
+    def test_gnutella_payloads(self, cmd_tshark, capture_file, test_env):
+        '''Pong, Push, Query and QueryHit contents and the transfer
+        stream.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gnutella.pong.port', 'gnutella.pong.ip', 'gnutella.pong.files',
+                 'gnutella.pong.kbytes', 'gnutella.push.index', 'gnutella.push.ip',
+                 'gnutella.push.port'], '-Y', 'frame.number == 7 || frame.number == 14')
+        assert lines == ['7\t6346\t192.0.2.7\t120\t4096\t\t\t',
+                         '14\t\t\t\t\t3\t192.0.2.10\t6346']
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gnutella.queryhit.count', 'gnutella.queryhit.hit.name',
+                 'gnutella.queryhit.hit.size', 'gnutella.queryhit.hit.extra', 'gnutella.queryhit.extra'],
+                '-Y', 'gnutella.queryhit.count')
+        assert lines == ['11\t2\tsong.mp3,other file.ogg\t4096,12345\t75726e3a736861313a414243\t',
+                         '12\t1\ta.txt\t1\t\t56454e444f5202000100',
+                         '13\t0\t\t\t\t']
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number'], '-Y', 'gnutella.stream')
+        assert lines == ['4', '5', '23', '33']
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gnutella.query.search'], '-Y', 'frame.number == 9')
+        assert lines == ['9\t']
+
+
+class TestDissectGoose:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, fields, *args):
+        out = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('goose_coverage.pcap.gz'), *args, '-Tfields',
+                *[x for f in fields for x in ('-e', f)]), encoding='utf-8', env=test_env)
+        return out.splitlines()
+
+    def test_goose_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frames 1-18 are GOOSE (ethertype 0x88b8) and 19-25 R-GOOSE (CLTP
+        over UDP, found by the heuristic); none is malformed or has an
+        error expert info, in one and two passes.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['_ws.col.protocol'])
+        assert lines == ['GOOSE'] * 18 + ['R-GOOSE'] * 7
+        for passes in ((), ('-2',)):
+            lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'],
+                    *passes, '-Y', '_ws.malformed || _ws.expert.severity == "error"')
+            assert lines == []
+
+    def test_goose_header(self, cmd_tshark, capture_file, test_env):
+        '''APPID, length, reserved bits and the PDU of the GOOSE frames,
+        also with a VLAN tag and with several PDUs in one frame.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'goose.appid', 'goose.length', 'goose.reserve1.s_bit',
+                 'goose.simulation', 'goose.stNum', 'goose.sqNum'], '-Y', 'frame.number <= 7')
+        assert [l.split('\t') for l in lines] == [
+            ['1', '0x1000', '184', 'False', '', '1', '0'],
+            ['2', '0x1001', '60', 'True', 'True', '2', '5'],
+            ['3', '0x1002', '60', 'True', 'False', '1', '0'],
+            ['4', '0x1003', '57', 'False', 'True', '1', '0'],
+            ['5', '0x1004', '57', 'False', '', '1', '0'],
+            ['6', '0x1005', '258', 'False', '', '3,4', '0,0'],
+            ['7', '0x1006', '260', 'False', '', '4294967295', '4294967295']]
+
+    def test_goose_data_types(self, cmd_tshark, capture_file, test_env):
+        '''The Data choices of allData: arrays and structures with
+        integers, unsigned, booleans, an octet string, a visible string,
+        BCD and an object identifier.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['goose.integer', 'goose.unsigned', 'goose.boolean', 'goose.octet_string',
+                 'goose.visible_string', 'goose.bcd', 'goose.objId', 'goose.numDatSetEntries'],
+                '-Y', 'frame.number == 1')
+        assert lines == ['1,-2,-1000\t300,65535\tTrue,False\tdeadbeef\tvisible\t1234\t1.0.61850.7.2\t0']
+
+    def test_goose_expert_infos(self, cmd_tshark, capture_file, test_env):
+        '''S bit set with the simulation attribute clear (frame 3) is a
+        warning.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'], '-Y', 'goose.invalid_sim')
+        assert lines == ['3']
+
+    def test_goose_management(self, cmd_tshark, capture_file, test_env):
+        '''GSE management PDUs: the four requests, not supported and the
+        four positive responses, a response without datSet and a negative
+        response.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'goose.stateID', 'goose.ident', 'goose.offset', 'goose.reference',
+                 'goose.error', 'goose.references_item', 'goose.responseNegative', 'goose.datSet'],
+                '-Y', 'frame.number >= 8')
+        assert [l.split('\t') for l in lines if l.split('\t')[0] in [str(i) for i in range(8, 19)]] == [
+            ['8', '1', 'GCB1', '', '', '', '', '', ''],
+            ['9', '2', 'GCB1', '', '', '', 'ref/one,ref/two', '', ''],
+            ['10', '3', 'GCB2', '', '', '', '', '', ''],
+            ['11', '4', 'GCB2', '', '', '', 'x/y', '', ''],
+            ['12', '5', '', '', '', '', '', '', ''],
+            ['13', '11', 'GCB1', '3', 'ref/one', '1', '', '', 'DS1'],
+            ['14', '12', 'GCB1', '3', 'ref/one', '1', '', '', 'DS1'],
+            ['15', '13', 'GCB1', '3', 'ref/one', '1', '', '', 'DS1'],
+            ['16', '14', 'GCB1', '3', 'ref/one', '1', '', '', 'DS1'],
+            ['17', '20', 'GCB1', '3', 'ref/one', '1', '', '', ''],
+            ['18', '21', 'GCB1', '', '', '', '', '2', '']]
+
+    def test_rgoose(self, cmd_tshark, capture_file, test_env):
+        '''R-GOOSE: session header, security information, one or two
+        APDUs, padding and the HMAC octets, a sample value APDU that is
+        not decoded further.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'rgoose.spdu_id', 'rgoose.session_hdr_len', 'rgoose.spdu_num',
+                 'rgoose.init_v_len', 'rgoose.payload_len', 'rgoose.pdu_tag', 'rgoose.appid',
+                 'rgoose.padding_len', 'rgoose.hmac'], '-Y', 'rgoose.spdu_id')
+        assert [l.split('\t') for l in lines] == [
+            ['19', '0xa1', '35', '1', '12', '58', '0x81', '0x3000', '', ''],
+            ['20', '0xa1', '35', '1', '12', '182', '0x81', '0x3001', '0x06', '000102030405060708090a0b0c0d0e0f'],
+            ['21', '0xa1', '35', '2', '12', '367', '0x81,0x81', '0x3002,0x3003', '', '202122232425262728292a2b2c2d2e2f'],
+            ['22', '0xa1', '35', '3', '12', '14', '0x82', '0x3004', '', ''],
+            ['23', '0xa1', '23', '1', '0', '182', '0x81', '0x3005', '0x00', ''],
+            ['24', '0xa1', '35', '4', '12', '182', '0x81', '0x3006', '', ''],
+            ['25', '0xa1', '35', '5', '12', '15', '0x81', '0x3007', '', '']]
+
+
+class TestDissectGopher:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, fields, *args):
+        out = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('gopher_coverage.pcap.gz'), *args, '-Tfields',
+                *[x for f in fields for x in ('-e', f)]), encoding='utf-8', env=test_env)
+        return out.splitlines()
+
+    def test_gopher_protocols(self, cmd_tshark, capture_file, test_env):
+        '''29 of the 113 frames are Gopher (14 requests, 15 responses); none is
+        malformed or has an error expert info, in one and two passes.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['_ws.col.protocol'])
+        assert len(lines) == 113
+        assert lines.count('Gopher') == 29
+        for passes in ((), ('-2',)):
+            lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'],
+                    *passes, '-Y', '_ws.malformed || _ws.expert.severity == "error"')
+            assert lines == []
+
+    def test_gopher_info(self, cmd_tshark, capture_file, test_env):
+        '''Requests (directory list, selector, search) and responses (menu
+        or other data).'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', '_ws.col.info'], '-Y', 'gopher')
+        assert [l.split('\t') for l in lines][:12] == [
+            ['4', 'Request: [Directory list]'], ['5', 'Response: [Directory list]'],
+            ['12', 'Request: /docs/readme.txt'], ['13', 'Response'],
+            ['20', 'Request: /search\\\\tgopher protocol'], ['21', 'Response: [Directory list]'],
+            ['28', 'Request: [Directory list]'], ['29', 'Response: [Directory list]'],
+            ['36', 'Request: /a'], ['37', 'Response'],
+            ['44', 'Request: /b'], ['45', 'Response']]
+
+    def test_gopher_menu(self, cmd_tshark, capture_file, test_env):
+        '''A menu with every item type, with host and port per item.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['gopher.directory.type', 'gopher.directory.host', 'gopher.directory.port'],
+                '-Y', 'frame.number == 5')
+        types, hosts, ports = lines[0].split('\t')
+        assert types.split(',') == ["'%s'" % t for t in '+0123456789ghiIsT']
+        assert hosts.split(',') == ['host%d.example.org' % i for i in range(17)]
+        assert ports.split(',') == [str(70 + i) for i in range(17)]
+        stdout = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('gopher_coverage.pcap.gz'), '-Y', 'frame.number == 29',
+                '-V', '-O', 'gopher'), encoding='utf-8', env=test_env)
+        assert "Type: Informational message ('i')" in stdout
+        assert "Type: Error ('3')" in stdout
+        assert 'Directory item: Welcome' in stdout
+
+    def test_gopher_lines_without_tab(self, cmd_tshark, capture_file, test_env):
+        '''A response whose first line has no TAB is not a menu (the result
+        of the TAB search was ignored before the fix), and neither is one
+        with an informational line without tabs. A menu stops at the first
+        line that is not an item.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gopher.directory.name', 'gopher.unknown'],
+                '-Y', 'frame.number == 37 || frame.number == 45 || frame.number == 53')
+        assert lines == [
+            '37\t\t0abcdefghij\\r\\n1x\\tsel\\thost.example\\t70\\r\\n',
+            '45\t\tiInformational line without tabs\\r\\n.\\r\\n',
+            '53\tok\t']
+
+
+class TestDissectGpef:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, fields, *args):
+        out = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('gpef_coverage.pcap.gz'), *args, '-Tfields',
+                *[x for f in fields for x in ('-e', f)]), encoding='utf-8', env=test_env)
+        return out.splitlines()
+
+    def test_gpef_protocols(self, cmd_tshark, capture_file, test_env):
+        '''GPEF blobs are carried by LSA DCE/RPC calls (6 frames); nothing
+        is malformed or has an error expert info, in one and two
+        passes.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'], '-Y', 'gpef')
+        assert lines == ['7', '9', '11', '13', '14', '16']
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['_ws.col.protocol'])
+        assert len(lines) == 20
+        assert lines.count('LSARPC') == 12
+        for passes in ((), ('-2',)):
+            lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'],
+                    *passes, '-Y', '_ws.malformed || _ws.expert.severity == "error"')
+            assert lines == []
+
+    def test_gpef_keys(self, cmd_tshark, capture_file, test_env):
+        '''Key counts, key lengths, SID and certificate offsets, the SIDs
+        and the certificate subjects of the blobs.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gpef.key_count', 'gpef.efskey.length1', 'gpef.efskey.sid_offset',
+                 'gpef.efskey.cert_length', 'gpef.efskey.cert_offset', 'nt.sid', 'x509sat.uTF8String'],
+                '-Y', 'gpef')
+        dom = 'S-1-5-21-1004336348-1177238915-682003330'
+        assert [l.split('\t') for l in lines] == [
+            ['7', '2', '348,347', '24,24', '292,291', '52,52', dom + '-500,' + dom + '-1104',
+             'EFS Recovery CA,Administrator,EFS Recovery CA,EFS Recovery'],
+            ['9', '0', '', '', '', '', '', ''],
+            ['11', '1', '325', '24', '285', '36', 'S-1-5-18', 'EFS Recovery CA,SYSTEM'],
+            ['13', '3', '348,347,325', '24,24,24', '292,291,285', '52,52,36',
+             dom + '-500,' + dom + '-1104,S-1-5-18',
+             'EFS Recovery CA,Administrator,EFS Recovery CA,EFS Recovery,EFS Recovery CA,SYSTEM'],
+            ['14', '2', '347,348', '24,24', '291,292', '52,52', dom + '-1104,' + dom + '-500',
+             'EFS Recovery CA,EFS Recovery,EFS Recovery CA,Administrator'],
+            ['16', '0', '', '', '', '', '', '']]
+
+    def test_gpef_key_items(self, cmd_tshark, capture_file, test_env):
+        '''Each EfsKey item covers its own key and the SID is inside it.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gpef_coverage.pcap.gz'),
+                '-Y', 'frame.number == 11', '-T', 'pdml',
+            ), encoding='utf-8', env=test_env)
+        def attr(line, name):
+            return line.split(' %s="' % name)[1].split('"')[0]
+        blob = [(attr(l, 'pos'), attr(l, 'size')) for l in stdout.splitlines() if '<proto name="gpef"' in l]
+        key = [(attr(l, 'pos'), attr(l, 'size')) for l in stdout.splitlines() if '<field name="gpef.efskey"' in l]
+        assert len(blob) == 1 and len(key) == 1
+        assert int(key[0][1]) == 325
+        assert int(key[0][0]) == int(blob[0][0]) + 8
+
+
+class TestDissectGprscdr:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, fields, *args):
+        out = subprocess.check_output((cmd_tshark, '-r',
+                capture_file('gprscdr_coverage.pcap.gz'), *args, '-Tfields',
+                *[x for f in fields for x in ('-e', f)]), encoding='utf-8', env=test_env)
+        return out.splitlines()
+
+    def test_gprscdr_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 54 frames are GTP (GTP' data record transfer requests and
+        Create PDP Context requests) and every one carries GPRS CDR data;
+        none is malformed or has an error expert info, in one and two
+        passes.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['_ws.col.protocol'])
+        assert len(lines) == 54
+        assert lines.count('GTP') == 54
+        lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'], '-Y', 'gprscdr.GPRSCallEventRecord || gprscdr.GPRSRecord || gprscdr.sCFAddress')
+        assert lines == [str(i) for i in range(1, 55)]
+        for passes in ((), ('-2',)):
+            lines = self._fields(cmd_tshark, capture_file, test_env, ['frame.number'],
+                    *passes, '-Y', '_ws.malformed || _ws.expert.severity == "error"')
+            assert lines == []
+
+    def test_gprscdr_record_types(self, cmd_tshark, capture_file, test_env):
+        '''One record of every type of GPRSCallEventRecord (release 6 and
+        earlier) and GPRSRecord (later releases), twice, then two records
+        in one packet.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gprscdr.GPRSCallEventRecord', 'gprscdr.GPRSRecord'],
+                '-Y', 'frame.number <= 49')
+        call = ['20', '21', '22', '23', '24', '28']
+        rec = ['20', '21', '22', '23', '24', '25', '26', '27', '70', '76', '77', '78', '79',
+               '86', '92', '95', '96', '97']
+        expected = []
+        for rnd in range(2):
+            n = len(expected)
+            expected += [[str(n + 1 + i), v, ''] for i, v in enumerate(call)]
+            n = len(expected)
+            expected += [[str(n + 1 + i), '', v] for i, v in enumerate(rec)]
+        assert [l.split('\t') for l in lines[:48]] == expected
+        assert lines[48].split('\t') == ['49', '', '78,79']
+
+    def test_gprscdr_values(self, cmd_tshark, capture_file, test_env):
+        '''TimeStamp, MSTimeZone, PLMN identifier and the identifier of
+        a ManagementExtension.'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gprscdr.mSTimeZone', 'gprscdr.rATType'],
+                '-Y', 'frame.number == 2 || frame.number == 6 || frame.number == 18')
+        assert lines == ['2\t4a00\t2', '6\t4a02\t1,1', '18\t4a03\t1,1,2,0,1']
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gprscdr.recordOpeningTime'], '-Y', 'frame.number == 3')
+        assert len(lines) == 1 and lines[0].startswith('3\t2023-05-17T')
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['frame.number', 'gprscdr.sCFAddress', 'gprscdr.serviceKey'],
+                '-Y', 'frame.number >= 50 && gprscdr.sCFAddress')
+        assert lines == ['50\t91214365f7\t100', '51\t91214365f7\t100',
+                         '52\t91214365f7\t100', '53\t91214365f7\t100']
+
+    def test_gprscdr_management_extension_oid(self, cmd_tshark, capture_file, test_env):
+        '''A record with a ManagementExtension: the OID of the extension
+        is its own (the file scope OID is reset for each
+        ManagementExtension).'''
+        lines = self._fields(cmd_tshark, capture_file, test_env,
+                ['gprscdr.identifier'], '-Y', 'frame.number == 53')
+        assert lines == ['1.3.6.1.4.1.5.1.2.3,1.3.6.1.4.1.20138.1.2.3']
+
+
+class TestDissectGprsLlc:
+    '''GPRS LLC (link-layer type 169, LINKTYPE_GPRS_LLC), from the
+    synthetic capture gprs_llc_coverage.pcap.gz.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, flt, *fields):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gprs_llc_coverage.pcap.gz'), '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gprs_llc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 80 frames are LLC frames; no malformed packets or error
+        expert infos in one and two passes; the only expert infos are the
+        warnings for U frames without information field (frames 62-65).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame')
+        assert len(rows) == 80
+        # the dummy UI command and the invalid address have no LLC tree
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'llcgprs')
+        assert len(rows) == 78
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gprs_llc_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == "error"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gprs_llc_coverage.pcap.gz'),
+                    '-Y', '_ws.expert',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['%d\tNo Information Field' % n for n in (62, 63, 64, 65)]
+
+    def test_gprs_llc_sapi_and_formats(self, cmd_tshark, capture_file, test_env):
+        '''The SAPI, the frame format and the sub-dissector reached from the
+        SAPI (GMM and SMS in DTAP, SNDCP).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number <= 4 || frame.number == 10 || frame.number == 28 || frame.number == 51 || frame.number == 62 || frame.number == 69 || frame.number == 77',
+                            '_ws.col.info')
+        assert [(r[0], r[1].strip()) for r in rows] == [
+            ('1', ''),
+            ('2', 'Invalid packet - Protocol Discriminator bit is set to 1'),
+            ('3', 'SAPI: Reserved 0, UI, protected, non-ciphered information, N(U) = 0'),
+            ('4', 'SAPI: LLGMM, UI, protected, non-ciphered information, N(U) = 7(DTAP) (GMM) P-TMSI Reallocation Complete'),
+            ('10', 'SAPI: LLSMS, UI, protected, non-ciphered information, N(U) = 49(DTAP) (SMS) CP-ACK'),
+            ('28', 'SN-UNITDATA N-PDU 1121 (segment 7)'),
+            ('51', 'SAPI: LLGMM, I, SACK, N(S) = 9, N(R) = 10, k = 32(DTAP) (GMM) P-TMSI Reallocation Complete'),
+            ('62', 'SAPI: LLGMM, U, DM-response'),
+            ('69', 'SAPI: LL5, U, XID'),
+            ('77', 'SAPI: LL5, U, FRMR'),
+        ]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'llcgprs.dummy_ui')
+        assert rows == [['1']]
+
+    def test_gprs_llc_fcs(self, cmd_tshark, capture_file, test_env):
+        '''Correct, incorrect, incorrect due to ciphering and not computed
+        (frame truncated by the capture) FCS.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gprs_llc_coverage.pcap.gz'),
+                '-V', '-O', 'llcgprs',
+            ), encoding='utf-8', env=test_env)
+        frame = None
+        status = {}
+        for line in stdout.splitlines():
+            if line.startswith('Frame '):
+                frame = int(line.split(':')[0].split()[1])
+            elif line.startswith('    FCS: '):
+                if '(correct)' in line:
+                    status[frame] = 'correct'
+                elif 'maybe due to ciphering' in line:
+                    status[frame] = 'ciphering'
+                elif '(incorrect, should be 0x' in line:
+                    status[frame] = 'incorrect'
+                else:
+                    assert 'Not enough data' in line
+                    status[frame] = 'not computed'
+        assert status[3] == 'correct'
+        assert [n for n, s in status.items() if s == 'incorrect'] == [19, 20, 21, 29, 52]
+        assert [n for n, s in status.items() if s == 'ciphering'] == [22]
+        assert [n for n, s in status.items() if s == 'not computed'] == [28]
+        assert status[23] == 'correct'      # ciphered but the FCS is valid
+        assert len(status) == 78            # all but the dummy UI and the invalid address
+
+    def test_gprs_llc_xid_length_offset(self, cmd_tshark, capture_file, test_env):
+        '''The second length octet of an XID parameter (XL bit set) is the
+        octet after the first (it was added at the first octet).'''
+        import json
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gprs_llc_coverage.pcap.gz'),
+                '-Y', 'frame.number == 72 || frame.number == 73', '-T', 'json', '-x',
+            ), encoding='utf-8', env=test_env)
+
+        def positions(o, key, out):
+            # collect the offset of every raw value of the field
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == key:
+                        out.append(v[1])
+                    else:
+                        positions(v, key, out)
+            elif isinstance(o, list):
+                for v in o:
+                    positions(v, key, out)
+
+        got = {}
+        for p in json.loads(stdout):
+            layer = p['_source']['layers']['llcgprs']
+            xl, len2 = [], []
+            positions(layer, 'llcgprs.xidxl_raw', xl)
+            positions(layer, 'llcgprs.xidlen2_raw', len2)
+            got[p['_source']['layers']['frame']['frame.number']] = (xl, len2)
+        # the XL octet is at offset 2 (after address and control), the second length octet at 3
+        assert got == {'72': ([2], [3]), '73': ([2, 74], [3])}
+
+    def test_gprs_llc_tom_sack_frmr(self, cmd_tshark, capture_file, test_env):
+        '''TOM envelopes (protocol, remaining length, header, capsule),
+        the R bitmap of SACK frames and the FRMR information field.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number >= 30 && frame.number <= 37',
+                            'llcgprs.tompd', 'llcgprs.romrl', 'llcgprs.tomhead', 'llcgprs.tomdata')
+        assert [r[:5] for r in rows[:3]] == [
+            ['30', '0x01', '0', '', '0x63,0x61,0x70,0x73,0x75,0x6c,0x65'],
+            ['31', '0x02', '2', '0xaa,0xbb', '0x63,0x61,0x70,0x73,0x75,0x6c,0x65'],
+            ['32', '0x00', '15', '', ''],
+        ]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'llcgprs.k', 'llcgprs.k', 'llcgprs.sackrbits')
+        # k is shown masked to 5 bits; the R bitmap has k octets
+        assert [(r[0], len(r[2].split(','))) for r in rows] == [('51', 32), ('52', 1)]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'llcgprs.sackrbits && llcgprs.s1s2 == 3 && !llcgprs.k',
+                            'llcgprs.sackrbits')
+        assert rows == [['56', '0xaa,0x55,0xff']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'llcgprs.frmrvs', 'llcgprs.frmrvs', 'llcgprs.frmrvr',
+                            'llcgprs.frmrcr', 'llcgprs.frmrw1', 'llcgprs.frmrw2', 'llcgprs.frmrw3', 'llcgprs.frmrw4')
+        assert rows == [['77', '511', '257', '1', '1', '1', '1', '1'], ['78', '0', '0', '0', '1', '1', '1', '1']]
+
+
+class TestDissectGquic:
+    '''Google QUIC (found by the UDP heuristic: versions Q02x to Q04x with the
+    version and CID flags, and Q046 long headers), from the synthetic capture
+    gquic_coverage.pcap.gz.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, passes, flt, *fields):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('gquic_coverage.pcap.gz'), '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gquic_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 126 frames are GQUIC, with no malformed packets and no error
+        expert infos in one and two passes; the warnings are the empty tag
+        list of frame 61 and the CRYPTO frame of frame 119.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame', '_ws.col.protocol')
+        assert len(rows) == 126
+        assert [r[1] for r in rows if r[1] != 'GQUIC'] == []
+        for passes in ((), ('-2',)):
+            rows = self._fields(cmd_tshark, capture_file, test_env, passes,
+                                '_ws.malformed || _ws.expert.severity == "error"')
+            assert rows == []
+            rows = self._fields(cmd_tshark, capture_file, test_env, passes,
+                                '_ws.expert.severity == "warning"', '_ws.expert.message')
+            assert rows == [['61', 'Invalid total tag length: 0'], ['119', 'Invalid Data']]
+
+    def test_gquic_two_passes_same(self, cmd_tshark, capture_file, test_env):
+        '''The Info column and the fields do not change between one and two
+        passes (the per-conversation version and byte order are set by the
+        first packet of every conversation).'''
+        out = []
+        for passes in ((), ('-2',)):
+            out.append(subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gquic_coverage.pcap.gz'),
+                    '-Tfields', '-eframe.number', '-e_ws.col.info', '-egquic.version',
+                    '-egquic.cid', '-egquic.packet_number',
+                ), encoding='utf-8', env=test_env))
+        assert out[0] == out[1]
+
+    def test_gquic_versions_and_messages(self, cmd_tshark, capture_file, test_env):
+        '''The version of the first packet of each conversation, handshake
+        messages, public reset and version negotiation.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {1, 2, 3, 10, 11, 53, 55, 102, 104, 112, 123, 125}',
+                            'gquic.version', '_ws.col.info')
+        assert [(r[0], r[1], r[2].split(',')[0]) for r in rows] == [
+            ('1', 'Q025', 'Client Hello'),
+            ('2', '', 'Rejection'),
+            ('3', '', 'Server Hello'),
+            ('10', '', 'Public Reset'),
+            ('11', 'Q043,Q039,Q035,Q025', 'Version Negotiation'),
+            ('53', 'Q033', 'Client Hello'),
+            ('55', 'Q035', 'Payload (Encrypted)'),
+            ('102', 'Q039', 'Client Hello'),
+            ('104', 'Q043', 'Client Hello'),
+            ('112', 'Q046', 'Client Hello'),
+            ('123', 'Q050', 'Client Hello'),
+            ('125', 'T051', 'Client Hello'),
+        ]
+        # a conversation of a server on another port: the port is learnt from the CHLO
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number in {105, 106}',
+                            'udp.srcport', '_ws.col.info', 'gquic.diversification_nonce')
+        assert rows[0][1] == '4444' and rows[0][2].startswith('Server Hello')
+        assert rows[1][1] == '4444' and rows[1][2].startswith('Version Negotiation')
+
+    def test_gquic_endianness(self, cmd_tshark, capture_file, test_env):
+        '''Packet number and CID are little endian up to Q038 and big endian
+        from Q039.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {2, 3, 4, 102, 103}', 'gquic.packet_number', 'gquic.cid')
+        assert rows == [
+            ['2', '256', '72623859790382856'],
+            ['3', '1027', '72623859790382856'],
+            ['4', '67305985', '72623859790382856'],
+            ['102', '168496141', '72623859790382856'],
+            ['103', '168496142', '72623859790382856'],
+        ]
+
+    def test_gquic_tags(self, cmd_tshark, capture_file, test_env):
+        '''Tags of a CHLO and of a rejection, nested server config, public
+        reset tags (client address of IPv4, IPv6 and an unknown type).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number == 1',
+                            'gquic.tag.sni', 'gquic.tag.pdmd', 'gquic.tag.mspc', 'gquic.tag.tcid',
+                            'gquic.tag.epid')
+        assert rows == [['1', 'www.example.org', 'X509', '100', '0', 'gws']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number == 2',
+                            'gquic.tag.expy', 'gquic.tag.rrej')
+        assert rows == [['2', '1800000000,1800000000', '0,1,2,5,99']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'gquic.tag.caddr.addr.type',
+                            'gquic.tag.caddr.addr.type', 'gquic.tag.caddr.addr.ipv4',
+                            'gquic.tag.caddr.addr.ipv6', 'gquic.tag.caddr.addr', 'gquic.tag.caddr.port',
+                            'gquic.tag.rnon', 'gquic.tag.rseq')
+        assert rows == [
+            ['10', '2', '192.0.2.1', '', '', '4444', '1234605616436508552', '9'],
+            ['12', '10', '', '2001:db8::1', '', '4444', '1', ''],
+            ['13', '7', '', '', 'aabbccdd', '4444', '', ''],
+        ]
+
+    def test_gquic_review_reproducers(self, cmd_tshark, capture_file, test_env):
+        '''A CRYPTO frame in a Q043 packet gives a warning (it was an
+        assertion); a PUBS tag of 1 octet and an SCFG tag with a huge tag
+        count are decoded (the tag count used to wrap).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number == 119',
+                            '_ws.expert.message', '_ws.col.info')
+        assert rows[0][1] == 'Invalid Data'
+        assert 'Len=67' in rows[0][2]
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number == 120',
+                            'gquic.tag.scfg.number', '_ws.expert.message', 'gquic.tag.sni')
+        assert rows == [['120', '536870912', 'Unknown Data', 'abcd']]
+
+    def test_gquic_crypto_frames(self, cmd_tshark, capture_file, test_env):
+        '''CRYPTO frames of Q050 carry GQUIC tags, those of T051 a TLS 1.3
+        handshake.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'gquic.crypto.offset',
+                            'gquic.tag', 'tls.handshake.type')
+        assert [(r[0], r[2]) for r in rows if r[2]] == [('125', '1'), ('126', '2')]
+        assert [r[0] for r in rows] == ['123', '124', '125', '126']
+
+
+class TestDissectGreBonding:
+    '''Huawei GRE bonding control messages (GRE protocol types 0xB7EA and
+    0x0101) from the synthetic capture grebonding_coverage.pcap.gz.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, flt, *fields):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('grebonding_coverage.pcap.gz'), '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_grebonding_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 44 frames are GREbond, with no malformed packets and no
+        expert infos in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('grebonding_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 44
+        assert protocols.count('GREbond') == 44
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('grebonding_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_grebonding_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Message and tunnel types of the first frames, GRE protocol 0x0101.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number <= 11',
+                            'gre.proto', 'grebonding.type', 'grebonding.tunneltype', '_ws.col.info')
+        assert rows == [
+            ['1', '0xb7ea', '1', '1', 'Tunnel setup request'],
+            ['2', '0xb7ea', '2', '2', 'Tunnel setup accept'],
+            ['3', '0xb7ea', '3', '1', 'Tunnel setup deny'],
+            ['4', '0xb7ea', '4', '2', 'Hello'],
+            ['5', '0xb7ea', '5', '1', 'Tunnel tear down'],
+            ['6', '0xb7ea', '6', '2', 'Notify'],
+            ['7', '0xb7ea', '10', '0', 'Link Detection (Telekom specific)'],
+            ['8', '0xb7ea', '1', '8', 'Tunnel setup request'],
+            ['9', '0xb7ea', '7', '3', '0x07 (unknown)'],
+            ['10', '0x0101', '1', '0', 'Tunnel setup request'],
+            ['11', '0xb7ea', '4', '8', 'Hello'],
+        ]
+
+    def test_grebonding_filter_list_ack(self, cmd_tshark, capture_file, test_env):
+        '''The ACK code is the last octet of the attribute (it was read from
+        the octet after the attribute, the type of the next attribute).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.filter.commit && frame.number >= 34 && frame.number <= 37',
+                            'grebonding.attr.val.filter.commit', 'grebonding.attr.val.filter.ack')
+        assert rows == [['34', '7', '0'], ['35', '7', '1'], ['36', '7', '2'], ['37', '7', '3']]
+
+    def test_grebonding_filter_list_items(self, cmd_tshark, capture_file, test_env):
+        '''All items of a filter list are decoded, also after a long
+        attribute (the loop compared the absolute offset with the
+        attribute length).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.filter.item.type',
+                            'grebonding.attr.val.filter.item.type', 'grebonding.attr.val.filter.item.desc')
+        by = {r[0]: r[1:] for r in rows}
+        assert by['30'][0] == '1,2,3,4,5,6,7,8'
+        assert by['31'][0] == '9,10,11,12,13,14,15'
+        assert by['30'][1].split(',')[:2] == ['filter-1', 'filter-2']
+        # the filter list after a 24 octet CIN attribute, and before a CIN attribute
+        assert by['43'] == ['1', 'web']
+        assert by['44'] == ['1', 'web']
+        # item lengths that exceed the attribute or the packet are clamped
+        assert by['41'][0] == '1'
+        assert by['42'][0] == '1'
+
+    def test_grebonding_attributes(self, cmd_tshark, capture_file, test_env):
+        '''Error codes, DSL protocol values, strings and addresses.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.error', 'grebonding.attr.val.error')
+        assert rows[:2] == [['15', '9'], ['18', '1,2,3,4,5']]
+        assert rows[-1] == ['22', '502,503,999']
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.dslproto', 'grebonding.attr.val.dslproto')
+        assert [r[1] for r in rows] == ['0', '1', '2', '3', '4', '5']
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.string || grebonding.attr.val.bras_name',
+                            'grebonding.attr.val.string', 'grebonding.attr.val.bras_name')
+        assert rows[0] == ['10', 'CIN-0001', '']
+        assert ['29', '', 'bras01.example.net'] in rows
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'grebonding.attr.val.ipv4 || grebonding.attr.val.ipv6',
+                            'grebonding.attr.val.ipv4', 'grebonding.attr.val.ipv6')
+        assert rows[0] == ['12', '192.0.2.10', '2001:db8::5']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('grebonding_coverage.pcap.gz'),
+                '-Y', 'frame.number == 14', '-V', '-O', 'grebonding',
+            ), encoding='utf-8', env=test_env)
+        assert '        IPv6 prefix - 2001:db8:0:1::/64' in stdout.splitlines()
+        assert '        IPv6 prefix - 2001:db8:0:2::/56' in stdout.splitlines()
+
+
+class TestDissectGre:
+    '''GRE (ip.proto 47 and UDP port 4754), from the synthetic capture
+    gre_coverage.pcap.gz.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, passes, flt, *fields):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('gre_coverage.pcap.gz'), '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gre_protocols(self, cmd_tshark, capture_file, test_env):
+        '''51 frames, no malformed packets or error expert infos in one
+        and two passes; only the bad checksum of frame 8 is reported.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gre_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 51
+        assert protocols.count('GRE') == 9
+        assert protocols.count('ARP') == 1
+        assert protocols.count('CDP') == 1
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gre_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity == "error"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gre_coverage.pcap.gz'),
+                    '-Y', '_ws.expert',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '8\tIncorrect GRE Checksum [should be 0xd709]',
+            ]
+
+    def test_gre_checksum(self, cmd_tshark, capture_file, test_env):
+        '''Good, bad and unverified (truncated capture). The fragment, frame 50, is not passed to GRE while IP reassembly is on.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'gre.flags.checksum == 1', 'gre.checksum', 'gre.checksum.status')
+        assert [(r[0], r[2]) for r in rows if r[0] in ('7', '8', '13', '31', '50', '51')] == [
+            ('7', '1'), ('8', '0'), ('13', '1'), ('31', '1'), ('51', '2')]
+        assert [r[1] for r in rows if r[0] == '8'] == ['0x1234']
+
+    def test_gre_key_sequence_ack(self, cmd_tshark, capture_file, test_env):
+        '''Key, enhanced GRE payload length and call id, sequence and
+        acknowledgment numbers.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'gre',
+                            'gre.key', 'gre.key.payload_length', 'gre.key.call_id',
+                            'gre.sequence_number', 'gre.ack_number')
+        by = {r[0]: r[1:] for r in rows}
+        assert by['9'] == ['0xdeadbeef', '', '', '', '']
+        assert by['10'] == ['', '', '', '77', '']
+        assert by['11'] == ['0x00000001', '', '', '2', '']
+        assert by['16'] == ['', '34', '4660', '', '']
+        assert by['17'] == ['', '34', '4660', '5', '']
+        assert by['18'] == ['', '34', '4660', '6', '5']
+        assert by['19'] == ['', '0', '4660', '', '6']
+        assert by['20'] == ['0x00010002', '', '', '', '']
+        assert by['21'] == ['0x11223344', '', '', '', '']
+
+    def test_gre_routing_tree(self, cmd_tshark, capture_file, test_env):
+        '''The source route entry fields are in the Routing item (they
+        were added to the GRE item before the fix).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gre_coverage.pcap.gz'),
+                '-Y', 'frame.number == 30', '-V', '-O', 'gre',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        start = lines.index('    Routing')
+        assert lines[start:start + 10] == [
+            '    Routing',
+            '        Address Family: 2048',
+            '        SRE Offset: 0',
+            '        SRE Length: 4',
+            '        Routing Information: c0000209',
+            '    Routing',
+            '        Address Family: 0',
+            '        SRE Offset: 0',
+            '        SRE Length: 0',
+            'Internet Protocol Version 4, Src: 10.0.0.1, Dst: 10.0.0.2',
+        ]
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'gre.routing', 'gre.routing.src_length')
+        assert rows == [['30', '4,0'], ['31', '8,2,0'], ['32', '0'], ['33', '1,0']]
+
+    def test_gre_3gpp2_attributes(self, cmd_tshark, capture_file, test_env):
+        '''The 3GPP2 attribute fields are one octet wide (they were 16 bits
+        wide before the fix, so the values were read from two octets).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'gre.3gpp2_attrib', 'gre.3gpp2_sdi', 'gre.3gpp2_fci',
+                            'gre.3gpp2_di', 'gre.ggp2_3gpp2_seg', 'gre.ggp2_flow_disc')
+        assert rows == [
+            ['23', 'True', 'False', 'True', '', ''],
+            ['24', 'False', 'True', 'True', '0x02', '1234'],
+            ['25', '', '', '', '0x01,0x02', ''],
+            ['26', '', '', '', '0x00,0x03', ''],
+            ['27', 'False', 'False', 'False', '', ''],
+            ['28', '', 'True', 'True', '', ''],
+            ['29', 'True', '', '', '', '00'],
+        ]
+        for frame, text in (
+                ('23', '        Flow Control Indication - XOFF/INDEFINITE'),
+                ('23', '            0... .... = Flow Control Indicator: XON'),
+                ('24', '            10.. .... = Type: Packet Ended (0x2)')):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('gre_coverage.pcap.gz'),
+                    '-Y', 'frame.number == ' + frame, '-V', '-O', 'gre',
+                ), encoding='utf-8', env=test_env)
+            assert text in stdout.splitlines()
+
+    def test_gre_wccp(self, cmd_tshark, capture_file, test_env):
+        '''WCCP version 1 has IPv4 right after the GRE header, version 2
+        has a redirect header.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'gre.wccp.redirect_header', 'gre.wccp.dynamic_service', 'gre.wccp.service_id',
+                            'gre.wccp.alternative_bucket', 'gre.wccp.primary_bucket')
+        assert rows == [
+            ['35', 'True', '5', '6', '7'],
+            ['36', 'False', '0', '0', '0'],
+            ['37', 'False', '255', '1', '2'],
+            ['38', 'True', '1', '1', '1'],
+        ]
+
+
+class TestDissectGrpc:
+    '''gRPC and gRPC-Web carried in HTTP/1.1 (media types application/grpc*,
+    HTTP/2 needs nghttp2 and is covered by TestDissectGprpc), from the
+    synthetic capture grpc_coverage.pcap.gz. The unary gRPC-Web calls of
+    TestDissectGrpcWeb are not repeated.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, passes, flt, *fields):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('grpc_coverage.pcap.gz'), '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_grpc_protocols(self, cmd_tshark, capture_file, test_env):
+        '''88 frames, no malformed packets or error expert infos in one
+        and two passes; the warnings are the undecompressable message of
+        frame 10 (one pass only) and the three overflowing message lengths.'''
+        assert len(self._fields(cmd_tshark, capture_file, test_env, (), 'frame')) == 88
+        for passes in ((), ('-2',)):
+            rows = self._fields(cmd_tshark, capture_file, test_env, passes,
+                                '_ws.malformed || _ws.expert.severity == "error"')
+            assert rows == []
+            rows = self._fields(cmd_tshark, capture_file, test_env, passes,
+                                '_ws.expert.severity == "warning"', '_ws.expert.message')
+            # In the second pass of -2 the grpc-encoding of an HTTP/1 message is not
+            # available any more, so the bad gzip message of frame 10 is not tried
+            # (a dissector issue, see the README).
+            first = [] if passes else [['10', 'Body decompression failed']]
+            assert rows == first + [
+                ['77', 'GRPC Malformed message data: only 11 bytes left, need at least 4294967300 bytes.'],
+                ['82', 'GRPC Malformed message data: only 11 bytes left, need at least 4294967296 bytes.'],
+                ['87', 'GRPC Malformed message data: only 11 bytes left, need at least 4294967297 bytes.'],
+            ]
+
+    def test_grpc_length_overflow(self, cmd_tshark, capture_file, test_env):
+        '''Message lengths close to 2^32 do not wrap the length check (the
+        message is reported as incomplete, and no GRPC message is shown).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {77, 82, 87}', 'grpc.message_length', '_ws.malformed')
+        assert rows == [['77', '', ''], ['82', '', ''], ['87', '', '']]
+
+    def test_grpc_protocol_types_and_trailers(self, cmd_tshark, capture_file, test_env):
+        '''gRPC, gRPC-Web and gRPC-Web-Text over HTTP/1.1; gRPC-Web trailer
+        frames; several messages in one body.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {4, 5, 19, 26, 40, 41}',
+                            'grpc.frame_type', 'grpc.message_length')
+        assert rows == [
+            ['4', '0', '9'],
+            ['5', '0,1', '13,34'],
+            ['19', '0', '9'],
+            ['26', '0', '9'],
+            ['40', '0,0,0', '9,0,8'],
+            ['41', '0,0', '13,13'],
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('grpc_coverage.pcap.gz'),
+                '-Y', 'frame.number == 5', '-V', '-O', 'grpc',
+            ), encoding='utf-8', env=test_env)
+        assert 'GRPC-Web Message: /helloworld.Greeter/SayHello, Response (Trailer)' in stdout
+        assert 'grpc-status: 0' in stdout
+        rows = self._fields(cmd_tshark, capture_file, test_env, (), 'frame.number in {4, 19, 26}',
+                            '_ws.col.protocol')
+        assert [r[1].split('/')[0] for r in rows] == ['GRPC-Web', 'GRPC-Web-Text', 'GRPC']
+
+    def test_grpc_compression(self, cmd_tshark, capture_file, test_env):
+        '''gzip and deflate messages are uncompressed; a compressed message
+        without a usable grpc-encoding is shown as data only.'''
+        for frame, text in (
+                (8, 'Message-encoded entity body (gzip): 30 bytes -> 204 bytes'),
+                (32, 'Message-encoded entity body (deflate): 18 bytes -> 204 bytes')):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('grpc_coverage.pcap.gz'),
+                    '-Y', 'frame.number == %d' % frame, '-V', '-O', 'grpc',
+                ), encoding='utf-8', env=test_env)
+            assert text in stdout
+        for frame in (42, 44, 46):
+            stdout = subprocess.check_output((cmd_tshark,
+                    '-r', capture_file('grpc_coverage.pcap.gz'),
+                    '-Y', 'frame.number == %d' % frame, '-V', '-O', 'grpc',
+                ), encoding='utf-8', env=test_env)
+            assert 'Compressed Flag: Compressed (1)' in stdout
+            assert 'Message-encoded entity body' not in stdout
+
+    def test_grpc_json_detection(self, cmd_tshark, capture_file, test_env):
+        '''JSON by content type (+json) and detected in application/grpc.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {34, 35, 36, 37, 38, 39}', '_ws.col.protocol')
+        assert [r[1] for r in rows] == ['GRPC/JSON'] * 6
+
+    def test_grpc_streaming_chunks(self, cmd_tshark, capture_file, test_env):
+        '''Chunked responses: messages split over chunks are reassembled and
+        shown in the chunk that completes them.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, (),
+                            'frame.number in {66, 70, 73}', 'grpc.message_length')
+        assert rows == [['66', '13,13'], ['70', '13,13,16'], ['73', '13,13']]
+
+
+class TestDissectGsmAbisOm2000:
+    @staticmethod
+    def om2k_run(cmd_tshark, capture_file, test_env, *args):
+        # OM2000 is reached through the OML dissector with the Ericsson
+        # dialect on LAPD with the GSM SAPI values (SAPI 62)
+        return subprocess.check_output((cmd_tshark,
+                '-o', 'lapd.use_gsm_sapi_values:TRUE',
+                '-o', 'gsm_abis_oml.oml_dialect:om2000',
+                '-r', capture_file('gsm_abis_om2000_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_abis_om2000_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is OM2000; none is malformed or has an error expert
+        info, in one and two passes.'''
+        run = TestDissectGsmAbisOm2000.om2k_run
+        stdout = run(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split()
+        assert len(protocols) == 299
+        assert protocols.count('OM2000') == 299
+        for passes in ((), ('-2',)):
+            stdout = run(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity == 0x800000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_abis_om2000_mo_record(self, cmd_tshark, capture_file, test_env):
+        '''The MO Record loop stops at the end of the record ("GSM OM2000: Fix
+        MO Record loop bound and time item offset"; frame 296 is the
+        reproducer, frame 258 a longer record).'''
+        run = TestDissectGsmAbisOm2000.om2k_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 296 || frame.number == 258',
+                '-Tfields', '-eframe.number', '-egsm_abis_om2000.unknown.val',
+                '-egsm_abis_om2000.mo_if.class', '-egsm_abis_om2000.mo_if.instance')
+        assert stdout.splitlines() == [
+            '258\taabb,<MISSING>,010203\t0x01,0x01\t0,2',
+            '296\taabb\t0x00,0x01\t0,2',
+        ]
+
+    def test_gsm_abis_om2000_calendar_time(self, cmd_tshark, capture_file, test_env):
+        '''A Calendar Time that ends the message is dissected inside the
+        packet (frame 297; before the fix the item was added six octets too
+        late and the frame was malformed). The time shown depends on the
+        time zone, so only its position is checked.'''
+        run = TestDissectGsmAbisOm2000.om2k_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 297 && gsm_abis_om2000.cal_time && !_ws.malformed',
+                '-Tfields', '-eframe.number')
+        assert stdout.split() == ['297']
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 297', '-T', 'pdml')
+        size = [l for l in stdout.splitlines() if 'name="gsm_abis_om2000.cal_time"' in l]
+        assert len(size) == 1
+        assert 'size="6"' in size[0]
+
+    def test_gsm_abis_om2000_expert_infos(self, cmd_tshark, capture_file, test_env):
+        '''Accordance information that is not "as requested", a rejected
+        request and an Enable Result whose MO state is not ENABLED are
+        reported.'''
+        run = TestDissectGsmAbisOm2000.om2k_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number >= 264 && frame.number <= 267 && gsm_abis_om2000.not_performed',
+                '-Tfields', '-eframe.number', '-egsm_abis_om2000.aip')
+        assert stdout.splitlines() == ['265\t0x01', '266\t0x03', '267\t0x09']
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_abis_om2000.ena_res_disabled', '-Tfields', '-eframe.number',
+                '-egsm_abis_om2000.mo_state')
+        assert stdout.splitlines() == ['190\t0', '191\t1', '193\t3', '194\t9']
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_abis_om2000.reject', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 34
+
+
+class TestDissectGsmAbisOml:
+    # The capture has three sections that each decode in one OML dialect
+    # (a preference): frames 1-302 ETSI (also ip.access), 303-388 Siemens
+    # BS-11, 389-463 ip.access. OML rides on LAPD SAPI 62, which needs the
+    # LAPD preference "Use GSM SAPI values" (TS 48.056).
+    @staticmethod
+    def oml_run(cmd_tshark, capture_file, test_env, dialect, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-o', 'lapd.use_gsm_sapi_values:TRUE',
+                '-o', 'gsm_abis_oml.oml_dialect:' + dialect,
+                '-r', capture_file('gsm_abis_oml_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_abis_oml_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is OML; no frame of a dialect's section is malformed
+        or has an error expert info with that dialect, in one and two
+        passes.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'etsi', '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split()
+        assert len(protocols) == 463
+        assert protocols.count('OML') == 463
+        for dialect, first, last in (('etsi', 1, 302), ('ipaccess', 1, 302),
+                                     ('siemens', 303, 388), ('ipaccess', 389, 463)):
+            for passes in ((), ('-2',)):
+                stdout = run(cmd_tshark, capture_file, test_env, dialect, *passes,
+                        '-Y', '(_ws.malformed || _ws.expert.severity == 0x800000)'
+                        ' && frame.number >= %d && frame.number <= %d' % (first, last),
+                        '-Tfields', '-eframe.number')
+                assert count_output(stdout) == 0, (dialect, first, last)
+
+    def test_gsm_abis_oml_manufacturer_id(self, cmd_tshark, capture_file, test_env):
+        '''The ip.access manufacturer ID is recognised with and without the
+        terminating NUL ("GSM OML: Fix ip.access manufacturer ID, test report
+        skip"; frames 270 and 271 are the reproducers); other IDs get an
+        expert info and the FOM is not dissected.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'etsi',
+                '-Y', 'frame.number >= 270 && frame.number <= 275',
+                '-Tfields', '-eframe.number', '-egsm_abis_oml.manuf_id_len',
+                '-egsm_abis_oml.fom.msg_type', '-egsm_abis_oml.expert.unknown_manuf')
+        assert stdout.splitlines() == [
+            '270\t12\t116\t',
+            '271\t13\t116\t',
+            '272\t11\t\t1',
+            '273\t13\t116\t',
+            '274\t6\t\t1',
+            '275\t0\t\t1',
+        ]
+
+    def test_gsm_abis_oml_length_mismatch(self, cmd_tshark, capture_file, test_env):
+        '''A length indicator that does not match is a warning.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'etsi',
+                '-Y', 'gsm_abis_oml.expert.length_mismatch', '-Tfields', '-eframe.number')
+        assert stdout.split() == ['262', '263', '268', '269']
+
+    def test_gsm_abis_oml_get_ari(self, cmd_tshark, capture_file, test_env):
+        '''The nested attributes of Get Attribute Response Info.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'etsi',
+                '-Y', 'frame.number >= 247 && frame.number <= 249',
+                '-Tfields', '-eframe.number', '-egsm_abis_oml.fom.attr.ari.not_reported_cnt',
+                '-egsm_abis_oml.fom.attr.adm_state', '-e_ws.col.info')
+        assert stdout.splitlines() == [
+            '247\t2\t0x02\tTEI:00 U, func=UI | BTS(00,00,ff) Get Attributes Response Unlocked Enabled ',
+            '248\t1,1,1,2\t0x02,0x02,0x02,0x02\tTEI:00 U, func=UI | BTS(00,00,ff) Get Attributes Unlocked Unlocked Unlocked Unlocked Enabled ',
+            '249\t0\t\tTEI:00 U, func=UI | BTS(00,00,ff) Get Attributes ',
+        ]
+
+    def test_gsm_abis_oml_siemens(self, cmd_tshark, capture_file, test_env):
+        '''The Siemens message types and object classes need the Siemens
+        dialect.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'siemens',
+                '-Y', 'frame.number == 303 || frame.number == 330',
+                '-Tfields', '-eframe.number', '-e_ws.col.info')
+        assert stdout.splitlines() == [
+            '303\tTEI:00 U, func=UI | SIE Adjacent Channel(00,00,ff) SIE Reset Resource ',
+            '330\tTEI:00 U, func=UI | SIE BTSE(00,03,ff) SIE Reconnect BTS ',
+        ]
+        stdout = run(cmd_tshark, capture_file, test_env, 'etsi',
+                '-Y', 'frame.number == 330', '-Tfields', '-e_ws.col.info')
+        assert stdout.strip() == 'TEI:00 U, func=UI | SIE BTSE(00,03,ff) Unknown 0xf1'
+
+    def test_gsm_abis_oml_ipaccess(self, cmd_tshark, capture_file, test_env):
+        '''ip.access attributes and the ip.access test report (BCCH
+        information) in the ip.access dialect.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'ipaccess',
+                '-Y', 'frame.number == 389 || frame.number == 390 || frame.number == 396',
+                '-Tfields', '-eframe.number', '-egsm_abis_oml.fom.attr.ipa.rsl_ip',
+                '-egsm_abis_oml.fom.attr.ipa.rsl_port', '-egsm_abis_oml.fom.attr.ipa.nsei',
+                '-egsm_abis_oml.fom.attr.ipa.nv_flags')
+        assert stdout.splitlines() == [
+            '389\t192.0.2.10\t3003\t\t',
+            '390\t\t\t\t0x011f',
+            '396\t\t\t1234\t',
+        ]
+        stdout = run(cmd_tshark, capture_file, test_env, 'ipaccess',
+                '-Y', 'frame.number >= 456 && frame.number <= 461',
+                '-Tfields', '-eframe.number', '-egsm_abis_oml.fom.testrep.result',
+                '-egsm_abis_oml.fom.testrep.ipa.bsic', '-egsm_abis_oml.fom.testrep.ipa.cell_id')
+        assert stdout.splitlines() == [
+            '456\t0\t\t',
+            '457\t1\t\t',
+            '458\t2\t43\t0x1234',
+            '459\t3\t43\t0x1234',
+            '460\t4\t43,43\t0x1234,0x1234',
+            '461\t0\t43\t0x1234',
+        ]
+
+    def test_gsm_abis_oml_test_report_skip(self, cmd_tshark, capture_file, test_env):
+        '''Unknown information elements of an ip.access test report are
+        skipped, so the channel usage element behind them (frame 456) is
+        found.'''
+        run = TestDissectGsmAbisOml.oml_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'ipaccess',
+                '-Y', 'frame.number == 456', '-Tfields',
+                '-egsm_abis_oml.fom.testrep.ipa_arfcn', '-egsm_abis_oml.fom.testrep.ipa_rxlev')
+        assert stdout.strip() == '291,359\t0,17'
+
+
+class TestDissectGsmAbisPgsl:
+    # P-GSL rides on LAPD SAPI 12, which needs the LAPD preference "Use GSM
+    # SAPI values" (TS 48.056). Frames 1-60 are dissected with the default
+    # Incremental Redundancy setting, frames 61-67 (with the IR header in
+    # DLDATA-IND) need gsm_abis_pgsl.ir:TRUE.
+    @staticmethod
+    def pgsl_run(cmd_tshark, capture_file, test_env, ir, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-o', 'lapd.use_gsm_sapi_values:TRUE',
+                '-o', 'gsm_abis_pgsl.ir:' + ir,
+                '-r', capture_file('gsm_abis_pgsl_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_abis_pgsl_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is P-GSL; no frame is malformed or has an error expert
+        info in the section that matches the IR preference, in one and two
+        passes.'''
+        run = TestDissectGsmAbisPgsl.pgsl_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'gsm_abis_pgsl', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 67
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 67
+        for ir, first, last in (('FALSE', 1, 60), ('TRUE', 61, 67)):
+            for passes in ((), ('-2',)):
+                stdout = run(cmd_tshark, capture_file, test_env, ir, *passes,
+                        '-Y', '(_ws.malformed || _ws.expert.severity == 0x800000)'
+                        ' && frame.number >= %d && frame.number <= %d' % (first, last),
+                        '-Tfields', '-eframe.number')
+                assert count_output(stdout) == 0, (ir, first, last)
+
+    def test_gsm_abis_pgsl_dldata_req_and_status(self, cmd_tshark, capture_file, test_env):
+        '''DLDATA-REQ and STATUS-IND fields.'''
+        run = TestDissectGsmAbisPgsl.pgsl_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'gsm_abis_pgsl.ccu_ta', '-Tfields', '-eframe.number',
+                '-egsm_abis_pgsl.tn_bitmap', '-egsm_abis_pgsl.a_fn_d',
+                '-egsm_abis_pgsl.ccu_ta', '-egsm_abis_pgsl.ack_req')
+        assert stdout.splitlines() == [
+            '1\t0x01\t1000\t0\tFalse',
+            '2\t0x02\t1001\t5\tTrue',
+            '3\t0x04\t1002\t10\tFalse',
+            '4\t0x08\t1003\t63\tTrue',
+        ]
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'gsm_abis_pgsl.cause', '-Tfields', '-eframe.number',
+                '-egsm_abis_pgsl.cause', '-egsm_abis_pgsl.addl_info')
+        assert stdout.splitlines() == [
+            '52\t0\t0x10', '53\t1\t0x11', '54\t2\t0x12', '55\t3\t0x13', '56\t4\t0x14',
+            '60\t1\t0x02',
+        ]
+
+    def test_gsm_abis_pgsl_access_bursts(self, cmd_tshark, capture_file, test_env):
+        '''The four access bursts of a PRACH block: levels, 10-bit access
+        delays, indicators and types (valid bursts only reach RLC/MAC).'''
+        run = TestDissectGsmAbisPgsl.pgsl_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'frame.number == 36', '-Tfields', '-egsm_abis_pgsl.ab.rxlev',
+                '-egsm_abis_pgsl.ab.acc_delay', '-egsm_abis_pgsl.ab.abi',
+                '-egsm_abis_pgsl.ab.type')
+        assert stdout.strip() == '30,31,32,33\t100,1023,5,900\t7,7,7,7\t0,1,2,3'
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'frame.number == 37', '-Tfields', '-egsm_abis_pgsl.ab.abi',
+                '-egsm_abis_pgsl.ab.type')
+        assert stdout.strip() == '0,0,7,0\t0,1,2,3'
+
+    def test_gsm_abis_pgsl_egprs(self, cmd_tshark, capture_file, test_env):
+        '''EGPRS header types 1-3 are passed to the RLC/MAC dissector, which
+        selects the MCS from the header; the data blocks are re-aligned and
+        dissected too.'''
+        run = TestDissectGsmAbisPgsl.pgsl_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'FALSE',
+                '-Y', 'frame.number == 17 || frame.number == 38 || frame.number == 39 || frame.number == 40',
+                '-Tfields', '-eframe.number', '-e_ws.col.info')
+        lines = stdout.splitlines()
+        assert 'EGPRS DL DATA: MCS8' in lines[0]
+        assert 'EGPRS UL DATA: MCS7' in lines[1]
+        assert 'EGPRS UL DATA: MCS5' in lines[2]
+        assert 'EGPRS UL DATA: MCS3' in lines[3]
+        # the two re-aligned data blocks of header type 1
+        assert 'Len=68 Len=68' in lines[0]
+        assert 'Len=52 Len=52' in lines[1]
+
+    def test_gsm_abis_pgsl_incremental_redundancy(self, cmd_tshark, capture_file, test_env):
+        '''The Incremental Redundancy header of DLDATA-IND (preference).'''
+        run = TestDissectGsmAbisPgsl.pgsl_run
+        stdout = run(cmd_tshark, capture_file, test_env, 'TRUE',
+                '-Y', 'gsm_abis_pgsl.ir_sign_type && frame.number >= 61', '-Tfields', '-eframe.number',
+                '-egsm_abis_pgsl.ir_tfi', '-egsm_abis_pgsl.ir_sign_type',
+                '-egsm_abis_pgsl.data_len')
+        lines = stdout.splitlines()
+        assert [l.split('\t')[0] for l in lines] == ['61', '62', '63', '64', '65', '66']
+        assert [l.split('\t')[2] for l in lines] == ['0', '1', '2', '3', '3', '1']
+        assert [l.split('\t')[3] for l in lines] == ['23', '23', '23', '23', '54', '160']
+
+
+class TestDissectGsmAbisTfp:
+    @staticmethod
+    def tfp_run(cmd_tshark, capture_file, test_env, *args):
+        # TFP rides on LAPD with the GSM SAPI values (TS 48.056)
+        return subprocess.check_output((cmd_tshark,
+                '-o', 'lapd.use_gsm_sapi_values:TRUE',
+                '-r', capture_file('gsm_abis_tfp_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_abis_tfp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is TFP; none is malformed or has an expert info, in
+        one and two passes.'''
+        run = TestDissectGsmAbisTfp.tfp_run
+        stdout = run(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split()
+        assert len(protocols) == 51
+        assert protocols.count('TFP') == 51
+        for passes in ((), ('-2',)):
+            stdout = run(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_abis_tfp_frame_type_and_delay(self, cmd_tshark, capture_file, test_env):
+        '''The frame type is shifted down and the delay information is read
+        at the right place ("GSM TFP: Fix frame type and delay info
+        decoding"; frame 35 is the reproducer: 16k, FR, delay 5).'''
+        run = TestDissectGsmAbisTfp.tfp_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 35 || frame.number == 3 || frame.number == 4',
+                '-Tfields', '-eframe.number',
+                '-egsm_abis_tfp.delay_info', '-egsm_abis_tfp.seq_nr', '-e_ws.col.info')
+        lines = stdout.splitlines()
+        assert lines[0] == '3\t3\t4\tTEI:01 U, func=UI | TS=2, Seq=4, Full Rate (16kbps), TFP-FR-IND '
+        assert lines[1] == '4\t4\t6\tTEI:01 U, func=UI | TS=3, Seq=6, Full Rate (16kbps), TFP-EFR-IND '
+        assert lines[2] == '35\t5\t3\tTEI:01 U, func=UI | TS=1, Seq=3, Full Rate (16kbps), TFP-FR-IND '
+
+    def test_gsm_abis_tfp_amr_rate(self, cmd_tshark, capture_file, test_env):
+        '''The AMR rate comes from the length of the payload.'''
+        run = TestDissectGsmAbisTfp.tfp_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_abis_tfp.amr.rate', '-Tfields', '-egsm_abis_tfp.amr.rate',
+                '-E', 'occurrence=f')
+        rates = stdout.split()
+        assert rates[-13:] == ['1', '5', '12', '13', '15', '17', '19', '20', '26', '31', '7', '12', '31']
+
+    def test_gsm_abis_tfp_tail_bit(self, cmd_tshark, capture_file, test_env):
+        '''A clear tail bit extends the header: the payload of frame 50 starts
+        3 octets later.'''
+        run = TestDissectGsmAbisTfp.tfp_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 50', '-Tfields', '-edata.len', '-edata.data')
+        assert stdout.strip().startswith('40\t00070e15')
+
+
+class TestDissectGsmABssmap:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_a_bssmap_coverage.pcap.gz'), *args),
+                encoding='utf-8', env=test_env).splitlines()
+
+    def test_gsm_a_bssmap_messages(self, cmd_tshark, capture_file, test_env):
+        '''All 84 BSSMAP message types that have a decoder, with the
+        optional elements, BSSAP over connectionless and connection oriented
+        SCCP (found by the SCCP heuristic) and the field elements in RANAP
+        decode without malformed packets, in one and two passes. The only
+        warning is the Resource Indication in frame 586, see
+        test_gsm_a_bssmap_resource_available.'''
+        protocols = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        assert len(protocols) == 612
+        assert protocols.count('BSSAP') == 596
+        assert protocols.count('BSSAP/BSSLAP') == 5
+        assert protocols.count('SCCP (Int. ITU)') == 5
+        assert protocols.count('RANAP') == 6
+        types = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.bssmap', '-Tfields', '-egsm_a.bssmap.msgtype')
+        assert len(types) == 601
+        assert len(set(types)) == 84
+        for passes in ((), ('-2',)):
+            lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number')
+            assert lines == ['586']
+
+    def test_gsm_a_bssmap_resource_available(self, cmd_tshark, capture_file, test_env):
+        '''The Resource Available element has a 2 octet full rate and a 2
+        octet half rate count for each of the 5 bands. They were read as one
+        4 octet value, so the full rate count showed the half rate value.
+        The element is a TV element whose decoder returns an unknown length,
+        so the dissector warns about the missing mandatory elements.'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a_bssmap.full_rate_channels_available',
+                '-Tfields', '-eframe.number',
+                '-egsm_a_bssmap.full_rate_channels_available',
+                '-egsm_a_bssmap.half_rate_channels_available',
+                '-e_ws.expert.message')
+        assert len(lines) == 1
+        number, full, half, expert = lines[0].split('\t')
+        assert number == '586'
+        assert full == '256,257,258,259,260'
+        assert half == '512,513,514,515,516'
+        assert expert.startswith('Missing Mandatory element (0x1c) Resource Indication Method')
+
+    def test_gsm_a_bssmap_speech_codec_length(self, cmd_tshark, capture_file, test_env):
+        '''Each Speech Codec Element of a Speech Codec (List) has its own
+        length: the length was only set on the last one.'''
+        from xml.etree import ElementTree
+        pdml = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_a_bssmap_coverage.pcap.gz'),
+                '-Y', 'gsm_a.bssmap.speech_codec', '-Tpdml'),
+                env=test_env)
+        sizes = {}
+        for field in ElementTree.fromstring(pdml).iter('field'):
+            show = field.get('show', '')
+            if show.startswith('Speech Codec Element '):
+                codec = show.split(' - ', 1)[1] if ' - ' in show else ''
+                sizes.setdefault(codec, set()).add(int(field.get('size')))
+        assert sizes['GSM FR'] == {1}
+        assert sizes['GSM EFR'] == {1}
+        assert sizes['FR_AMR'] == {3}
+        assert sizes['HR_AMR'] == {3}
+        assert sizes['OHR_AMR'] == {3}
+        assert sizes['FR_AMR-WB'] == {2}
+        assert sizes['OFR_AMR-WB'] == {2}
+        assert sizes['OHR_AMR-WB'] == {2}
+
+    def test_gsm_a_bssmap_nested_field_elements(self, cmd_tshark, capture_file, test_env):
+        '''Cell Load Information Group field elements are nested, each one
+        inside the length of the one before it (frame 585, 15 levels, the
+        reproducer of the unbounded recursion). RANAP hands the same
+        field elements to BSSMAP (frames 607-612).'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 585',
+                '-Tfields', '-egsm_a.bssmap.field_elem_id')
+        assert lines == [','.join(['0x0b'] * 15)]
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'ranap', '-Tfields', '-eframe.number',
+                '-egsm_a.bssmap.field_elem_id')
+        assert lines == [
+            '607\t0x01,0x02,0x03,0x05,0x06',
+            '608\t0x01,0x02,0x03,0x05,0x06',
+            '609\t0x09,0x0a,0x0c,0x0d,0x0e,0x6f,0x95',
+            '610\t0x09,0x0a,0x0c,0x0d,0x0e,0x6f,0x95',
+            '611\t0x0b,0x0c,0x0b,0x0b,0x09,0x0b',
+            '612\t0x0b,0x0c,0x0b,0x0b,0x09,0x0b',
+        ]
+
+    def test_gsm_a_bssmap_cell_discriminator(self, cmd_tshark, capture_file, test_env):
+        '''With SCCP association tracking the cell identification
+        discriminator of the first message of a connection selects the
+        decoder of the Layer 3 Information of the Handover Command that
+        follows (frames 589, 593, 597, 601 and 605); without it the
+        Layer 3 Information is not decoded. Both passes agree.'''
+        args = ('-Y', 'frame.number in {587..606} and gsm_a.dtap', '-Tfields', '-eframe.number')
+        assert self._tshark(cmd_tshark, capture_file, test_env, *args) == []
+        for passes in ((), ('-2',)):
+            assert self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-o', 'sccp.trace_sccp:TRUE', *args) == [
+                '589', '593', '597', '601', '605']
+
+    def test_gsm_a_bssmap_aoip_and_apdu(self, cmd_tshark, capture_file, test_env):
+        '''The AoIP Transport Layer Address is an IPv4 (6 octets) or an IPv6
+        (18 octets) address and a UDP port; the APDU element carries BSSLAP.'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {1, 2}', '-Tfields', '-eframe.number',
+                '-egsm_a.bssmap.aoip_trans_ipv4', '-egsm_a.bssmap.aoip_trans_ipv6',
+                '-egsm_a.bssmap.aoip_trans_port')
+        assert lines == ['1\t10.0.0.1\t\t5060', '2\t\t2001:db8::1\t5060']
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'bsslap', '-Tfields', '-eframe.number',
+                '-egsm_bsslap.msg_type')
+        assert lines == ['333\t1', '334\t10', '339\t10', '509\t1', '510\t10']
+
+
+class TestDissectGsmACommon:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gsm_a_common_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    @staticmethod
+    def _frames(cmd_tshark, capture_file, test_env, flt, *passes):
+        stdout = TestDissectGsmACommon._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                               '-Y', flt, '-Tfields', '-eframe.number')
+        return [int(n) for n in stdout.split()]
+
+    def test_gsm_a_common_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed and no expert info has the error severity, in one
+        and two passes.'''
+        for passes in ((), ('-2',)):
+            assert self._frames(cmd_tshark, capture_file, test_env,
+                                '_ws.malformed || _ws.expert.severity >= 0x00800000', *passes) == []
+
+    def test_gsm_a_common_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''The Info column of every frame is the same in one and two passes.'''
+        one = self._tshark(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.info')
+        two = self._tshark(cmd_tshark, capture_file, test_env, '-2', '-Tfields', '-e_ws.col.info')
+        assert one == two
+
+    def test_gsm_a_common_protocols(self, cmd_tshark, capture_file, test_env):
+        '''772 frames on the A interface (SCTP, M3UA, SCCP, BSSAP): 288 BSSMAP messages
+        and 483 DTAP messages, of which 115 RR, 41 GMM, 51 SM and 78 MM messages; the
+        elements of all of them are decoded by the common code.'''
+        def count(flt):
+            return len(self._frames(cmd_tshark, capture_file, test_env, flt))
+        assert count('frame') == 772
+        assert count('sccp') == 772
+        assert count('gsm_a.bssmap.msgtype') == 288
+        assert count('gsm_a.dtap') == 483
+        assert count('gsm_a.dtap.msg_rr_type') == 115
+        assert count('gsm_a.dtap.msg_gmm_type') == 41
+        assert count('gsm_a.dtap.msg_sm_type') == 51
+        assert count('gsm_a.dtap.msg_mm_type') == 78
+
+    def test_gsm_a_common_location_estimate(self, cmd_tshark, capture_file, test_env):
+        '''Frames 664-674 are Perform Location Response messages with a Location Estimate
+        of each shape: ellipsoid point, with uncertainty circle and ellipse, polygon, with
+        altitude, with altitude and uncertainty ellipsoid, ellipsoid arc and the four
+        high accuracy shapes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number >= 664 && frame.number <= 674',
+                              '-Tfields', '-egsm_a.gad.location_estimate')
+        assert stdout.split() == ['0', '1', '3', '5', '8', '9', '10', '11', '12', '13', '14']
+
+    def test_gsm_a_common_velocity_estimate(self, cmd_tshark, capture_file, test_env):
+        '''Frames 675-678 carry a Velocity Estimate of each of the four types.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number >= 675 && frame.number <= 678',
+                              '-Tfields', '-egsm_a.gad.velocity_type')
+        assert stdout.split() == ['0', '1', '2', '3']
+
+    def test_gsm_a_common_stats_tap(self, cmd_tshark, capture_file, test_env):
+        '''The BSSMAP statistics table counts the messages by type.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-q', '-z', 'gsm_a,bssmap')
+        rows = {}
+        total = 0
+        for line in stdout.splitlines():
+            cols = [c.strip() for c in line.split('|')]
+            if len(cols) >= 3 and cols[0].isdigit():
+                rows[cols[1]] = int(cols[2])
+                total += int(cols[2])
+        assert rows['Assignment Request'] == 6
+        assert rows['Assignment Complete'] == 1
+        assert rows['Assignment Failure'] == 2
+        assert total == 288
+
+
+class TestDissectGsmADtap:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gsm_a_dtap_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    def test_gsm_a_dtap_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed and no expert info has the error severity, in one
+        and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.malformed || _ws.expert.severity >= 0x00800000',
+                                  '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_a_dtap_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''The Info column of every frame is the same in one and two passes.'''
+        one = self._tshark(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.info')
+        two = self._tshark(cmd_tshark, capture_file, test_env, '-2', '-Tfields', '-e_ws.col.info')
+        assert one == two
+
+    def test_gsm_a_dtap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''775 frames: A interface (SCTP, M3UA, SCCP, BSSAP). 10 of them are
+        SCCP connection set up (frames 1-2, and 3 connections at the end), the
+        other 765 have a DTAP message. The group and broadcast call control
+        messages are decoded (they need the subtree arrays registered by the fix).'''
+        def count(flt):
+            return count_output(self._tshark(cmd_tshark, capture_file, test_env,
+                                             '-Y', flt, '-Tfields', '-eframe.number'))
+        assert count('frame') == 775
+        assert count('sccp') == 775
+        assert count('gsm_a.dtap') == 765
+        assert count('gsm_a.dtap.msg_gcc_type') == 72
+        assert count('gsm_a.dtap.msg_bcc_type') == 66
+        assert count('gsm_a.dtap.msg_cc_type') == 329
+        assert count('gsm_a.dtap.msg_mm_type') == 196
+        assert count('gsm_a.dtap.msg_ss_type') == 23
+        assert count('gsm_a.dtap.msg_tp_type') == 69
+        assert count('gsm_a.dtap.msg_sms_type') == 7
+
+    def test_gsm_a_dtap_info(self, cmd_tshark, capture_file, test_env):
+        '''Info column of a group call control, a test procedure and a call control frame.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number in {3, 60, 684, 700}', '-Tfields', '-eframe.number', '-e_ws.col.info')
+        assert [' '.join(l.split()) for l in stdout.splitlines()] == [
+            '3 DT1 (DTAP) (GCC) Immediate Setup',
+            '60 DT1 (DTAP) (GCC) Get Status',
+            '684 DT1 (DTAP) (TP) Close UE Test Loop',
+            '700 DT1 (DTAP) (TP) Reset UE Positioning Stored Information']
+
+    def test_gsm_a_dtap_mbms_short_transmission_identity(self, cmd_tshark, capture_file, test_env):
+        '''Frame 684 is a Close UE Test Loop with mode 3: the MBMS short transmission
+        identity item covers the octet after the mode octet (it covered the mode octet
+        before the fix) and the shown value is the 5 bit identity plus one.'''
+        import xml.etree.ElementTree as ET
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number==684', '-Tpdml')
+        fields = {f.get('name'): f for f in ET.fromstring(stdout).iter('field')}
+        mode = fields['gsm_a.dtap.ue_test_loop_mode']
+        ident = fields['gsm_a_dtap.mbms_short_transmission_identity']
+        assert mode.get('show') == '2'
+        assert int(ident.get('pos')) == int(mode.get('pos')) + 1
+        assert ident.get('size') == '1'
+        assert ident.get('show') == '2'
+
+    def test_gsm_a_dtap_emergency_number_list(self, cmd_tshark, capture_file, test_env):
+        '''Frame 704 is a Location Updating Accept with an Emergency Number List
+        of two entries of 3 octets (service category and two octets of digits).'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number==704',
+                              '-Tfields', '-egsm_a.dtap.emerg_num_info_length', '-e_ws.col.info')
+        assert stdout.split('\t')[0] == '3,3'
+        assert 'Location Updating Accept' in stdout
+
+    def test_gsm_a_dtap_causes(self, cmd_tshark, capture_file, test_env):
+        '''Cause values of the "Normal call clearing", "User busy" and a "Treat as"
+        range (cause 2) are present.'''
+        for cause in (16, 17, 2):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', f'gsm_a.dtap.cause == {cause}',
+                                  '-Tfields', '-eframe.number')
+            assert count_output(stdout) >= 1, cause
+
+
+class TestDissectGsmAGm:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_a_gm_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_a_gm_messages(self, cmd_tshark, capture_file, test_env):
+        '''Exported PDU frames with GMM (200) and SM (149) messages of every
+        type; nothing is malformed and there is no warning, in one and two
+        passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-eframe.number')
+        assert len(stdout.split()) == 349
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.dtap.msg_gmm_type', '-Tfields', '-egsm_a.dtap.msg_gmm_type')
+        types = stdout.split()
+        assert len(types) == 200
+        assert len(set(types)) == 23
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.dtap.msg_sm_type', '-Tfields', '-egsm_a.dtap.msg_sm_type')
+        types = stdout.split()
+        assert len(types) == 149
+        assert len(set(types)) == 29
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity > 0x00400000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_a_gm_ra_capability(self, cmd_tshark, capture_file, test_env):
+        '''MS Radio Access Capability with every access technology type.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.gm.gmm.acc_tech_type', '-Tfields',
+                '-egsm_a.gm.gmm.acc_tech_type', '-egsm_a.gm.gmm.acc_cap_struct_len')
+        techs = set()
+        n = 0
+        for line in stdout.splitlines():
+            techs.update(line.split('\t')[0].split(','))
+            n += len(line.split('\t')[1].split(','))
+        assert techs == {'0', '1', '2', '3', '4', '5', '6', '7', '8', '10', '11', '14', '15'}
+        assert n >= 190
+
+    def test_gsm_a_gm_pco_operator_specific(self, cmd_tshark, capture_file, test_env):
+        '''Operator specific PCO containers (id 0xff00 and above) of length
+        3 or more show the PLMN and application data; shorter ones (2 and 1
+        octets) are accepted without reading beyond them (fixed in "GSM A
+        GM: Fix PCO and TFT length handling and small errors").'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 70', '-Tfields', '-egsm_a.gm.sm.pco_pid',
+                '-egsm_a.gm.sm.app_spec_info')
+        pids, info = stdout.rstrip('\n').split('\t')
+        pids = pids.split(',')
+        for p in ('0xff00', '0xff01', '0xff02', '0xff03'):
+            assert p in pids
+        assert info == '617070'
+
+    def test_gsm_a_gm_pco_ids(self, cmd_tshark, capture_file, test_env):
+        '''Many different PCO container ids in both directions.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.gm.sm.pco_pid', '-Tfields', '-egsm_a.gm.sm.pco_pid')
+        ids = {i for l in stdout.split() for i in l.split(',')}
+        assert len(ids) == 68
+        for i in ('0xc021', '0xc023', '0x8021', '0x0001', '0x000d', '0x0016', '0x0031', '0x0032', '0x0058'):
+            assert i in ids
+
+    def test_gsm_a_gm_tft_pdp_address(self, cmd_tshark, capture_file, test_env):
+        '''Traffic flow templates of every operation code and PDP
+        addresses of each type.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.gm.sm.tft.op_code', '-Tfields', '-egsm_a.gm.sm.tft.op_code')
+        ops = stdout.split()
+        assert sorted(set(ops)) == ['1', '2', '3', '4', '5', '6', '7']
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_a.gm.sm.pdp_type_number', '-Tfields', '-egsm_a.gm.sm.pdp_type_number')
+        nums = {i for l in stdout.split() for i in l.split(',')}
+        assert nums == {'0', '1', '9', '33', '48', '87', '119', '141'}
+
+
+class TestDissectGsmARp:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gsm_a_rp_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    @staticmethod
+    def _frames(cmd_tshark, capture_file, test_env, flt, *passes):
+        stdout = TestDissectGsmARp._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                           '-Y', flt, '-Tfields', '-eframe.number')
+        return [int(n) for n in stdout.split()]
+
+    def test_gsm_a_rp_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed and no expert info has the error severity, in one
+        and two passes.'''
+        for passes in ((), ('-2',)):
+            assert self._frames(cmd_tshark, capture_file, test_env,
+                                '_ws.malformed || _ws.expert.severity >= 0x00800000', *passes) == []
+
+    def test_gsm_a_rp_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''The Info column of every frame is the same in one and two passes.'''
+        one = self._tshark(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.info')
+        two = self._tshark(cmd_tshark, capture_file, test_env, '-2', '-Tfields', '-e_ws.col.info')
+        assert one == two
+
+    def test_gsm_a_rp_message_types(self, cmd_tshark, capture_file, test_env):
+        '''48 frames: 2 SCCP set up, 36 CP messages on the A interface, 7 SIP MESSAGE
+        requests and 5 HTTP requests (NF SMS). 44 of them have an RP message; the
+        count per RP message type.'''
+        def count(flt):
+            return len(self._frames(cmd_tshark, capture_file, test_env, flt))
+        assert count('frame') == 48
+        assert count('gsm_a.rp') == 44
+        assert count('gsm_a.rp.msg_type == 0x00') == 5    # RP-DATA, MS to network
+        assert count('gsm_a.rp.msg_type == 0x01') == 4    # RP-DATA, network to MS
+        assert count('gsm_a.rp.msg_type == 0x02') == 5    # RP-ACK, MS to network
+        assert count('gsm_a.rp.msg_type == 0x03') == 5    # RP-ACK, network to MS
+        assert count('gsm_a.rp.msg_type == 0x04') == 7    # RP-ERROR, MS to network
+        assert count('gsm_a.rp.msg_type == 0x05') == 7    # RP-ERROR, network to MS
+        assert count('gsm_a.rp.msg_type == 0x06') == 6    # RP-SMMA
+        assert count('sip && gsm_a.rp') == 7
+
+    def test_gsm_a_rp_embedded_tpdu(self, cmd_tshark, capture_file, test_env):
+        '''The TPDU in the RP user data is handed to the GSM SMS dissector.'''
+        frames = self._frames(cmd_tshark, capture_file, test_env, 'gsm_sms')
+        assert len(frames) == 21
+        assert 3 in frames and 6 in frames
+
+    def test_gsm_a_rp_nf_media_type(self, cmd_tshark, capture_file, test_env):
+        '''Five HTTP requests carry an SMS payload. When the contentId of the JSON part
+        matches the Content-Id of the SMS part (frames 44 and 46) the part is dissected
+        as a DTAP message, otherwise as an RP message (frames 45, 47, 48).'''
+        assert self._frames(cmd_tshark, capture_file, test_env, 'http && gsm_a.dtap') == [44, 46]
+        assert self._frames(cmd_tshark, capture_file, test_env, 'http && gsm_a.rp && !gsm_a.dtap') == [45, 47, 48]
+
+    def test_gsm_a_rp_causes(self, cmd_tshark, capture_file, test_env):
+        '''RP-Cause values: 8 (operator determined barring) and 22 (memory capacity exceeded).'''
+        for cause in (8, 22):
+            assert len(self._frames(cmd_tshark, capture_file, test_env, f'gsm_a.rp.cause == {cause}')) >= 2
+
+    def test_gsm_a_rp_extraneous_data(self, cmd_tshark, capture_file, test_env):
+        '''Two RP messages have extra octets after the last element (frames 33 and 34).'''
+        assert self._frames(cmd_tshark, capture_file, test_env, 'gsm_a.rp.extraneous_data') == [33, 34]
+
+
+class TestDissectGsmARr:
+    @staticmethod
+    def _rows(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsm_a_rr_coverage.pcapng.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsm_a_rr_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''1364 frames (GSMTAP and Exported PDU), none malformed or with an
+        error expert info, in one and two passes.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env)
+        assert len(rows) == 1364
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gsm_a_rr_coverage.pcapng.gz'),
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Error"',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gsm_a_rr_rach(self, cmd_tshark, capture_file, test_env):
+        '''All 256 values of the channel request reach the RACH dissector.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                          flt='frame.number >= 1 && _ws.col.info contains "(RACH)"')
+        assert len(rows) == 256
+
+    def test_gsm_a_rr_message_coverage(self, cmd_tshark, capture_file, test_env):
+        '''Most RR message types are present (DTAP RR message types and
+        CCCH/SACCH short PD messages).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_a.dtap.msg_rr_type', flt='gsm_a.dtap.msg_rr_type')
+        assert len({r[1] for r in rows}) >= 70
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_a.rr.short_pd_type', flt='gsm_a.rr.short_pd_type')
+        assert len({r[1] for r in rows}) >= 5
+
+    def test_gsm_a_rr_tmgi_mcc_mnc(self, cmd_tshark, capture_file, test_env):
+        '''The TMGI of the IA Rest Octets (frame 1346) decodes with MCC and
+        MNC in the TMGI tree (they ran past the block before the fix).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_a.rr.mobile_country_code', 'gsm_a.rr.mobile_network_code',
+                          flt='frame.number == 1346')
+        assert rows == [['1346', '262', '001']]
+
+    def test_gsm_a_rr_cell_selection_tdd(self, cmd_tshark, capture_file, test_env):
+        '''After the UTRAN TDD ARFCN of the cell selection indicator the
+        next flags are read from the right bit (frame 1347).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_a.rr.tdd_uarfcn', flt='frame.number == 1347')
+        assert rows == [['1347', '10241']]
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_a.rr.nr_of_fdd_cells', flt='frame.number in {1353, 1354}')
+        assert rows == [['1353', '2,11'], ['1354', '5,26']]
+
+    def test_gsm_a_rr_short_freq_list(self, cmd_tshark, capture_file, test_env):
+        '''A variable bit map frequency list of 2 octets gives an under-run
+        note and does not wrap around (frame 1348).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          '_ws.expert.message', flt='frame.number == 1348 && !_ws.malformed')
+        assert len(rows) == 1
+        assert 'IE under-runs stated length' in rows[0][1]
+
+    def test_gsm_a_rr_long_immediate_assignment(self, cmd_tshark, capture_file, test_env):
+        '''Immediate Assignment messages of 250, 260 and 300 octets decode
+        with all their padding and no expert info (frames 1349-1351).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                          '_ws.expert.message', flt='frame.number in {1349, 1350, 1351}')
+        assert [(r[1].strip(), r[2] if len(r) > 2 else '') for r in rows] == \
+            [('(DTAP) (RR) Immediate Assignment', '')] * 3
+
+    def test_gsm_a_rr_nri_preference(self, cmd_tshark, capture_file, test_env):
+        '''The NRI of the TLLI in the GPRS Suspension Request (frame 1364)
+        is decoded for lengths 1 to 10 only; a length of 70 gives no
+        dissector bug.'''
+        for n, expected in (('3', ['1364', '7']), ('0', None), ('70', None)):
+            rows = self._rows(cmd_tshark, capture_file, test_env, 'gsm_a.rr.nri',
+                              flt='frame.number == 1364 && gsm_a.rr.nri',
+                              extra=('-ogsm_a.rr.nri_length:' + n,))
+            assert (rows[0] if rows else None) == expected
+
+
+class TestDissectGsmBsslap:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_bsslap_coverage.pcap.gz'), *args),
+                encoding='utf-8', env=test_env).splitlines()
+
+    def test_gsm_bsslap_messages(self, cmd_tshark, capture_file, test_env):
+        '''All BSSLAP messages with every element, carried in the APDU
+        element of BSSMAP Connection Oriented Information messages over
+        SCCP, decode without warnings or malformed packets in one and two
+        passes; the RRLP Position Command/Response elements reach RRLP.'''
+        protocols = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        assert len(protocols) == 65
+        assert protocols.count('BSSAP/BSSLAP') == 61
+        assert protocols.count('BSSAP/BSSLAP/RRLP') == 4
+        types = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'bsslap', '-Tfields', '-egsm_bsslap.msg_type')
+        assert len(types) == 65
+        assert sorted({int(t) for t in types}) == [0, 1, 2, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 255]
+        for passes in ((), ('-2',)):
+            assert self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number') == []
+
+    def test_gsm_bsslap_lac(self, cmd_tshark, capture_file, test_env):
+        '''The Location Area Code is two octets (it was one octet with a
+        6 bit mask, so 0xfffe showed as 0x3f).'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_bsslap.lac', '-Tfields', '-eframe.number',
+                '-egsm_bsslap.lac')
+        assert lines == ['18\t42', '19\t65534']
+
+    def test_gsm_bsslap_cell_identity_list(self, cmd_tshark, capture_file, test_env):
+        '''A Cell Identity List holds cells of all four discriminators in
+        a row (the serving cell identity comes first), and each cell item is as
+        long as its cell identification
+        (frame 6).'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 6', '-Tfields',
+                '-egsm_bsslap.cell_id_disc', '-egsm_a.bssmap.cell_ci')
+        assert lines == ['0,1,2,3,1\t0x1234,0x1234,0x1234,0x1234']
+
+
+class TestDissectGsmBssmapLe:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_bssmap_le_coverage.pcap.gz'), *args),
+                encoding='utf-8', env=test_env).splitlines()
+
+    def test_gsm_bssmap_le_messages(self, cmd_tshark, capture_file, test_env):
+        '''All BSSMAP-LE messages with the elements the dissector decodes,
+        named by Exported PDUs (bssap_le with its header, and the bare
+        gsm_bssmap_le), decode without warnings or malformed packets in
+        one and two passes.'''
+        types = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_bssmap_le', '-Tfields', '-egsm_bssmap_le.msgtype')
+        assert len(types) == 52
+        assert {t: types.count(t) for t in sorted(set(types))} == {
+            '0x20': 1, '0x21': 1, '0x2a': 8, '0x2b': 8, '0x2d': 7, '0x2e': 7,
+            '0x2f': 8, '0x30': 3, '0x31': 2, '0x3a': 7}
+        protocols = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        assert protocols.count('BSSAP-LE') == 24
+        assert protocols.count('BSSAP-LE/BSSLAP') == 5
+        for passes in ((), ('-2',)):
+            assert self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= warning',
+                    '-Tfields', '-eframe.number') == []
+
+    def test_gsm_bssmap_le_apdu(self, cmd_tshark, capture_file, test_env):
+        '''The APDU with protocol id 1 carries BSSLAP (TA Request and
+        Reject); the LLP and SMLCPP ids and id 0 are not decoded.'''
+        lines = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'bsslap', '-Tfields', '-eframe.number',
+                '-egsm_bssmap_le.apdu_protocol_id', '-egsm_bsslap.msg_type')
+        assert lines == ['1\t1\t1', '2\t1\t10', '23\t1\t1', '24\t1\t10',
+                         '31\t1\t1', '32\t1\t10', '36\t1\t1', '37\t1\t10',
+                         '39\t1\t1', '40\t1\t10']
+
+    def test_gsm_bssmap_le_elements(self, cmd_tshark, capture_file, test_env):
+        '''Decoded values of the LCS QoS, Multilateration Timing Advance
+        (in symbol periods), Positioning Data, LMU identity and LCS Cause.'''
+        def fields(flt, *names):
+            return self._tshark(cmd_tshark, capture_file, test_env, '-Y', flt,
+                    '-Tfields', '-eframe.number', *('-e' + n for n in names))
+        assert fields('gsm_bssmap_le.lcsQos.horizontalAccuracy',
+                'gsm_bssmap_le.lcsQos.horizontalAccuracy',
+                'gsm_bssmap_le.lcsQos.verticalAccuracy',
+                'gsm_bssmap_le.lcsQos.responseTimeCategory') == [
+            '1\t0x55\t0x2a\t0x02', '3\t0x10\t\t0x03']
+        assert fields('gsm_bssmap_le.mta', 'gsm_bssmap_le.mta')[:4] == [
+            '1\t0', '2\t954', '3\t4095', '4\t561']
+        assert fields('gsm_bssmap_le.lmu_id', 'gsm_bssmap_le.lmu_id') == ['43\t060102,060102']
+        assert fields('gsm_bssmap_le.pos_data.pos_method',
+                'gsm_bssmap_le.pos_data.pos_method',
+                'gsm_bssmap_le.pos_data.usage') == ['9\t0x03,0x0c,0x18\t0x03,0x01,0x01']
+        assert fields('gsm_bssmap_le.lcsCauseValue',
+                'gsm_bssmap_le.lcsCauseValue',
+                'gsm_bssmap_le.diagnosticValue')[:2] == ['9\t0x00\t', '10\t0x01\t0x00']
+
+
+class TestDissectGsmCbch:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_cbch_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_cbch_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is GSMTAP carrying CBCH and none is malformed or has
+        a warning or error expert info, in one and two passes.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.splitlines()
+        assert len(protocols) == 41
+        assert protocols.count('GSMTAP CBCH') == 36
+        assert protocols.count('GSMTAP CBCH Cell Broadcast') == 5
+        for passes in ((), ('-2',)):
+            stdout = self._fields(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity > 0x00400000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_cbch_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Blocks are reassembled into a cell broadcast message in the
+        block with the last block flag, also when the blocks arrive out of
+        order or one is repeated.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-eframe.number', '-egsm_cbch.reassembled.length',
+                '-egsm_cbch.fragment.count', '-egsm_cbs.serial_number',
+                '-Y', 'gsm_cbch.fragment.count')
+        rows = [l.split('\t') for l in stdout.splitlines()]
+        assert [r[0] for r in rows] == ['4', '6', '7', '11', '13', '14', '18',
+                                        '22', '26', '30', '34', '39']
+        assert rows[0][1:3] == ['89', '4']
+        assert rows[1][1:3] == ['45', '2']
+        assert rows[2][1:3] == ['23', '1']
+        assert rows[10][1:3] == ['89', '4']
+        assert rows[11][1:3] == ['89', '5']
+        assert [r[3] for r in rows if r[3]] == ['0x1234', '0x2234',
+                '0x3234', '0x4234', '0x4234']
+
+    def test_gsm_cbch_schedule_slots(self, cmd_tshark, capture_file, test_env):
+        '''The slots of the scheduling messages: new messages, repeats,
+        free slots and the other slots up to the End Slot.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-eframe.number', '-egsm_cbch.schedule_begin',
+                '-egsm_cbch.sched_end', '-egsm_cbch.slot',
+                '-Y', 'gsm_cbch.sched_type')
+        rows = {l.split('\t')[0]: l.split('\t')[1:] for l in stdout.splitlines()}
+        assert list(rows) == ['11', '13', '14', '18', '22', '26', '30']
+        assert rows['11'][0:2] == ['1', '60']
+        # 7 new slots (1-7), the other slots 3, 4, 8 and up, capped at 48
+        slots = rows['11'][2].split(',')
+        assert slots[:11] == ['1', '2', '3', '4', '5', '6', '7', '3', '4', '8', '9']
+        assert slots[-1] == '48' and len(slots) == 50
+        assert rows['13'][0:2] == ['2', '20']
+        assert rows['14'][0:2] == ['1', '40']
+        # begin slot 0 and 49 and an unknown type are ignored
+        assert rows['18'] == ['0', '5', '']
+        assert rows['22'] == ['49', '60', '']
+        assert rows['26'] == ['', '', '']
+
+    def test_gsm_cbch_end_slot_spare_bits(self, cmd_tshark, capture_file, test_env):
+        '''The spare bits of the End Slot octet (0xc5) are not part of the
+        End Slot: only slots 1-5 are listed, not 48 of them.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-egsm_cbch.sched_spare', '-egsm_cbch.sched_end',
+                '-egsm_cbch.slot', '-Y', 'frame.number == 30')
+        assert stdout.strip() == '3\t5\t1,2,3,4,5'
+
+    def test_gsm_cbch_notes(self, cmd_tshark, capture_file, test_env):
+        '''The NULL message and a reserved sequence number give notes.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-eframe.number', '-e_ws.expert.message',
+                '-Y', '_ws.expert')
+        assert stdout.splitlines() == ['40\tNULL message',
+                                       '41\tReserved Sequence Number']
+
+
+class TestDissectGsmCbsp:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_cbsp_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_cbsp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''59 frames are CBSP, the rest TCP; nothing is malformed and the
+        only warning is the unhandled coding scheme of the fix reproducer,
+        in one and two passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split()
+        assert len(protocols) == 64
+        assert protocols.count('CBSP') == 59
+        assert protocols.count('TCP') == 5
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity > 0x00400000',
+                    '-Tfields', '-eframe.number', '-e_ws.expert.message')
+            assert stdout.splitlines() == ['13\tUnhandled encoding 0 of CBS String']
+
+    def test_gsm_cbsp_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Every message type 1-23 and an unknown type; PDUs split over
+        segments and several PDUs in one segment are reassembled.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'cbsp', '-Tfields', '-ecbsp.msg_type')
+        types = [int(t.split(',')[0]) for t in stdout.split()]
+        assert sorted(set(types)) == list(range(1, 24)) + [66]
+        assert len(types) == 59
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 60', '-Tfields', '-ecbsp.msg_type')
+        assert stdout.strip() == '22,23'
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 63', '-Tfields', '-ecbsp.new_serial_nr',
+                '-ecbsp.cb_page_content')
+        assert stdout.startswith('0x1248\tA segmented message')
+
+    def test_gsm_cbsp_cell_lists(self, cmd_tshark, capture_file, test_env):
+        '''Cell lists of every discriminator.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {4, 6, 7, 8, 9, 10, 14}',
+                '-Tfields', '-eframe.number', '-ecbsp.cell_id_disc',
+                '-ecbsp.lac', '-ecbsp.ci')
+        assert stdout.splitlines() == [
+            '4\t0\t0x1001,0x1001\t0x0001,0x0002',
+            '6\t1\t0x2001,0x2002\t0x0005,0x0006',
+            '7\t2\t\t0x0007,0x0008',
+            '8\t4\t0x3001,0x3002\t',
+            '9\t5\t0x4001,0x4002\t',
+            '10\t6\t\t',
+            '14\t0,1,2,4,5,6,6\t0x1001,0x2001,0x3001,0x4001\t0x0001,0x0005,0x0007',
+        ]
+
+    def test_gsm_cbsp_content(self, cmd_tshark, capture_file, test_env):
+        '''The message content in 7 bit, UCS2 and 8 bit coding with and
+        without a language indication.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'cbsp.cb_page_content && frame.number < 13',
+                '-Tfields', '-eframe.number', '-ecbsp.dcs',
+                '-ecbsp.cb_page_content', '-egsm_cbs.language')
+        rows = [l.split('\t') for l in stdout.splitlines()]
+        assert [r[0] for r in rows] == ['4', '6', '7', '8', '9', '10', '11', '12']
+        assert rows[0][1] == '0x0f' and rows[0][2].startswith('Hello from the CBC, testing CBSP')
+        assert rows[2][1:] == ['0x11', 'Bonjour', 'fr']
+        assert rows[3][1:] == ['0x48', 'Grüße Ünï', '']
+        assert rows[4][1:] == ['0x44', '8 bit text \x01\x02', '']
+        assert rows[6][1:] == ['0x11', 'Hej', 'en']
+        assert rows[7][2].startswith('Hello Svenska')
+
+    def test_gsm_cbsp_reserved_dcs(self, cmd_tshark, capture_file, test_env):
+        '''A reserved coding scheme (0xa0) leaves the content undecoded
+        instead of asserting (fixed in "GSM CBSP: Fix a NULL dereference
+        for unsupported coding schemes").'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 13', '-Tfields', '-ecbsp.dcs',
+                '-ecbsp.user_info_len', '-ecbsp.cb_page_content',
+                '-e_ws.expert.message')
+        assert stdout.strip('\n') == '0xa0\t5\t\tUnhandled encoding 0 of CBS String'
+
+    def test_gsm_cbsp_lists(self, cmd_tshark, capture_file, test_env):
+        '''Failure list causes, broadcast and radio resource load lists,
+        warning and keep-alive periods in seconds.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {14, 19, 38, 40, 46}',
+                '-Tfields', '-eframe.number', '-ecbsp.cause',
+                '-ecbsp.num_bcast_compl', '-ecbsp.rr_load1',
+                '-ecbsp.keepalive_rep_period')
+        assert stdout.splitlines() == [
+            '14\t0x00,0x01,0x02,0x03,0x00,0x02\t\t\t',
+            '19\t\t\t10,11\t',
+            '38\t\t\t\t0',
+            '40\t\t\t\t10',
+            '46\t\t\t\t35',
+        ]
+
+
+class TestDissectGsmGsup:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_gsup_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    @staticmethod
+    def _by_frame(text):
+        return {int(r[0]): r[1:] for r in (l.split('\t') for l in text.splitlines())}
+
+    def test_gsm_gsup_protocols(self, cmd_tshark, capture_file, test_env):
+        '''GSUP in IPA OSMO EXT PDUs on TCP port 3003: 47 frames, 8 of them
+        with two PDUs, none malformed or with a warning or error expert
+        info, in one and two passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsup', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 47
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= 0x600000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_gsup_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Every message type of the subscriber management, supplementary
+        service, SMS, IMEI check, inter-MSC and ePDG classes, and an
+        unknown message type (0x7f, frame 21).'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsup', '-Tfields', '-eframe.number', '-egsup.msg_type')
+        types = [t for r in self._by_frame(stdout).values() for t in r[0].split(',')]
+        assert [int(t) for t in types] == [
+            4, 5, 6, 16, 17, 18, 8, 9, 10, 11, 12, 13, 14, 20, 21, 22, 28, 29,
+            30, 17, 127, 32, 34, 33, 36, 37, 38, 40, 41, 42, 44, 45, 46, 48,
+            49, 50, 50, 52, 54, 53, 56, 57, 58, 60, 61, 62, 64, 68, 71, 75, 78,
+            80, 81, 82, 6]
+
+    def test_gsm_gsup_ie_values(self, cmd_tshark, capture_file, test_env):
+        '''IMSI, PDP addresses (IPv4, IPv6, IPv4v6), APN, cause, session
+        state, message class, access network type, and source and
+        destination names as text.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsup', '-Tfields', '-eframe.number', '-ee212.imsi',
+                '-egsup.pdp_address.ipv4', '-egsup.pdp_address.ipv6',
+                '-egsup.apn', '-egsup.cause', '-egsup.session_state',
+                '-egsup.source_name.text', '-egsup.msg_class', '-egsup.an_type')
+        rows = self._by_frame(stdout)
+        assert rows[4][0] == '262019876543210'
+        assert rows[5][4] == '0x07'
+        assert rows[6][1] == '10.0.0.1,10.0.0.2'
+        assert rows[6][2].count('1011:1213:1415:1617:1819:1a1b:1c1d:1e1f') == 2
+        assert rows[6][3] == ','.join(['example.com'] * 7)
+        assert rows[22][5] == '1' and rows[23][5] == '3'
+        assert rows[36][6:9] == ['MSC-A', '4', '1']
+        assert rows[38][6] == 'A'
+        assert rows[48][1] == '10.1.1.1'
+
+    def test_gsm_gsup_embedded(self, cmd_tshark, capture_file, test_env):
+        '''The sub-dissectors reached from IEs: GSM MAP components of the
+        SS info IE (frames 22-24), the SMS TPDU of the SM-RP-UI IE, BSSAP
+        and RANAP in the AN-APDU IE.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {22, 23, 24, 25, 36, 38}',
+                '-Tfields', '-eframe.number', '-e_ws.col.protocol')
+        rows = self._by_frame(stdout)
+        assert rows[22] == ['GSUP/GSM MAP']
+        assert rows[23] == ['GSUP/GSM MAP']
+        assert rows[24] == ['GSUP/GSM MAP']
+        assert rows[25] == ['GSM SMS']
+        assert rows[36] == ['BSSAP']
+        assert rows[38] == ['RANAP']
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_old.localValue', '-Tfields', '-eframe.number',
+                '-egsm_old.localValue')
+        assert self._by_frame(stdout)[22] == ['59']
+
+    def test_gsm_gsup_names_off(self, cmd_tshark, capture_file, test_env):
+        '''With "Show Names as text" off the names stay binary only.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-ogsup.show_name_as_text:FALSE', '-Y', 'gsup.source_name.text',
+                '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 0
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-ogsup.show_name_as_text:FALSE', '-Y', 'gsup.source_name',
+                '-Tfields', '-eframe.number')
+        assert count_output(stdout) > 0
+
+
+class TestDissectGsmIpa:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_ipa_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    @staticmethod
+    def _rows(text):
+        return [l.split('\t') for l in text.splitlines()]
+
+    def test_gsm_ipa_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Four TCP streams on default IPA ports; none of the 55 frames is
+        malformed or has a warning or error expert info, in one and two
+        passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_ipa', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 37
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsup', '-Tfields', '-eframe.number')
+        assert stdout.split() == ['53', '54']
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= 0x600000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_ipa_sub_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The IPA protocol octet of every PDU and the protocol that
+        takes over: ip.access CCM, RSL, OML, SCCP/BSSAP, MGCP (old and
+        through the OSMO EXT header), HSL debug, CTRL and GSUP; PDUs
+        after the first in one segment; frames that do not start with a
+        known type are not IPA.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'tcp.len > 0', '-Tfields', '-eframe.number',
+                '-e_ws.col.protocol', '-egsm_ipa.protocol')
+        rows = {int(r[0]): r[1:] for r in self._rows(stdout)}
+        assert rows[4] == ['IPA', '0xfe']
+        assert rows[17] == ['RSL', '0x00']
+        assert rows[18] == ['RSL', '0x01']
+        assert rows[19] == ['RSL', '0x1f']
+        assert rows[20] == ['OML', '0xff']
+        assert rows[21] == ['RSL', '0x01,0xfe,0x00']
+        assert rows[22] == ['IPA', '0xfe,0x42']
+        assert rows[23][1:] == [''] and rows[24][1:] == ['']
+        assert rows[29] == ['BSSAP', '0xfd']
+        assert rows[30] == ['MGCP', '0xfc']
+        assert rows[31] == ['IPA', '0xdd']
+        assert rows[32] == ['IPA', '0xdd,0xdd']
+        assert rows[33] == ['MGCP', '0xfd,0xfc']
+        assert rows[38] == ['IPA', '0xee']
+        assert rows[40] == ['MGCP', '0xee']
+        assert rows[53] == ['GSUP', '0xee']
+        assert rows[54] == ['GSUP', '0xee']
+
+    def test_gsm_ipa_ccm_attributes(self, cmd_tshark, capture_file, test_env):
+        '''ip.access CCM message types and attributes. Frame 15 carries
+        an attribute 0 whose length is 0 (the reproducer of "GSM IPA:
+        Guard zero length string attributes"): the length used to wrap
+        to 255 and the frame was malformed.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'ipaccess', '-Tfields', '-eframe.number',
+                '-eipaccess.msg_type', '-eipaccess.attr_tag',
+                '-eipaccess.attr_string', '-eipaccess.attr_unk')
+        rows = {int(r[0]): r[1:] for r in self._rows(stdout)}
+        assert [rows[n][0] for n in range(4, 16)] == [
+            '0x04', '0x05', '0x06', '0x00', '0x01', '0x07', '0x08', '0x09',
+            '0x0a', '0x0b', '0x42', '0x05']
+        assert rows[4][1:3] == ['0x08,0x07,0x02,0x0a', '']
+        assert rows[5][1:3] == ['0x01,0x05', '1234/0/0,v1.2.3']
+        assert rows[15][1:] == ['0x05,0x01,0x03,0x04', 'abc', '0x7f']
+        assert rows[16][1:3] == ['0x00,0x01', '']
+        assert rows[52][1:3] == ['0x01', 'osmo-ms']
+
+    def test_gsm_ipa_osmo_ext(self, cmd_tshark, capture_file, test_env):
+        '''OSMO EXT sub-protocols: CTRL as text, MGCP, LAC, SMSC, ORC,
+        OAP, an unknown protocol, and HSL debug strings.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_ipa.osmo.protocol', '-Tfields', '-eframe.number',
+                '-egsm_ipa.osmo.protocol', '-egsm_ipa.ctrl.data')
+        rows = self._rows(stdout)
+        assert [r[1] for r in rows] == ['0x00', '0x00', '0x01', '0x02', '0x03',
+                '0x04', '0x06', '0x7f', '0x00', '0x05', '0x05']
+        assert rows[0][2] == r'GET 1 bts.0.trx.0.rf_locked\n'
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_ipa.hsl_debug', '-Tfields', '-eframe.number',
+                '-egsm_ipa.hsl_debug')
+        assert stdout.splitlines() == ['31\thello debug', '32\ttwo,three']
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_ipa.hsl_debug', '-Tfields', '-e_ws.col.info',
+                '-ogsm_ipa.hsl_debug_in_info:TRUE')
+        assert stdout.splitlines() == ['HSL Debug hello debug ',
+                'HSL Debug two HSL Debug three ']
+
+
+class TestDissectGsmL2rcop:
+    @staticmethod
+    def _rows(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsm_l2rcop_coverage.pcap.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsm_l2rcop_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 51 frames are GSM RLP IS frames carrying L2RCOP and none is
+        malformed or has an expert info, in one and two passes.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env, 'gsm_l2rcop.addr')
+        assert len(rows) == 51
+        assert all(r[1] for r in rows)
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gsm_l2rcop_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gsm_l2rcop_status_octets(self, cmd_tshark, capture_file, test_env):
+        '''The SA, SB and X bits in every combination on a status change
+        (address 31).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_l2rcop.sa', 'gsm_l2rcop.sb', 'gsm_l2rcop.x',
+                          'gsm_l2rcop.addr', flt='frame.number <= 8')
+        assert [r[1:] for r in rows] == [
+            ['False', 'False', 'False', '31'], ['False', 'False', 'True', '31'],
+            ['False', 'True', 'False', '31'], ['False', 'True', 'True', '31'],
+            ['True', 'False', 'False', '31'], ['True', 'False', 'True', '31'],
+            ['True', 'True', 'False', '31'], ['True', 'True', 'True', '31']]
+
+    def test_gsm_l2rcop_special_addresses(self, cmd_tshark, capture_file, test_env):
+        '''Status change with characters (30), break (29) and break
+        acknowledge (28), and 1 to 26 characters.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_l2rcop.addr', 'gsm_l2rcop.break',
+                          'gsm_l2rcop.break_ack', 'data.len',
+                          flt='frame.number in {9, 10, 11, 12, 13, 38}')
+        assert rows == [
+            ['9', '30', '', '', '8'], ['10', '30', '', '', ''],
+            ['11', '29', '29', '', ''], ['12', '28', '', '60', ''],
+            ['13', '1', '', '', '1'], ['38', '26', '', '', '26']]
+
+    def test_gsm_l2rcop_extended_address(self, cmd_tshark, capture_file, test_env):
+        '''The 6 bit extended address has its own field (it was added with
+        the 5 bit address field, which truncated 37 to 5 and described it
+        with the wrong value strings).'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_l2rcop.addr', 'gsm_l2rcop.ext_addr', 'data.len',
+                          flt='frame.number in {39, 42, 43, 51}')
+        assert rows == [
+            ['39', '27', '1', '1'], ['42', '27', '37', '37'],
+            ['43', '27', '40', '40'], ['51', '27', '2', '2']]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_l2rcop_coverage.pcap.gz'),
+                '-Y', 'frame.number == 42', '-V',
+            ), encoding='utf-8', env=test_env)
+        assert '        ..10 0101 = Extended Address: 37' in stdout
+        assert '        ...1 1011 = Address: extended address in ext octet (27)' in stdout
+
+    def test_gsm_l2rcop_multiple_chunks(self, cmd_tshark, capture_file, test_env):
+        '''Several chunks in one frame; an address of 0 or an extended
+        address of 0 ends the dissection.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_l2rcop.addr', 'gsm_l2rcop.ext_addr',
+                          flt='frame.number in {44, 45, 46, 47, 48, 49, 50}')
+        assert rows == [
+            ['44', '2,27,1,31', '3'], ['45', '4,29', ''], ['46', '5,30', ''],
+            ['47', '3,28', ''], ['48', '0', ''], ['49', '3,0', ''],
+            ['50', '27', '']]
+
+
+class TestDissectGsmMap:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_map_coverage.pcapng.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_map_protocols(self, cmd_tshark, capture_file, test_env):
+        '''MTP3/SCCP/TCAP on the MAP subsystem numbers: 920 frames, none
+        malformed or with a warning or error expert info, in one and two
+        passes. The last two are the SES/PRES reproducer.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split('\n')[:-1]
+        assert len(protocols) == 920
+        assert protocols.count('GSM MAP') == 883
+        assert protocols.count('GSM SMS') == 26
+        assert protocols.count('RANAP') == 11
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= 0x600000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_map_components(self, cmd_tshark, capture_file, test_env):
+        '''Component counts: invokes, return results, return errors and
+        rejects, and the number of different operation codes in them.'''
+        for flt, n in (('gsm_old.invoke_element', 412),
+                       ('gsm_old.returnError_element', 160),
+                       ('gsm_old.reject_element', 16)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                    '-Y', flt, '-Tfields', '-eframe.number')
+            assert count_output(stdout) == n
+        for flt, n in (('gsm_old.invoke_element', 92),
+                       ('gsm_old.returnResultLast_element', 75)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                    '-Y', flt, '-Tfields', '-egsm_old.localValue')
+            codes = set(c for l in stdout.splitlines() for c in l.split(','))
+            assert len(codes) == n
+            assert {'2', '7', '22', '44', '46', '56', '59', '67'} <= codes
+
+    def test_gsm_map_ses_pres(self, cmd_tshark, capture_file, test_env):
+        '''MAP reached as a BER OID dissector from ACSE/PRES (frames 919 and
+        920): it used to read the session data as a tcap_private_t.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number >= 919', '-Tfields', '-eframe.number',
+                '-e_ws.col.protocol', '-ee212.imsi', '-egsm_old.localValue')
+        assert stdout.splitlines() == [
+            '919\tGSM MAP\t262019876543210\t56',
+            '920\tGSM MAP\t262019876543210\t56']
+
+    def test_gsm_map_operation_statistics(self, cmd_tshark, capture_file, test_env):
+        '''The gsm_map,operation statistics list the operation names.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-q', '-z', 'gsm_map,operation')
+        for name in ('updateLocation', 'insertSubscriberData',
+                     'sendAuthenticationInfo'):
+            assert name in stdout
+
+
+class TestDissectGsmOsmux:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *args):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_osmux_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+        return stdout
+
+    def test_gsm_osmux_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Two MGCP responses with X-Osmux set up the conversations, the
+        other 33 frames are Osmux, none is malformed or has an expert
+        info, in one and two passes.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split('\n')[:-1]
+        assert len(protocols) == 35
+        assert protocols.count('Osmux') == 33
+        assert protocols.count('MGCP/SDP') == 2
+        for passes in ((), ('-2',)):
+            stdout = self._fields(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_osmux_headers(self, cmd_tshark, capture_file, test_env):
+        '''Field type, sequence number, circuit id, AMR frame type, counter
+        and marker of every frame, including the old two octet dummy
+        (frames 26-27), three Osmux frames in one datagram (29) and the
+        field types signalling, dummy and the reserved value 3.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'osmux', '-Tfields', '-eframe.number', '-eosmux.ft',
+                '-eosmux.seq', '-eosmux.circuit_id', '-eosmux.amr_ft',
+                '-eosmux.ctr', '-eosmux.stream_id')
+        rows = [l.split('\t') for l in stdout.splitlines()]
+        by_frame = {int(r[0]): r[1:] for r in rows}
+        assert len(rows) == 33
+        # (ft, seq, cid, amr_ft, ctr, stream)
+        assert by_frame[3] == ['1', '0x00', '0x01', '0x00', '0x00', '0']
+        assert by_frame[10] == ['1', '0x07', '0x01', '0x07', '0x00', '0']
+        assert by_frame[12] == ['1', '0x09', '0x01', '0x07', '0x03', '0']
+        assert by_frame[13] == ['1', '0x0a', '0x01', '0x08', '0x07', '0']
+        assert by_frame[17] == ['1', '0x0f', '0x01', '0x09', '0x00', '0']
+        assert by_frame[23][0] == '0'
+        assert by_frame[24][0] == '2'
+        assert by_frame[25][0] == '3'
+        assert by_frame[26] == ['1', '', '0x01', '', '0x00', '0']
+        assert by_frame[27] == ['1', '', '0x09', '', '0x00', '1']
+        assert by_frame[29] == ['1,1,1', '0x13,0x00,0x00', '0x01,0x02,0x03',
+                '0x07,0x02,0x08', '0x00,0x00,0x01', '0,2,3']
+        assert by_frame[31] == ['1', '0xfe', '0x07', '0x03', '0x02', '4']
+        assert by_frame[35] == ['0', '0x00', '0x08', '0x0e', '0x00', '5']
+
+    def test_gsm_osmux_info(self, cmd_tshark, capture_file, test_env):
+        '''Info column text, including the marker bit and the reserved
+        field type.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {3, 19, 23, 24, 25, 26, 29}',
+                '-Tfields', '-e_ws.col.info')
+        assert stdout.splitlines() == [
+            'Osmux AMR (M) (CID 1) ',
+            'Osmux AMR (M) (CID 1) ',
+            'Osmux Signalling (CID 1) ',
+            'Osmux Dummy (CID 1) ',
+            'Osmux unknown 0x03 (CID 1) ',
+            'Osmux AMR Old Dummy (CID 1)',
+            'Osmux AMR (CID 1) , Osmux AMR (CID 2) , Osmux AMR (CID 3) ',
+        ]
+
+    def test_gsm_osmux_stats_tree(self, cmd_tshark, capture_file, test_env):
+        '''The statistics tree names the reserved field type 3 instead of
+        reading the terminator of the value string table, and counts the
+        sequence number analysis results.'''
+        stdout = self._fields(cmd_tshark, capture_file, test_env,
+                '-q', '-z', 'osmux,tree')
+        assert 'Field: FT: Unknown (3)' in stdout
+        assert 'null' not in stdout.lower()
+        for name in ('Field: FT: Old Dummy', 'Field: FT: Dummy',
+                     'Field: FT: Signalling', 'SeqNum Analysis: Out Of Order',
+                     'SeqNum Analysis: Consecutive Repeated'):
+            assert name in stdout
+        assert 'Osmux Total Packets' in stdout
+        assert 'Osmux Streams' in stdout
+        for line in stdout.splitlines():
+            if line.strip().startswith('Osmux Total Packets'):
+                assert line.split()[3] == '35'
+
+
+class TestDissectGsmRlcmac:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsm_rlcmac_coverage.pcapng.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsm_rlcmac_protocols(self, cmd_tshark, capture_file, test_env):
+        '''181 frames, 179 of them GSM RLC/MAC and 2 LTE RRC from Packet
+        Handover Commands to E-UTRAN; no malformed packets or errors in
+        one and two passes; warnings only for the access burst that no
+        format matches (frame 160) and the control blocks of the wrong
+        coding scheme (161-163).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol')
+        assert len(rows) == 181
+        assert [r[1] for r in rows].count('GSM RLC/MAC') == 179
+        assert [r[0] for r in rows if r[1] == 'LTE RRC DL_DCCH'] == ['31', '34']
+        for passes in ((), ('-2',)):
+            assert self._fields(cmd_tshark, capture_file, test_env, extra=passes,
+                                flt='_ws.malformed || _ws.expert.severity >= error') == []
+            rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.expert.message',
+                                extra=passes, flt='_ws.expert')
+            assert rows == [
+                ['160', 'Unknown PACCH access burst'],
+                ['161', 'GPRS block with invalid coding scheme (34) for RLC Control'],
+                ['162', 'GPRS block with invalid coding scheme (35) for RLC Control'],
+                ['163', 'GPRS UL block with Coding Scheme CS2 and incompatible payload type'],
+            ]
+
+    def test_gsm_rlcmac_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Every uplink and EC-GSM-IoT message type and all but one
+        downlink type (Packet Queueing Notification, which is also
+        missing from the CSN.1 capture), with the Packet Handover
+        Command to UTRAN and the Packet Cell Change Order with 3G
+        neighbour cells.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsm_rlcmac.dl.message_type',
+                            'gsm_rlcmac.ul.message_type', 'gsm_rlcmac.ul.ec_message_type',
+                            'gsm_rlcmac.dl.ec_message_type', extra=('-Eoccurrence=f',))
+        dl = set(int(r[1]) for r in rows if r[1])
+        ul = set(int(r[2]) for r in rows if r[2])
+        ec_ul = set(int(r[3]) for r in rows if r[3])
+        ec_dl = set(int(r[4]) for r in rows if r[4])
+        assert dl == {1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 21, 22, 33, 34, 35, 36,
+                      37, 49, 50, 51, 54, 55}
+        assert ul == set(range(14)) - {9}
+        assert ec_ul == {1, 2}
+        assert ec_dl == {1, 2, 3, 4, 5, 6, 7, 17, 18}
+
+    def test_gsm_rlcmac_freq_diff_length(self, cmd_tshark, capture_file, test_env):
+        '''Reproducers of "GSM RLC/MAC: Set FREQ_DIFF_LENGTH for all 32
+        frequencies": Packet Measurement Orders whose Additional Frequency
+        List (frames 166-168) and LU mode only frequency list (169, 170)
+        hold 20, 31 and 16 frequencies. Before the fix the frequencies
+        after the 16th were read with a zero bit FREQUENCY_DIFF.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlcmac.dl.add_frequency_list_nr_of_frequencies',
+                            'gsm_rlcmac.dl.cell_selection_param_with_freqdiff',
+                            'gsm_rlcmac.dl.dd_lu_modeonlyfrequencylist_nr_of_frequencies',
+                            'gsm_rlcmac.dl.lu_modeonlycellselectionparamswithfreqdiff',
+                            'gsm_rlcmac.dl.lu_modeonlycellselectionparamswithfreqdiff_bsic',
+                            flt='frame.number in {166..170}')
+        # NC list: 3 (20), 4 (31) and 2 (16) bits per frequency
+        assert [(r[0], r[1], len(r[2].split(','))) for r in rows[:3]] == [
+            ('166', '20', 60), ('167', '31', 124), ('168', '16', 32)]
+        # LU mode only list: 2 and 3 bits per frequency, one BSIC each
+        assert rows[3][3] == '20' and len(rows[3][4].split(',')) == 40
+        assert rows[3][5].split(',') == [str(63 - i) for i in range(20)]
+        assert rows[4][3] == '31' and len(rows[4][4].split(',')) == 93
+        assert rows[4][5].split(',') == [str(63 - i) for i in range(31)]
+
+    def test_gsm_rlcmac_3g_neighbour_cells(self, cmd_tshark, capture_file, test_env):
+        '''UTRAN TDD neighbour cell information: the cells of a Packet
+        Cell Change Order (frame 133), and two whose information ends in a
+        window of 0 and so has no cells (164, 165).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlcmac.dl.utran_tdd_neighbourcells_nrofcells',
+                            'gsm_rlcmac.cell_parameter', flt='frame.number in {133,164,165}')
+        assert [(r[0], r[1].split(',')[0], bool(r[2])) for r in rows] == [
+            ('133', '11', True), ('164', '4', False), ('165', '11', False)]
+        assert len(rows[0][2].split(',')) == 19
+
+    def test_gsm_rlcmac_ps_handover_utran(self, cmd_tshark, capture_file, test_env):
+        '''The RRC container of a Packet Handover Command to UTRAN
+        (frame 171) is handed to the RRC dissector.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlcmac.dl.ps_handoverto_utran_payload_rrc_containerlength',
+                            'gsm_rlcmac.dl.ps_handoverto_utran_payload_rrc_container',
+                            '_ws.col.info', flt='frame.number == 171')
+        assert rows == [['171', '24', '5d0c6359b2e392440880ba8ce4b084f028ad2d38e14184e7',
+                         'GPRS DL CTRL: PACKET_HANDOVER_COMMAND USF=0(cs-domain)']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'rrc.handoverToUTRANCommand_r3_element',
+                            flt='frame.number == 171')
+        assert rows[0][1] != ''
+
+    def test_gsm_rlcmac_data_blocks(self, cmd_tshark, capture_file, test_env):
+        '''GPRS and EGPRS data blocks with length indicators (frames 145-158,
+        174, 175, 177): the LI values, the TLLI and PFI behind the LI
+        octets, and the Info column.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsm_rlcmac.li',
+                            'gsm_rlcmac.tlli', 'gsm_rlcmac.pfi', '_ws.col.info',
+                            flt='frame.number in {145..158} || frame.number in {174,175,177}')
+        by = dict((r[0], r[1:]) for r in rows)
+        assert by['145'][0] == '63' and by['145'][3].endswith('[RRBP] [FBI]')
+        assert by['146'][0] == '4,63' and by['148'][0] == '2,2,2,2,2,1'
+        assert by['149'][:3] == ['3,2', '0x0badcafe', '42']
+        assert by['150'][:3] == ['63', '0x12345678', '']
+        assert by['151'][:3] == ['', '', '5']
+        assert by['152'][0] == '126' and by['153'][0] == '126,127'
+        assert by['154'][0] == '127,10,126,127' and by['155'][0] == '0,126,127,4'
+        assert by['156'][:2] == ['126', '0x0badcafe'] and by['158'][0] == '127,10,126,127'
+        assert by['174'][0] == '2,1' and by['175'][0] == '8'
+        assert by['154'][3].startswith('EGPRS DL DATA: MCS7 ')
+        assert by['155'][3].startswith('EGPRS DL DATA: MCS8 ')
+        assert by['157'][3].startswith('EGPRS UL DATA: MCS6 ')
+        assert by['147'][3].startswith('GPRS DL DATA: CS4 ')
+        assert by['148'][3].startswith('GPRS DL DATA: CS3 ')
+
+    def test_gsm_rlcmac_other_blocks(self, cmd_tshark, capture_file, test_env):
+        '''Access bursts, reserved payload types, control blocks of an
+        unknown message type, and blocks that reach the dissector from
+        Exported PDU without a coding scheme.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                            flt='frame.number in {159..163} || frame.number >= 172')
+        assert [r[1] for r in rows] == [
+            'PACCH ACCESS BURST', 'PACCH ACCESS BURST', 'GPRS DL', 'GPRS DL', 'GPRS UL',
+            'GPRS DL: GSM RLC/MAC RESERVED MESSAGE TYPE',
+            'GPRS UL: GSM RLC/MAC RESERVED MESSAGE TYPE',
+            'GPRS DL DATA: CS1 TFI=3 BSN=9 USF=0 Len=2 Len=1',
+            'GPRS DL DATA: CS1 TFI=3 BSN=10 USF=0 Len=8',
+            'PACCH ACCESS BURST',
+            'GPRS UL DATA: CS1 TFI=2 BSN=3 CV=15 Len=20',
+            'GPRS DL CTRL: Invalid Message Type USF=1',
+            'GPRS UL CTRL: Unknown Message Type',
+            'EC-GSM-IoT DL:Unknown Message Type',
+            'EC-GSM-IoT UL:Unknown Message Type',
+        ]
+        # the access burst forms: 8 bit, 8 bit with TN/RRBP, 11 bit, and
+        # 11 bit with TN/RRBP (frame 159); frame 176 is a two octet block
+        # from Exported PDU
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsm_rlcmac.message_type_6',
+                            'gsm_rlcmac.ul.packet_control_ack_additionsr5_tn_rrbp',
+                            'gsm_rlcmac.message_type_9',
+                            flt='frame.number in {130..132} || frame.number in {159, 176}')
+        assert rows == [['130', '31', '', ''], ['131', '', '0', ''], ['132', '', '', '505'],
+                        ['159', '55', '4', ''], ['176', '31', '', '']]
+
+
+class TestDissectGsmRlp:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsm_rlp_coverage.pcap.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsm_rlp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is GSM RLP in GSMTAP and none is malformed or has
+        an expert info, in one and two passes (the FCS of every frame is
+        correct).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_rlp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 30
+        assert protocols.count('GSM-RLP') == 30
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gsm_rlp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gsm_rlp_frame_types(self, cmd_tshark, capture_file, test_env):
+        '''Frames 1-17 are U frames (SABM, UA, DISC, DM, NULL, UI, TEST,
+        REMAP, an unknown type and XID), 18-21 S frames (RR, REJ, RNR, SREJ) and 22-30 IS frames.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlp.ftype', 'gsm_rlp.u_ftype',
+                            'gsm_rlp.s_ftype', 'gsm_rlp.fcs.status')
+        assert [r[1] for r in rows] == ['0x00'] * 17 + ['0x01'] * 4 + ['0x02'] * 9
+        assert [r[2] for r in rows[:9]] == ['0x07', '0x0c', '0x08', '0x03',
+                                             '0x0f', '0x00', '0x1c', '0x11', '0x05']
+        assert [r[3] for r in rows[17:21]] == ['0x00', '0x02', '0x01', '0x03']
+        assert all(r[4] == '1' for r in rows)
+
+    def test_gsm_rlp_sequence_numbers(self, cmd_tshark, capture_file, test_env):
+        '''N(S) and N(R) of an S frame (N(R) only) and of IS frames.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlp.n_s', 'gsm_rlp.n_r',
+                            flt='frame.number in {19, 23, 30}')
+        assert rows == [['19', '', '25'], ['23', '7', '35'], ['30', '61', '63']]
+
+    def test_gsm_rlp_xid_value_bytes(self, cmd_tshark, capture_file, test_env):
+        '''The XID parameter value is a byte string for lengths 1 to 15
+        (it was FT_UINT8 before the fix).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_rlp.xid.param_value',
+                            flt='gsm_rlp.xid.param_value')
+        assert [r[1] for r in rows] == [
+            '01,20,20,0034,0f,0019,00000000,01,0001', '00,aabb', '0102',
+            '010203', '0102030405', '0102030405060708',
+            '0102030405060708090a0b0c0d0e0f']
+
+    def test_gsm_rlp_l2rcop_payload(self, cmd_tshark, capture_file, test_env):
+        '''IS frames are decoded as L2RCOP, with the 6 bit extended address
+        in its own field, and as data with the preference off.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_l2rcop.addr', 'gsm_l2rcop.ext_addr',
+                            flt='gsm_l2rcop')
+        assert len(rows) == 9
+        assert rows[7] == ['29', '27,31', '37']
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                            'gsm_l2rcop.addr', flt='gsm_l2rcop',
+                            extra=('-ogsm_rlp.decode_as_l2rcop:FALSE',))
+        assert rows == []
+
+
+class TestDissectGsmRUus1:
+    # Frames 1-53 are GSM A DTAP messages in GSMTAP (reached with the default
+    # preferences), frames 54-61 Q.931 over LAPD (user-user information
+    # reaches GSM-R only with gsm-r-uus1.dissect_q931_u2u:TRUE).
+    @staticmethod
+    def uus1_run(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_r_uus1_coverage.pcapng.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_r_uus1_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed or has an error expert info, in one and two
+        passes, with and without the Q.931 preference.'''
+        run = TestDissectGsmRUus1.uus1_run
+        stdout = run(cmd_tshark, capture_file, test_env, '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 61
+        for prefs in ((), ('-o', 'gsm-r-uus1.dissect_q931_u2u:TRUE')):
+            for passes in ((), ('-2',)):
+                stdout = run(cmd_tshark, capture_file, test_env, *prefs, *passes,
+                        '-Y', '_ws.malformed || _ws.expert.severity == 0x800000',
+                        '-Tfields', '-eframe.number')
+                assert count_output(stdout) == 0
+        stdout = run(cmd_tshark, capture_file, test_env, '-Y', 'gsm-r-uus1', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 50    # frames 1-50 (46 and 47 only get the protocol item)
+        stdout = run(cmd_tshark, capture_file, test_env, '-o', 'gsm-r-uus1.dissect_gsm_a_u2u:FALSE',
+                '-Y', 'gsm-r-uus1', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 0
+
+    def test_gsm_r_uus1_elda_bit_offset(self, cmd_tshark, capture_file, test_env):
+        '''The eLDA height, speed, heading, time, distance and scale are read
+        relative to the element ("GSM-R UUS1: Fix ELDA bit offset, heuristic
+        return and heading type"; frame 48 holds two eLDA elements, the
+        second one at offset 16, frame 49 is the all-ones heading 630).'''
+        run = TestDissectGsmRUus1.uus1_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 26 || frame.number == 48 || frame.number == 49',
+                '-Tfields', '-eframe.number', '-egsm-r-uus1.elda.height',
+                '-egsm-r-uus1.elda.speed', '-egsm-r-uus1.elda.heading',
+                '-egsm-r-uus1.elda.e_time', '-egsm-r-uus1.elda.distance',
+                '-egsm-r-uus1.elda.scale')
+        assert stdout.splitlines() == [
+            '26\t100\t50\t90\t7\t1000\t1',
+            '48\t100,200\t50,70\t90,110\t7,70\t1000,2000\t1,2',
+            '49\t8091\t630\t630\t2047\t16383\t3',
+        ]
+
+    def test_gsm_r_uus1_elements(self, cmd_tshark, capture_file, test_env):
+        '''Presentation of functional number and the CHPC elements.'''
+        run = TestDissectGsmRUus1.uus1_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 1 || frame.number == 5 || frame.number == 25',
+                '-Tfields', '-eframe.number', '-egsm-r-uus1.pfn.digits',
+                '-egsm-r-uus1.chpc.t_dur', '-egsm-r-uus1.chpc.pl_call',
+                '-egsm-r-uus1.chpc.ack_cause')
+        assert stdout.splitlines() == ['1\t1234567\t\t\t', '5\t\t36000\t3\t', '25\t\t\t\t0']
+
+    def test_gsm_r_uus1_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''The Q.931 user-user heuristic claims a payload only when it is
+        GSM-R (frame 60, a PFN) and not an unknown element (frame 59, which
+        stays Data; both are reproducers of the fix).'''
+        run = TestDissectGsmRUus1.uus1_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-o', 'gsm-r-uus1.dissect_q931_u2u:TRUE',
+                '-Y', 'frame.number >= 59', '-Tfields', '-eframe.number',
+                '-egsm-r-uus1.elem_tag', '-edata.len')
+        assert stdout.splitlines() == ['59\t\t4', '60\t5\t', '61\t\t']
+        # without the preference nothing in the Q.931 frames is GSM-R
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number >= 54 && gsm-r-uus1', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 0
+
+
+class TestDissectGsmSim:
+    # Frames 1-131 are GSMTAP SIM frames (SIMtrace: command and response in
+    # one frame, frame 131 is an ATR), frames 132-266 are Exported PDU frames naming gsm_sim.command
+    # and gsm_sim.response (separate command and response frames) and
+    # gsm_sim.bertlv.
+    @staticmethod
+    def sim_run(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_sim_coverage.pcapng.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_sim_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed or has an error expert info, in one and two
+        passes (the links between a command and its response are only known
+        on the second pass, so the output is not compared).'''
+        run = TestDissectGsmSim.sim_run
+        stdout = run(cmd_tshark, capture_file, test_env, '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 266
+        stdout = run(cmd_tshark, capture_file, test_env, '-Y', 'gsm_sim', '-Tfields', '-eframe.number')
+        assert count_output(stdout) == 262    # all but the ATR frame and the 3 bare BER-TLV frames
+        for passes in ((), ('-2',)):
+            stdout = run(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_sim_select(self, cmd_tshark, capture_file, test_env):
+        '''SELECT by file id in a SIMtrace style frame and an FCP template
+        in a response frame.'''
+        run = TestDissectGsmSim.sim_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 1 || frame.number == 3',
+                '-Tfields', '-eframe.number', '-egsm_sim.file_id', '-egsm_sim.apdu.sw')
+        assert stdout.splitlines() == ['1\t0x3f00\t0x9f16', '3\t0x6f07\t0x9000']
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 133', '-Tfields', '-egsm_sim.fcp.file_id',
+                '-egsm_sim.fcp.file_size', '-egsm_sim.apdu.sw')
+        assert stdout.strip() == '0x3f00\t32\t0x9000'
+
+    def test_gsm_sim_get_response_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A response with SW 61xx followed by GET RESPONSE commands is
+        reassembled (two fragments in frame 157, three in frame 163), and a
+        multi-block STORE DATA is reassembled in its last block (frame 244).'''
+        run = TestDissectGsmSim.sim_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sim.reassembled.length', '-Tfields', '-eframe.number',
+                '-egsm_sim.fragment.count', '-egsm_sim.reassembled.length')
+        assert stdout.splitlines() == ['157\t2\t22', '163\t3\t22', '244\t3\t120']
+
+    def test_gsm_sim_transactions(self, cmd_tshark, capture_file, test_env):
+        '''Responses are matched to their commands and a GET RESPONSE is
+        related to the SELECT it continues.'''
+        run = TestDissectGsmSim.sim_run
+        stdout = run(cmd_tshark, capture_file, test_env, '-2',
+                '-Y', 'frame.number >= 154 && frame.number <= 157', '-Tfields',
+                '-eframe.number', '-egsm_sim.response_in', '-egsm_sim.response_to',
+                '-egsm_sim.related_to')
+        assert stdout.splitlines() == [
+            '154\t155\t\t',
+            '155\t\t154\t',
+            '156\t157\t\t154',
+            '157\t\t156\t154',
+        ]
+
+    def test_gsm_sim_ber_tlv_length(self, cmd_tshark, capture_file, test_env):
+        '''The long form of a BER-TLV length is decoded from the length
+        octets only ("GSM SIM: Fix BER length parsing and short responses";
+        frame 129 is the reproducer with the inner TLV 82 81 02 ..., frame 130
+        the same with the short form 82 02 ...).'''
+        run = TestDissectGsmSim.sim_run
+        stdout = run(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 129 || frame.number == 130',
+                '-Tfields', '-eframe.number', '-egsm_sim.fcp.len', '-egsm_sim.fcp.file_id')
+        assert stdout.splitlines() == ['129\t2,2\t0x3f00', '130\t2,2\t0x3f00']
+
+
+class TestDissectGsmSms:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_sms_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_sms_protocols(self, cmd_tshark, capture_file, test_env):
+        '''SMS TPDUs in RP-DATA, RP-ACK and RP-ERROR in CP-DATA in LAPDm in
+        GSMTAP, and in SIP MESSAGEs; nothing is malformed and there is no
+        warning, in one and two passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.splitlines()
+        assert len(protocols) == 216
+        assert protocols.count('GSM SMS') == 211
+        assert protocols.count('LAPDm') == 3
+        assert protocols.count('WSP') == 2
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity > 0x00400000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_sms_message_types(self, cmd_tshark, capture_file, test_env):
+        '''Deliver, submit, status report, command and the reports.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.tp-mti', '-Tfields', '-egsm_sms.tp-mti')
+        mti = stdout.split()
+        assert (mti.count('0'), mti.count('1'), mti.count('2')) == (23, 157, 31)
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.dis_field.st_error', '-Tfields',
+                '-egsm_sms.dis_field.st_error')
+        assert stdout.split() == (['0'] * 4 + ['1'] * 4 + ['2'] * 4 + ['3'] * 4 + ['0'] * 7)
+
+    def test_gsm_sms_validity_period(self, cmd_tshark, capture_file, test_env):
+        '''Relative validity periods of every range and the enhanced
+        formats.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.vp.validity_period', '-Tfields', '-eframe.number',
+                '-egsm_sms.vp.validity_period', '-egsm_sms.sms_text',
+                '-egsm_sms.tp.user_data_length')
+        rows = [l.split('\t') for l in stdout.splitlines()]
+        assert [r[1] for r in rows[:9]] == ['0', '11', '143', '144', '167', '168', '196', '197', '255']
+        assert rows[9][1:] == ['167', 'VPE relative', '12']
+        assert rows[10][1:] == ['30', 'VPE seconds', '11']
+
+    def test_gsm_sms_enhanced_vp_relative(self, cmd_tshark, capture_file, test_env):
+        '''An enhanced validity period with the relative format is 7 octets
+        long, so the user data that follows is decoded correctly (fixed in
+        "GSM SMS: Fix enhanced validity period length and small errors").'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number == 18', '-Tfields', '-egsm_sms.tp-vpf',
+                '-egsm_sms.tp.user_data_length', '-egsm_sms.sms_text')
+        assert stdout.strip() == '1\t12\tVPE relative'
+
+    def test_gsm_sms_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Concatenated messages in 7 bit, UCS2 and 8 bit coding, in both
+        directions, out of order, with a repeated part, and in SIP.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.reassembled.length', '-Tfields', '-eframe.number',
+                '-egsm_sms.reassembled.length', '-egsm_sms.fragment.count',
+                '-egsm_sms.sms_text')
+        assert stdout.splitlines() == [
+            '137\t32\t3\tFirst part, ,second part, ,last part.',
+            '139\t24\t2\tPart A,Part B',
+            '141\t13\t2\t',
+            '143\t11\t2\tfirst,second',
+            '146\t6\t3\tone,two',
+            '157\t36\t3\tDeliver one, ,deliver two, ,deliver three',
+            '159\t20\t2\tDele ,Delf ',
+            '215\t15\t2\tIMS one, ,IMS two',
+        ]
+        # the reassembled 8 bit message is dissected as WSP
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'wsp', '-Tfields', '-eframe.number')
+        assert stdout.split() == ['133', '141']
+
+    def test_gsm_sms_udh(self, cmd_tshark, capture_file, test_env):
+        '''The information elements of the user data header.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.ie_identifier', '-Tfields', '-egsm_sms.ie_identifier')
+        ids = [i for l in stdout.split() for i in l.split(',')]
+        assert sorted(set(ids)) == [
+            '0x00', '0x01', '0x04', '0x05', '0x06', '0x07', '0x08', '0x09',
+            '0x0a', '0x0b', '0x0c', '0x0d', '0x0e', '0x0f', '0x10', '0x11',
+            '0x12', '0x13', '0x14', '0x17', '0x1a', '0x1f', '0x20', '0x21',
+            '0x22', '0x23', '0x24', '0x25', '0x70', '0xc0']
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.dis_field_udh.gsm.fill_bits', '-Tfields',
+                '-eframe.number')
+        assert len(stdout.split()) >= 6
+
+    def test_gsm_sms_scts_timezone(self, cmd_tshark, capture_file, test_env):
+        '''The time zone octet of the service centre time stamp (sign in
+        bit 3).'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms.scts.timezone && gsm_sms.tp-oa', '-Tfields',
+                '-egsm_sms.tp-oa', '-egsm_sms.scts.timezone')
+        rows = [l.split('\t') for l in stdout.splitlines()]
+        assert {r[1] for r in rows} == {'8', '41', '10'}
+
+
+class TestDissectGsmSmsUd:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_sms_ud_coverage.pcap.gz'), *args,
+            ), encoding='utf-8', env=test_env)
+
+    def test_gsm_sms_ud_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The SMPP PDUs are found by the SMPP heuristic dissector; nothing
+        is malformed and there is no warning, in one and two passes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Tfields', '-e_ws.col.protocol')
+        protocols = stdout.split()
+        assert len(protocols) == 33
+        assert protocols.count('SMPP') == 21
+        assert protocols.count('WSP') == 8
+        assert protocols.count('WTP+WSP') == 1
+        assert protocols.count('TCP') == 3
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed || _ws.expert.severity > 0x00400000',
+                    '-Tfields', '-eframe.number')
+            assert count_output(stdout) == 0
+
+    def test_gsm_sms_ud_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Fragments of a short message (8 bit and 16 bit reference in the
+        UDH, in submit_sm, deliver_sm and data_sm) are reassembled in the
+        last fragment, including a message whose first fragment is repeated.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'gsm_sms_ud.reassembled.length', '-Tfields',
+                '-eframe.number', '-egsm_sms_ud.reassembled.length',
+                '-egsm_sms_ud.fragment.count', '-e_ws.col.protocol')
+        assert stdout.splitlines() == [
+            '14\t18\t3\tWSP',
+            '16\t23\t2\tSMPP',
+            '18\t18\t2\tWSP',
+            '25\t13\t3\tSMPP',
+            '28\t18\t2\tWSP',
+            '32\t18\t2\tWSP',
+        ]
+
+    def test_gsm_sms_ud_subdissectors(self, cmd_tshark, capture_file, test_env):
+        '''The port numbers of the UDH select WSP (also behind WTP); other
+        data is shown as Short Message body.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'wsp', '-Tfields', '-eframe.number')
+        assert stdout.split() == ['6', '8', '9', '14', '18', '28', '29', '30', '32']
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {7, 10, 11}', '-Tfields',
+                '-eframe.number', '-egsm_sms_ud.short_msg')
+        assert stdout.splitlines() == [
+            '7\t0106018348656c6c6f205753502070757368',
+            '10\t756e636c61696d656420706f72742064617461',
+            '11\t706c61696e20757365722064617461',
+        ]
+
+    def test_gsm_sms_ud_unreassembled(self, cmd_tshark, capture_file, test_env):
+        '''Fragments that cannot be reassembled (fragment number 0, 0
+        fragments, one fragment, fragment number above the total) are shown
+        as plain short messages.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                '-Y', 'frame.number in {19, 20, 21, 22}', '-Tfields',
+                '-eframe.number', '-egsm_sms_ud.short_msg')
+        assert stdout.splitlines() == [
+            '19\t66726167207a65726f',
+            '20\t6672616773207a65726f',
+            '21\t73696e676c6520667261676d656e74',
+            '22\t667261672033206f662032',
+        ]
+
+
+class TestDissectGsmtap:
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsmtap_coverage.pcapng.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsmtap_protocols(self, cmd_tshark, capture_file, test_env):
+        '''277 frames (274 GSMTAP over UDP, 3 from a LINKTYPE_GSMTAP_UM interface), none
+        malformed, in one and two passes; the only expert infos are the
+        two unknown GSMTAP versions (frames 273 and 274).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol')
+        assert len(rows) == 277
+        protocols = {}
+        for r in rows:
+            protocols[r[1]] = protocols.get(r[1], 0) + 1
+        lte_rrc = sum(n for p, n in protocols.items() if p.startswith('LTE RRC'))
+        assert lte_rrc == 23
+        assert protocols['GSMTAP'] == 92
+        assert protocols['RRC'] == 64
+        assert protocols['GSM RLC/MAC'] == 44
+        assert protocols['LAPDm'] == 21
+        assert protocols['GSM SIM'] == 8
+        assert protocols['LAPSat'] == 4
+        assert protocols['LAPD'] == 4
+        assert protocols['GSMTAP CBCH'] == 2
+        assert sum(protocols.values()) - lte_rrc - 92 - 64 - 44 - 21 - 8 - 4 - 4 - 2 == 15
+        for passes in ((), ('-2',)):
+            assert self._fields(cmd_tshark, capture_file, test_env,
+                                flt='_ws.malformed || _ws.expert.severity >= error',
+                                extra=passes) == []
+            assert [r[0] for r in self._fields(
+                cmd_tshark, capture_file, test_env, flt='_ws.expert',
+                extra=passes)] == ['273', '274']
+
+    def test_gsmtap_header_length(self, cmd_tshark, capture_file, test_env):
+        '''Frame 271 has a header length octet of 0x44 (272 bytes) and the
+        BCCH block behind it: before "GSMTAP: Reject too short header
+        lengths" the length wrapped to 16 in an 8 bit variable and the
+        padding was decoded as the payload. Frame 272 has a header of 20.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.hdr_len',
+                            'gsmtap.chan_type', '_ws.col.info',
+                            flt='frame.number in {1,271,272}')
+        assert rows == [
+            ['1', '16', '1', '(CCCH) (RR) System Information Type 3 '],
+            ['271', '272', '1', '(CCCH) (RR) System Information Type 3 '],
+            ['272', '20', '1', '(CCCH) (RR) System Information Type 3 '],
+        ]
+
+    def test_gsmtap_unknown_version(self, cmd_tshark, capture_file, test_env):
+        '''Versions 1 and 3 give the warning and are not decoded further.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.expert.message',
+                            '_ws.col.protocol', flt='gsmtap.version.invalid')
+        assert [(r[0], r[1], r[2]) for r in rows] == [
+            ('273', 'Unknown protocol version', 'GSMTAP'),
+            ('274', 'Unknown protocol version', 'GSMTAP')]
+
+    def test_gsmtap_types(self, cmd_tshark, capture_file, test_env):
+        '''The payload types of the 275 frames of a known version (UM, Abis,
+        bursts, SIM, TETRA, WiMAX, GB, GMR-1, UMTS and LTE, log, DIAG, NAS,
+        E1/T1, RLP and an unknown type 0x30).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.type')
+        counts = {}
+        for r in rows:
+            if r[1]:
+                counts[int(r[1])] = counts.get(int(r[1]), 0) + 1
+        assert counts == {1: 95, 2: 1, 3: 1, 4: 9, 5: 10, 6: 1, 7: 8, 8: 1, 9: 1,
+                          10: 20, 11: 1, 12: 64, 13: 25, 14: 1, 15: 1, 16: 1,
+                          17: 1, 18: 4, 19: 28, 20: 1, 48: 1}
+
+    def test_gsmtap_um_channels(self, cmd_tshark, capture_file, test_env):
+        '''BCCH, CCCH, AGCH, PCH and RACH go to the CCCH decoder, the
+        dedicated channels to LAPDm (with the SACCH L1 header for the
+        SACCH variants), PACCH and PDTCH to RLC/MAC, CBCH to GSMTAP CBCH,
+        and PTCCH/D to the Timing Advance decoder.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.chan_type',
+                            '_ws.col.protocol', 'gsmtap.sacch_l1.ta',
+                            flt='frame.number <= 31')
+        by_chan = {}
+        for r in rows:
+            by_chan.setdefault(r[1], set()).add(r[2])
+        assert by_chan['1'] == by_chan['2'] == by_chan['4'] == by_chan['5'] == {'GSMTAP'}
+        for chan in ('6', '7', '8', '9', '10', '134', '135', '136', '137', '138'):
+            assert by_chan[chan] == {'LAPDm'}
+        assert by_chan['12'] == by_chan['15'] == {'GSMTAP CBCH'}
+        sacch = [r for r in rows if r[1] in ('134', '135', '136', '137', '138')]
+        assert len(sacch) == 10
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.sacch_l1.power_lev',
+                            'gsmtap.sacch_l1.ta', flt='gsmtap.sacch_l1.ta')
+        assert [r[1:] for r in rows if r[0] != '31'] == [['5', '1']] * 10
+        assert [r[1:] for r in rows if r[0] == '31'] == [['1', '2']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.ptcch.ta_val',
+                            '_ws.col.info', flt='gsmtap.ptcch.ta_idx')
+        assert len(rows) == 1
+        assert rows[0][1] == ','.join(str(v) for v in range(0, 64, 4))
+        assert rows[0][2] == 'Packet Timing Advance Control'
+
+    def test_gsmtap_voice(self, cmd_tshark, capture_file, test_env):
+        '''Every voice frame type from HR to AMR_RATSCCH_DATA and an
+        unknown one.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.um_voice_type')
+        voice = [r for r in rows if r[1]]
+        assert [r[1] for r in voice] == [str(n) for n in list(range(14)) + [0]]
+        info = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                            flt='gsmtap.um_voice_type')
+        assert info[0][1].endswith(': HR')
+        assert info[12][1].endswith(': AMR_RATSCCH_DATA')
+        assert info[13][1].endswith(': Unknown 13')
+
+    def test_gsmtap_sub_dissectors(self, cmd_tshark, capture_file, test_env):
+        '''SIM APDUs, Abis, GB LLC and SNDCP, WiMAX bursts, GMR-1, UMTS RRC,
+        LTE RRC, LTE MAC framed, LTE NAS, E1/T1 and GSM RLP reach their
+        dissectors; sub types the dissector does not know are shown as
+        data.'''
+        for flt, count in (('gsm_sim', 8), ('lapsat', 4), ('lte_rrc', 23), ('lapd', 4),
+                           ('v120', 2), ('fr', 2), ('sndcp', 1), ('mac-lte', 1),
+                           ('nas-eps', 2), ('gsm_rlp', 1), ('x75', 2), ('qcdiag', 1),
+                           ('gsmtap.type == 12', 64), ('gsmtap.type == 19', 28)):
+            assert len(self._fields(cmd_tshark, capture_file, test_env, flt=flt)) == count, flt
+        # RRC sub types 17 (SIB 1) and 41 (SIB 15.2) always give malformed
+        # packets with the payloads tried and are not in the capture; the
+        # two LTE RRC sub types above 22 are shown as data
+        subs = [int(r[1]) for r in self._fields(cmd_tshark, capture_file, test_env,
+                                                'gsmtap.rrc_sub_type', flt='gsmtap.type == 12')]
+        assert subs == [n for n in range(66) if n not in (17, 41)]
+        info = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                            flt='gsmtap.type == 4')
+        assert info[0][1].endswith('SELECT File MF ')
+        assert info[1][1].startswith('ATR')
+        assert info[2][1].endswith('READ BINARY Offset=0 ')
+
+    def test_gsmtap_rlcmac(self, cmd_tshark, capture_file, test_env):
+        '''GPRS blocks (CS-1 to CS-4 from the block length, a block of an
+        unusual length decoded as CS-1) and EGPRS blocks with header types
+        1-3 reach RLC/MAC; the access burst forms of uplink frames of up to
+        5 octets are decoded; frames 275-277 come from a GSMTAP_UM link.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                            flt='gsm_rlcmac')
+        info = [r[1] for r in rows]
+        assert len(info) == 44
+        for cs in ('CS1', 'CS2', 'CS3', 'CS4'):
+            assert any('GPRS DL DATA: ' + cs in i for i in info)
+        # the MCS comes from the block header (MCS-1 does not occur)
+        mcs = set(i.split('MCS')[1].split()[0] for i in info if 'EGPRS' in i)
+        assert mcs == set('023456789')
+        assert sum(1 for i in info if i.startswith('PACCH ACCESS BURST')) == 3
+        assert any('GPRS DL CTRL' in i for i in info) and any('GPRS UL CTRL' in i for i in info)
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap.type',
+                            '_ws.col.protocol', '_ws.col.info', flt='frame.number >= 275')
+        assert [r[2] for r in rows] == ['GSMTAP', 'GSM RLC/MAC', 'LAPDm']
+        assert rows[1][3].startswith('EGPRS DL DATA: MCS2 ')
+
+    def test_gsmtap_log_type(self, cmd_tshark, capture_file, test_env):
+        '''Type 0x10 records are handed to GSMTAP_LOG through the
+        gsmtap.type dissector table.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gsmtap_log.string',
+                            flt='gsmtap_log')
+        assert rows == [['270', 'hello']]
+
+
+class TestDissectGsmtapLog:
+    def test_gsmtap_log_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is a GSMTAP libosmocore log record and none is
+        malformed or has an expert info, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol', '-egsmtap_log.level',
+            ), encoding='utf-8', env=test_env)
+        lines = stdout.splitlines()
+        assert len(lines) == 13
+        assert all(l.startswith('GSMTAP\t') for l in lines)
+        assert all(l.split('\t')[1] for l in lines)
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gsmtap_log_levels(self, cmd_tshark, capture_file, test_env):
+        '''The log levels with names (DEBUG, INFO, NOTICE, ERROR, FATAL)
+        and the level 2 that has none.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 6',
+                '-Tfields', '-eframe.number', '-egsmtap_log.level',
+            ), encoding='utf-8', env=test_env)
+        assert [l.split('\t')[:2] for l in stdout.splitlines()] == [
+            ['1', '1'], ['2', '3'], ['3', '5'], ['4', '7'], ['5', '8'], ['6', '2']]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'frame.number <= 6',
+                '-V', '-O', 'gsmtap_log',
+            ), encoding='utf-8', env=test_env)
+        for name in ('DEBUG (1)', 'INFO (3)', 'NOTICE (5)', 'ERROR (7)', 'FATAL (8)'):
+            assert 'Log Level: ' + name in stdout
+        assert 'Log Level: Unknown (2)' in stdout
+
+    def test_gsmtap_log_fields(self, cmd_tshark, capture_file, test_env):
+        '''The record fields, the summary line and the Info column of a
+        record whose fields fill their whole width (frame 8), an empty
+        message (frame 7) and one behind a GSMTAP header of 24 octets
+        (frame 11).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'frame.number in {7,8,11}',
+                '-Tfields', '-eframe.number', '-egsmtap_log.ident',
+                '-egsmtap_log.pid', '-egsmtap_log.subsys',
+                '-egsmtap_log.src_file.name', '-egsmtap_log.src_file.line_nr',
+                '-egsmtap_log.string', '-egsmtap.hdr_len',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '7\tosmo-msc\t1\tDMM\tgsm_04_08.c\t1\t\t16',
+            '8\t0123456789abcdef\t4000000000\tABCDEFGHIJKLMNOP\t'
+            'ffffffffffffffffffffffffffffff.c\t4294967295\tfull width fields\t16',
+            '11\tosmo-hlr\t5\tDDB\tdb.c\t5\tlonger GSMTAP header\t24',
+        ]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'frame.number == 1',
+                '-Tfields', '-egsmtap_log.timestamp', '-e_ws.col.info',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.startswith('2023-11-14T22:13:20.001000000Z\tDEBUG message from the BTS')
+
+    def test_gsmtap_log_long_message(self, cmd_tshark, capture_file, test_env):
+        '''A 300 character message that continues after a NUL octet is
+        shown in full in the string field and up to the NUL in nothing
+        else (frame 9), and non-ASCII octets do not break frame 10.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'frame.number == 9',
+                '-Tfields', '-egsmtap_log.string',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.startswith('X' * 300)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsmtap_log_coverage.pcap.gz'),
+                '-Y', 'gsmtap_log.pid == 3 && gsmtap_log.level == 1',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['10']
+
+
+class TestDissectGsmUm:
+    @staticmethod
+    def _rows(cmd_tshark, capture_file, test_env, *fields, flt=None, extra=()):
+        args = [cmd_tshark, *extra, '-r', capture_file('gsm_um_coverage.xml.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gsm_um_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The Gammu DCT3 trace opens with the GSM Um link layer; 34 frames
+        end in GSM Um and 11 in LAPDm (SDCCH, SACCH and FACCH), none is
+        malformed or has an expert info, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gsm_um_coverage.xml.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 45
+        assert protocols.count('GSM Um') == 34
+        assert protocols.count('LAPDm') == 11
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gsm_um_coverage.xml.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gsm_um_bands(self, cmd_tshark, capture_file, test_env):
+        '''Downlink frames show ARFCN, band and downlink frequency; the
+        edges of every band and the unknown band are covered.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_um.arfcn', 'gsm_um.band', 'gsm_um.frequency',
+                          flt='frame.number <= 20')
+        assert [r[1:] for r in rows] == [
+            ['1', 'P-GSM 900', '935200'], ['124', 'P-GSM 900', '959800'],
+            ['0', 'E-GSM 900', '935000'], ['975', 'E-GSM 900', '925200'],
+            ['1023', 'E-GSM 900', '934800'], ['955', 'R-GSM 900', '921200'],
+            ['974', 'R-GSM 900', '925000'], ['512', 'DCS 1800', '1805200'],
+            ['885', 'DCS 1800', '1879800'], ['810', 'DCS 1800', '1864800'],
+            ['259', 'GSM 450', '460600'], ['293', 'GSM 450', '467400'],
+            ['306', 'GSM 480', '489000'], ['340', 'GSM 480', '495800'],
+            ['128', 'GSM 850', '869200'], ['251', 'GSM 850', '893800'],
+            ['200', 'GSM 850', '883600'], ['900', 'Unknown', '0'],
+            ['500', 'Unknown', '0'], ['1100', 'Unknown', '0']]
+
+    def test_gsm_um_pcs1900_preference(self, cmd_tshark, capture_file, test_env):
+        '''With dcs1800 off ARFCN 512-810 is PCS 1900 and 811-885 is unknown.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_um.band', 'gsm_um.frequency',
+                          flt='frame.number in {8, 9, 10}',
+                          extra=('-ogsm_um.dcs1800:FALSE',))
+        assert [r[1:] for r in rows] == [
+            ['PCS 1900', '1930200'], ['Unknown', '0'], ['PCS 1900', '1989800']]
+
+    def test_gsm_um_downlink_fields(self, cmd_tshark, capture_file, test_env):
+        '''BSIC, TDMA frame, error, timeshift and the L2 pseudo length of
+        downlink frames; uplink frames have none of them.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          'gsm_um.direction', 'gsm_um.channel', 'gsm_um.bsic',
+                          'gsm_um.frame', 'gsm_um.error', 'gsm_um.timeshift',
+                          'gsm_um.l2_pseudo_len',
+                          flt='frame.number in {2, 21, 25, 45}')
+        assert rows == [
+            ['2', 'Downlink', 'BCCH', '7', '1001', '1', '3', '22'],
+            ['21', 'Downlink', 'CCCH', '3', '5', '0', '0', '9'],
+            ['25', 'Uplink', 'CCCH', '', '', '', '', ''],
+            ['45', 'Downlink', 'BCCH', '63', '2147483647', '255', '65535', '22']]
+
+    def test_gsm_um_payloads(self, cmd_tshark, capture_file, test_env):
+        '''CCCH/BCCH downlink goes to DTAP (an empty block is not
+        dissected), uplink CCCH is data, SDCCH/SACCH/FACCH go to LAPDm.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env, '_ws.col.info',
+                          flt='frame.number in {1, 22, 23, 24, 25, 29, 31, 32, 37}')
+        assert [(r[0], r[1].strip()) for r in rows] == [
+            ('1', '(DTAP) (RR) System Information Type 3'),
+            ('22', ''),
+            ('23', '(DTAP) (RR) Immediate Assignment Reject'),
+            ('24', '(DTAP) (RR) Paging Request Type 2'),
+            ('25', ''),
+            ('29', 'U F, func=SABM'),
+            ('31', 'U, func=UI(DTAP) (RR) Channel Release'),
+            ('32', 'U, func=UI(DTAP) (RR) RR Status'),
+            ('37', 'S, func=RR, N(R)=0')]
+
+
+class TestDissectGssapi:
+    '''GSS-API (packet-gssapi.c) from the synthetic capture
+    gssapi_coverage.pcap.gz: tokens in DNS TSIG (UDP 53) and in DCE/RPC
+    authentication type 9 (TCP 135). All tokens are placeholders; no keys
+    or ciphertext are involved.'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, name, flt, *fields, passes=()):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file(name),
+                '-Y', flt,
+                '-Tfields', '-eframe.number', *('-e' + f for f in fields),
+            ), encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_gssapi_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 96 frames decode, 65 of them carry a GSS-API blob, without
+        malformed packets or error expert infos, in one and two passes.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'gss-api', 'gss-api.OID')
+        assert len(rows) == 65
+        for passes in ((), ('-2',)):
+            rows = self._fields(cmd_tshark, capture_file, test_env,
+                    'gssapi_coverage.pcap.gz',
+                    '_ws.malformed || _ws.expert.severity >= 0x00800000',
+                    passes=passes)
+            assert not rows
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gssapi_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 96
+        assert protocols.count('DNS') == 62
+        assert protocols.count('DCERPC') == 7
+        assert protocols.count('SRVSVC') == 18
+
+    def test_gssapi_oids(self, cmd_tshark, capture_file, test_env):
+        '''Each OID selects its subdissector: SPNEGO, Kerberos (with the
+        token ID), user-to-user, IAKERB, NTLMSSP and NEGOEX; an OID
+        without a dissector shows the token object.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz',
+                'frame.number in {1, 3, 4, 9, 11, 27, 31, 47, 48}',
+                'gss-api.OID', 'spnego.krb5.tok_id', 'gss-api.token_object')
+        assert rows == [
+            ['1', '1.3.6.1.5.5.2', '', ''],
+            ['3', '1.2.840.113554.1.2.2', '0x0001', ''],
+            ['4', '1.2.840.113554.1.2.2', '0x0002', ''],
+            ['9', '1.2.840.48018.1.2.2', '0x0001', ''],
+            ['11', '1.2.840.113554.1.2.2.3', '0x0004', ''],
+            ['27', '1.3.6.1.5.2.5', '0x0001', ''],
+            ['31', '1.3.6.1.4.1.311.2.2.10', '', ''],
+            ['47', '1.2.3.4.5', '', '06042a030405010000000000000000000000'],
+            ['48', '1.3.6.1.4.1.311.2.2.30', '', ''],
+        ]
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'frame.number in {31, 32, 33, 39}',
+                'ntlmssp.messagetype')
+        assert rows == [['31', '0x00000001'], ['32', '0x00000002'],
+                        ['33', '0x00000003'], ['39', '0x00000000']]
+
+    def test_gssapi_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''A Kerberos token announced larger than the first DNS TSIG MAC is
+        reassembled from the following blobs of the conversation
+        (frames 51 and 53 are completed in 55, 57 in 59), and the token
+        is dissected in the last frame. The first pass and -2 agree.'''
+        for passes in ((), ('-2',)):
+            rows = self._fields(cmd_tshark, capture_file, test_env,
+                    'gssapi_coverage.pcap.gz',
+                    'frame.number in {51, 53, 55, 57, 59}',
+                    'gss-api.reassembled_in', 'gss-api.segment.count',
+                    'gss-api.OID', passes=passes)
+            if passes:
+                assert rows == [
+                    ['51', '55', '', ''],
+                    ['53', '55', '', ''],
+                    ['55', '', '3', '1.2.840.113554.1.2.2'],
+                    ['57', '59', '', ''],
+                    ['59', '', '2', '1.3.6.1.5.5.2'],
+                ]
+            else:
+                # the first pass shows the OID of the first blob; the
+                # reassembled-in references are added when the frames
+                # are revisited
+                assert [r[0] for r in rows if r[3]] == ['51', '55', '57', '59']
+                assert not any(r[1] for r in rows)
+
+    def test_gssapi_non_application_token(self, cmd_tshark, capture_file, test_env):
+        '''Tokens without the APPLICATION header: CFX Kerberos tokens are
+        recognised by their token ID, NTLMSSP verifiers and signed data
+        by their version, and a token with nothing known about it gets
+        an "Unknown header" expert info (a warning).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'frame.number in {41, 42, 43}',
+                'spnego.krb5.tok_id', 'gss-api.OID')
+        assert rows[:3] == [['41', '0x0405', ''], ['42', '0x0404', ''], ['43', '0x0405', '']]
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gssapi_coverage.pcap.gz'),
+                '-Y', '_ws.expert.message contains "Unknown header"',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['45', '46']
+
+    def test_gssapi_dcerpc_verifier(self, cmd_tshark, capture_file, test_env):
+        '''DCE/RPC authentication type 9: the bind carries a SPNEGO token
+        with NTLMSSP, requests carry an NTLMSSP verifier; a Kerberos
+        connection verifies with wrap tokens with and without the
+        APPLICATION header; NEGOEX has no verifier dissector and shows
+        the bytes.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'frame.number in {66, 67, 68, 69, 71}',
+                'gss-api.OID', 'ntlmssp.messagetype', 'ntlmssp.verf.vers')
+        assert rows == [
+            ['66', '1.3.6.1.5.5.2', '0x00000001', ''],
+            ['67', '', '0x00000002', ''],
+            ['68', '', '0x00000003', ''],
+            ['69', '', '', '1'],
+            ['71', '', '', '1'],
+        ]
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'gss-api.auth_verifier',
+                'gss-api.auth_verifier')
+        assert [r[0] for r in rows] == ['93', '94', '95', '96']
+        rows = self._fields(cmd_tshark, capture_file, test_env,
+                'gssapi_coverage.pcap.gz', 'frame.number in {80, 82, 84}',
+                'gss-api.OID', 'spnego.krb5.tok_id')
+        assert [r[1:] for r in rows] == [['1.2.840.113554.1.2.2', '0x0102'],
+                                         ['', '0x0102'], ['', '0x0102']]
+
+
+class TestDissectGtp:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gtp_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, flt, *fields, opts=()):
+        args = ['-Tfields'] + [a for f in fields for a in ('-e', f)]
+        out = TestDissectGtp._tshark(cmd_tshark, capture_file, test_env, *opts, '-Y', flt, *args)
+        return [line.split('\t') for line in out.splitlines()]
+
+    def test_gtp_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed and none has an error expert info, in one and two passes.
+        The 58 frames with warnings are IE contents that GTP does not decode, unknown IEs
+        and extension headers of the wrong length.'''
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.malformed || _ws.expert.severity >= 8388608',
+                                  '-Tfields', '-eframe.number')
+            assert stdout.split() == []
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.expert.severity >= 6291456', '-Tfields', '-eframe.number')
+            assert len(stdout.split()) == 58
+
+    def test_gtp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''GTPv0/GTPv1/GTP' control messages, GTP-U with the T-PDU payloads, GTPv2 (handed on)
+        and the RADIUS QoS attributes.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.protocol')
+        protos = {}
+        for p in stdout.split():
+            protos[p] = protos.get(p, 0) + 1
+        assert protos == {'GTP': 371, 'GTP/UDP': 63, 'GTP/ARP': 1, 'GTP/PPPoED': 1, 'GTPv2': 1,
+                          'BSSGP': 5, 'RADIUS': 9, 'UDP': 5}
+
+    def test_gtp_v0_messages(self, cmd_tshark, capture_file, test_env):
+        '''Frames 1-35 hold every GTPv0 message type of the table with its IEs.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number <= 35',
+                            'frame.number', 'gtp.flags.version', 'gtp.message')
+        assert len(rows) == 35
+        assert all(r[1] == '0' for r in rows)
+        assert [r[2] for r in rows[:8]] == ['0x01', '0x02', '0x03', '0x04', '0x05', '0x06', '0x07', '0x10']
+        assert rows[-1][2] == '0xf1'
+
+    def test_gtp_v1_messages(self, cmd_tshark, capture_file, test_env):
+        '''Frames 36-76 hold every GTPv1 message type with its IEs; the decoded IEs of the
+        Create PDP Context Request.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 44',
+                            'gtp.message', 'e212.imsi', 'gtp.apn', 'gtp.user_ipv4', 'gtp.qos_traf_class')
+        assert rows == [['0x10', '310410123456789', 'internet.example.com', '192.0.2.10', '1']]
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number >= 36 && frame.number <= 76 && gtp.flags.version == 1',
+                            'frame.number')
+        assert len(rows) == 41
+
+    def test_gtp_response_matching(self, cmd_tshark, capture_file, test_env):
+        '''Requests and responses with the same sequence number in one conversation are
+        matched (the request shows its response in the second pass).
+        The error indications are not associated with a session (they are dropped from the
+        TEID map before the lookup).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number >= 250 && gtp.response_to',
+                            'frame.number', 'gtp.response_to', opts=('-2',))
+        pairs = {r[0]: r[1] for r in rows}
+        assert pairs['251'] == '250'      # Echo
+        assert pairs['253'] == '252'      # Create PDP Context
+        assert pairs['255'] == '254'      # Update PDP Context
+        assert pairs['260'] == '259'      # Delete PDP Context
+        assert pairs['295'] == '294'      # Identification
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 250', 'gtp.response_in', opts=('-2',))
+        assert rows == [['251']]
+
+    def test_gtp_session_tracking(self, cmd_tshark, capture_file, test_env):
+        '''With "Track GTP session" the messages of one session (create, update, error
+        indication, delete) get the same session number and the IMSI is associated.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number >= 250 && frame.number <= 260 && gtp.session',
+                            'frame.number', 'gtp.session', opts=('-o', 'gtp.track_gtp_session:TRUE'))
+        assert [r[0] for r in rows] == ['252', '253', '254', '255', '259', '260']
+        assert len({r[1] for r in rows}) == 1
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 252', 'e212.assoc.imsi',
+                            opts=('-o', 'gtp.track_gtp_session:TRUE'))
+        assert rows == [['310410123456789,310410123456789']]        # the IMSI of the message and the associated IMSI
+
+    def test_gtp_session_tracking_deinterlaced(self, cmd_tshark, capture_file, test_env):
+        '''Tracking sessions with deinterlacing by VLAN, also for the IPv6 Create PDP Context
+        Request (reproducer: the conversation lookup returned NULL for IPv6).'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-o', 'gtp.track_gtp_session:TRUE',
+                              '-o', 'protocols.conversation_deinterlacing_key:VM.',
+                              '-Y', 'gtp.session', '-Tfields', '-eframe.number', '-egtp.session')
+        assert len(stdout.splitlines()) > 30
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 443', 'ipv6.src', 'gtp.message',
+                            opts=('-o', 'gtp.track_gtp_session:TRUE', '-o', 'protocols.conversation_deinterlacing_key:VM.'))
+        assert rows == [['2001:db8::a', '0x10']]
+
+    def test_gtp_prime(self, cmd_tshark, capture_file, test_env):
+        '''GTP' data record transfer: record format, release and the IEs after the Data
+        Record Packet IE (reproducer: the IE following the data record was lost).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gtp.data_record_format',
+                            'frame.number', 'gtp.number_of_data_records', 'gtp.data_record_format')
+        assert len(rows) >= 14
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 446',
+                            'gtp.message', 'gtp.seq_num_released', 'gtp.ext_id', 'gtp.data_record_format')
+        assert rows == [['0xf0', '0x1111,0x2222', '1', '1']]
+
+    def test_gtp_gsn_address_lengths(self, cmd_tshark, capture_file, test_env):
+        '''GSN addresses of 4, 5, 16 and 17 octets, also as the last IE (reproducer: a 5 octet
+        address was read as IPv6 and ended in an exception).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 444 || frame.number == 445',
+                            'frame.number', 'gtp.gsn_ipv4', 'gtp.gsn_ipv6')
+        assert rows == [['444', '192.0.2.10', ''], ['445', '', '2001:db8::1']]
+
+    def test_gtp_mbms_service_area(self, cmd_tshark, capture_file, test_env):
+        '''MBMS Service Area with two codes (reproducer: the subset was 3 octets too short).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 447',
+                            'gtp.message', 'gtp.no_of_mbms_sa_codes', 'gtp.mbms_sa_code')
+        assert rows == [['0x60', '2', '4660,22136']]
+
+    def test_gtp_user_plane(self, cmd_tshark, capture_file, test_env):
+        '''GTP-U: T-PDUs with IPv4, IPv6, Ethernet, VLAN and PPPoE payloads and the extension
+        headers of the PDU session container (both directions) and NR-U (all PDU types).'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gtp.message == 0xff && frame.number >= 354 && frame.number <= 378',
+                            'frame.number', 'gtp.teid', '_ws.col.protocol')
+        assert len(rows) == 20
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gtp.ext_hdr.pdu_ses_con.pdu_type', 'frame.number',
+                            'gtp.ext_hdr.pdu_ses_con.pdu_type')
+        assert [r[1] for r in rows] == ['0'] * 6 + ['1'] * 9 + ['2']     # the last one is an unknown PDU type
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'nrup', 'frame.number', 'nrup.pdu_type')
+        assert [r[1] for r in rows] == ['0'] * 5 + ['1'] * 9 + ['2'] * 6 + ['3']
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gtp.ext_hdr.udp_port', 'gtp.ext_hdr.udp_port')
+        assert rows[0] == ['2152']
+
+    def test_gtp_radius_qos(self, cmd_tshark, capture_file, test_env):
+        '''The 3GPP QoS profile and selection mode RADIUS attributes are decoded by GTP.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, 'gtp.qos_version', 'frame.number', 'gtp.qos_version')
+        assert len(rows) >= 7
+
+    def test_gtp_pdcp_tpdu(self, cmd_tshark, capture_file, test_env, conf_path):
+        '''T-PDUs handed to PDCP-NR / PDCP-LTE with the preconfigured tables (reproducer:
+        uninitialized members of the PDCP-NR info).'''
+        with open(os.path.join(conf_path, 'gtp_pdcp_nr_keys2'), 'w') as f:
+            f.write('"10.0.0.2","*","DL","SDAP header NOT present","MAC-I NOT present","User plane","12 bits",'
+                    '"RoHC NOT compressed","Uncompressed (0)","1","1"\n')
+        with open(os.path.join(conf_path, 'gtp_pdcp_lte_keys2'), 'w') as f:
+            f.write('"10.0.0.2","*","DL","Header present","User plane","12 bits",'
+                    '"RoHC NOT compressed","Uncompressed (0)","1","1"\n')
+        for tpdu, proto in (('pdcp-nr', 'pdcp-nr'), ('pdcp-lte', 'pdcp-lte')):
+            rows = self._fields(cmd_tshark, capture_file, test_env, 'frame.number == 424',
+                                'frame.protocols', opts=('-o', 'gtp.dissect_tpdu_as:' + tpdu))
+            assert proto in rows[0][0]
+
+
+class TestDissectGtpv2:
+    '''GTPv2-C from the synthetic capture gtpv2_coverage.pcap.gz: every
+    message type, request/response pairs, header variants, grouped IEs,
+    the user location in RADIUS and Diameter, and the JSON 3GPP frames
+    (HTTP).'''
+
+    @staticmethod
+    def _fields(cmd_tshark, capture_file, test_env, *fields, passes=(), opts=(), flt=None):
+        args = [cmd_tshark, *passes, *opts, '-r', capture_file('gtpv2_coverage.pcap.gz')]
+        if flt:
+            args += ['-Y', flt]
+        args += ['-Tfields', '-eframe.number', *('-e' + f for f in fields)]
+        out = subprocess.check_output(args, encoding='utf-8', env=test_env, timeout=120)
+        return [l.split('\t') for l in out.splitlines()]
+
+    def test_gtpv2_protocols(self, cmd_tshark, capture_file, test_env):
+        '''192 frames: 170 GTPv2 (one with NAS-EPS), 15 RADIUS, 3 Diameter,
+        1 HTTP/JSON, 2 TCP; no malformed packets or error expert infos in
+        one pass and with -2.'''
+        rows = self._fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol')
+        assert len(rows) == 192
+        protos = [r[1] for r in rows]
+        assert protos.count('GTPv2') == 170
+        assert protos.count('GTPv2/NAS-EPS') == 1
+        assert protos.count('RADIUS') == 15
+        assert protos.count('DIAMETER') == 3
+        assert protos.count('HTTP/JSON') == 1
+        for passes in ((), ('-2',)):
+            rows = self._fields(cmd_tshark, capture_file, test_env, passes=passes,
+                                flt='_ws.malformed || _ws.expert.severity >= 0x00800000')
+            assert not rows
+
+    def test_gtpv2_request_response(self, cmd_tshark, capture_file, test_env):
+        '''Requests and responses with the same sequence number are paired
+        (also the retransmitted request: the response belongs to the last
+        one); a response before its request is tied to it on the second pass.'''
+        rows = {r[0]: r[1:] for r in self._fields(cmd_tshark, capture_file, test_env,
+                'gtpv2.response_in', 'gtpv2.response_to', passes=('-2',))}
+        assert rows['116'] == ['117', '']
+        assert rows['117'] == ['', '116']
+        assert rows['123'] == ['', '122']
+        assert rows['158'] == ['', '157']
+        assert rows['154'][1] == '155'    # a response seen before its request
+        out = subprocess.check_output((cmd_tshark, '-r', capture_file('gtpv2_coverage.pcap.gz'),
+                '-q', '-z', 'gtpv2,srt'), encoding='utf-8', env=test_env, timeout=120)
+        assert any(l.split()[1:4] == ['Create', 'Session', 'Request'] and l.split()[4] == '4'
+                   for l in out.splitlines())
+
+    def test_gtpv2_echo_not_matched(self, cmd_tshark, capture_file, test_env):
+        '''An Echo Request with the sequence number of a Create Session
+        pair is not shown as its response and does not change the pair
+        ("GTPv2: Bound grouped IE nesting and fix NULL dereferences").'''
+        for passes in ((), ('-2',)):
+            rows = {r[0]: r[1:] for r in self._fields(cmd_tshark, capture_file, test_env,
+                    'gtpv2.response_in', 'gtpv2.response_to', passes=passes)}
+            assert rows['171'] == ['', '']
+            assert rows['170'][1] == '169'
+
+    def test_gtpv2_json_session_tracking(self, cmd_tshark, capture_file, test_env):
+        '''IMSI and Cause IEs decoded for JSON 3GPP (HTTP) have no session
+        arguments; with session tracking on this crashed.'''
+        for opts in ((), ('-o', 'gtp.track_gtp_session:TRUE')):
+            rows = {r[0]: r[1:] for r in self._fields(cmd_tshark, capture_file, test_env,
+                    'gtpv2.cause', 'gtpv2.ie_type', opts=opts)}
+            assert rows['173'] == ['16', '1,2']
+
+    def test_gtpv2_grouped_ies(self, cmd_tshark, capture_file, test_env):
+        '''Grouped IEs: bearer contexts nested inside a PDN connection, and
+        ten levels of bearer contexts (the limit is 16).'''
+        rows = {r[0]: r[1] for r in self._fields(cmd_tshark, capture_file, test_env, 'gtpv2.ie_type')}
+        assert rows['115'].split(',') == ['93'] * 10 + ['73']
+        assert rows['114'].split(',')[:2] == ['93', '109']
+
+    def test_gtpv2_user_location(self, cmd_tshark, capture_file, test_env):
+        '''The 3GPP User Location Info of RADIUS (frames 174-188) and
+        Diameter (190-191) covers every geographic location type;
+        Presence Reporting Area elements are decoded from Diameter (192).'''
+        rows = {r[0]: r[1] for r in self._fields(cmd_tshark, capture_file, test_env, 'gtpv2.glt')}
+        assert [rows[str(n)] for n in range(174, 189)] == \
+            ['0', '1', '2'] + [str(v) for v in range(128, 140)]
+        assert rows['190'] == '0,1,2,128,129,130,131,132'
+        assert rows['191'] == '133,134,135,136,137,138,139'
+        rows = {r[0]: r[1] for r in self._fields(cmd_tshark, capture_file, test_env,
+                'gtpv2.pres_rep_area_action.no_tai')}
+        assert rows['192'] == '2,1,0,0'
+
+
+class TestDissectGue:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gue_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    def test_gue_expert_infos(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed; the only expert infos are the warnings of the
+        invalid IP versions (19, 20) and unknown variants (21, 22), in one and
+        two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number',
+                                  '-e_ws.expert.message')
+            assert stdout.splitlines() == [
+                '19\tInvalid IP version 5 for GUE variant 1',
+                '20\tInvalid IP version 7 for GUE variant 1',
+                '21\tUnknown GUE variant 2',
+                '22\tUnknown GUE variant 3',
+            ]
+
+    def test_gue_frame_counts(self, cmd_tshark, capture_file, test_env):
+        '''22 of the 24 frames are GUE; the last two (variant 0 with fewer than 4
+        octets) are not and stay plain UDP.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'gue', '-Tfields', '-eframe.number')
+        assert stdout.split() == [str(n) for n in range(1, 23)]
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', '!gue', '-Tfields',
+                              '-eframe.number', '-e_ws.col.protocol')
+        assert stdout.splitlines() == ['23\tUDP', '24\tUDP']
+
+    def test_gue_variant0_header(self, cmd_tshark, capture_file, test_env):
+        '''Data and control messages of variant 0 with extension fields.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'gue.version == 0 && frame.number != 18 && frame.number != 9',
+                              '-Tfields', '-eframe.number', '-egue.c', '-egue.hlen', '-egue.proto',
+                              '-egue.ctype', '-egue.flags', '-egue.ext_data')
+        assert stdout.splitlines() == [
+            '1\tFalse\t0\t4\t\t0x0000\t',
+            '2\tFalse\t0\t41\t\t0x0000\t',
+            '3\tFalse\t0\t17\t\t0x0000\t',
+            '4\tFalse\t0\t1\t\t0x0000\t',
+            '5\tFalse\t0\t253\t\t0x0000\t',
+            '6\tFalse\t0\t59\t\t0x0000\t',
+            '7\tFalse\t1\t4\t\t0x0000\t01020304',
+            '8\tFalse\t3\t4\t\t0x8001\t0102030405060708090a0b0c',
+            '10\tFalse\t0\t4\t\t0x0100\t',
+            '11\tTrue\t0\t\t0\t0x0000\t',
+            '12\tTrue\t0\t\t255\t0x0000\t',
+            '13\tTrue\t2\t\t7\t0x0000\t0102030405060708',
+        ]
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number == 9',
+                              '-Tfields', '-egue.hlen', '-egue.flags')
+        assert stdout.strip() == '31\t0xffff'
+
+    def test_gue_payload_protocols(self, cmd_tshark, capture_file, test_env):
+        '''The payload is handed to the dissector of the protocol number, directly
+        for variant 1, and the control payload to the data dissector.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'gue', '-Tfields',
+                              '-eframe.number', '-eframe.protocols')
+        lines = dict(l.split('\t') for l in stdout.splitlines())
+        assert lines['1'] == 'eth:ethertype:ip:udp:gue:ip:udp:data'
+        assert lines['2'] == 'eth:ethertype:ip:udp:gue:ipv6:udp:data'
+        assert lines['3'] == 'eth:ethertype:ip:udp:gue:udp:data'
+        assert lines['4'] == 'eth:ethertype:ip:udp:gue:icmp'
+        assert lines['5'] == 'eth:ethertype:ip:udp:gue:data'
+        assert lines['11'] == 'eth:ethertype:ip:udp:gue:data'
+        assert lines['14'] == 'eth:ethertype:ip:udp:gue:ip:udp:data'
+        assert lines['16'] == 'eth:ethertype:ip:udp:gue:ipv6:udp:data'
+        assert lines['17'] == 'eth:ethertype:ipv6:udp:gue:ip:udp:data'
+        assert lines['19'] == 'eth:ethertype:ip:udp:gue:data'
+
+    def test_gue_info_column(self, cmd_tshark, capture_file, test_env):
+        '''Info column for unclaimed payloads, control messages and bad variants.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number in {5,6,11,12,13,19,21,22}',
+                              '-Tfields', '-eframe.number', '-e_ws.col.info')
+        assert stdout.splitlines() == [
+            '5\tEncapsulated Unknown (253)',
+            '6\tEncapsulated IPv6-NoNxt',
+            '11\tControl message (type 0)',
+            '12\tControl message (type 255)',
+            '13\tControl message (type 7)',
+            '19\tInvalid IP version 5 for GUE variant 1',
+            '21\tUnknown GUE variant 2',
+            '22\tUnknown GUE variant 3',
+        ]
+
+
+class TestDissectGvcp:
+    @staticmethod
+    def _infos(cmd_tshark, capture_file, test_env, *extra):
+        stdout = subprocess.check_output((cmd_tshark, *extra,
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-e_ws.col.Info',
+            ), encoding='utf-8', env=test_env)
+        return {int(l.split('\t')[0]): l.split('\t')[1].rstrip()
+                for l in stdout.splitlines()}
+
+    def test_gvcp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Every frame is GVCP and none is malformed or has an expert
+        info, in one and two passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.Protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 923
+        assert protocols.count('GVCP') == 923
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gvcp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gvcp_discovery(self, cmd_tshark, capture_file, test_env):
+        '''Discovery acknowledge strings and the force IP exchange.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Y', 'gvcp.bootstrap.manufacturername && frame.number < 10',
+                '-Tfields', '-eframe.number',
+                '-egvcp.bootstrap.manufacturername',
+                '-egvcp.bootstrap.serialnumber',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '2\tSynthetic Vision GmbH\tSN-0001',
+            '4\tSynthetic Vision GmbH\tSN-0002',
+        ]
+        info = self._infos(cmd_tshark, capture_file, test_env)
+        assert info[2] == '< DISCOVERY_ACK (Synthetic Vision GmbH, SN-0001)'
+        assert info[5].startswith('> FORCEIP_CMD')
+        assert info[6].startswith('< FORCEIP_ACK')
+
+    def test_gvcp_registers(self, cmd_tshark, capture_file, test_env):
+        '''Register names and values come from the matching request.'''
+        info = self._infos(cmd_tshark, capture_file, test_env)
+        assert info[7] == '> READREG_CMD [Version]'
+        assert info[8] == '< READREG_ACK [Version] Value=0x00020002'
+        assert info[345] == '> READREG_CMD [Addr:0x00012345]'
+        assert info[346] == '< READREG_ACK [Addr:0x00012345] Value=0xDEADBEEF'
+        assert info[354] == '< READREG_ACK (Access Denied) [Addr:0x00012345]'
+        assert info[694] == '< WRITEREG_ACK [Multiple WriteReg Ack] (4/4) (Success)'
+        assert info[696] == '< WRITEREG_ACK (Not Implemented) [Multiple WriteReg Ack] (2/4) (Failed)'
+        assert info[905] == '< WRITEREG_ACK Unknown status (0x8ABC)(Failed)'
+        assert info[860] == '> Unknown Command (0x999)'
+
+    def test_gvcp_extended_bootstrap(self, cmd_tshark, capture_file, test_env):
+        '''The stream channel extended bootstrap address is learned from a
+        READREG_ACK, and from a READMEM_ACK (the reproducer of "GVCP: Fix
+        read memory acknowledge and short length handling"), and then names
+        the registers in the window.'''
+        info = self._infos(cmd_tshark, capture_file, test_env)
+        assert info[751] == '< READREG_ACK [SCEBA0 (Stream Channel Extended Bootstrap Address #0)] Value=0x00010000'
+        assert info[752] == '> READREG_CMD [SCGDAx (GenDC Descriptor Address)]'
+        assert info[753] == '< READREG_ACK [SCGDAx (GenDC Descriptor Address)] Value=0x00001000'
+        assert info[784] == '> READREG_CMD [Addr:0x00010010]'
+        assert info[792] == '> WRITEREG_CMD [SCGFTAx (GenDC Flow Mapping Table Address)] Value=0x00001234'
+        assert info[794] == '> READMEM_CMD  (0x00030000 (4) bytes)'
+        assert info[795] == '< READMEM_ACK [SCGDAx (GenDC Descriptor Address)]'
+        assert info[797] == '< READREG_ACK [Addr:0x00000E3C] Value=0x00040000'
+        assert info[798] == '> READREG_CMD [SCGDAx (GenDC Descriptor Address)]'
+
+    def test_gvcp_memory(self, cmd_tshark, capture_file, test_env):
+        '''Memory reads and writes, pending acknowledges.'''
+        info = self._infos(cmd_tshark, capture_file, test_env)
+        assert info[802] == '> WRITEMEM_CMD [Addr:0x00100000]: 32 bytes'
+        assert info[803] == '< PENDING_ACK'
+        assert info[804] == '< WRITEMEM_ACK [Addr:0x00100000]'
+        assert info[807] == '< READREG_ACK [Heartbeat timeout] Value=0x00000BB8'
+
+    def test_gvcp_events_and_resend(self, cmd_tshark, capture_file, test_env):
+        '''Packet resend with 16 and 64 bit block IDs, events (also to the
+        message channel port learned from the MCP register write) and
+        event data with an event size.'''
+        info = self._infos(cmd_tshark, capture_file, test_env)
+        assert info[808] == '> PACKETRESEND_CMD Block 4660, Packets 5->9'
+        assert info[812] == '> PACKETRESEND_CMD Block 4294967298, Packets 1000->2000'
+        assert info[811] == '< PACKETRESEND_ACK (Packet Resend)'
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Y', 'udp.dstport == 50020 && gvcp',
+                '-Tfields', '-eframe.number', '-e_ws.col.Protocol',
+            ), encoding='utf-8', env=test_env)
+        frames = [l.split('\t') for l in stdout.splitlines()]
+        assert len(frames) == 7
+        assert all(f[1] == 'GVCP' for f in frames)
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Y', 'gvcp.cmd.event.eventsize',
+                '-Tfields', '-eframe.number',
+                '-egvcp.cmd.event.eventsize', '-egvcp.cmd.eventdata.data',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.splitlines() == [
+            '850\t0x0020,0x0018,0x001f\t6162636465666768,78797a31323334',
+            '851\t0x0028\t30313233343536373839616263646566',
+        ]
+        assert info[850] == '> EVENTDATA_CMD [ID: 0x0009][ID: 0x8004][ID: 0xB000]'
+
+    def test_gvcp_two_passes(self, cmd_tshark, capture_file, test_env):
+        '''The Info column is the same in one and two passes; the
+        transaction links appear on the second pass.'''
+        one = self._infos(cmd_tshark, capture_file, test_env)
+        two = self._infos(cmd_tshark, capture_file, test_env, '-2')
+        assert one == two
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('gvcp_coverage.pcap.gz'),
+                '-Y', 'gvcp.response_in == 8',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['7']
+
+
+class TestDissectGvrp:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('gvrp_coverage.pcap.gz'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    def test_gvrp_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''No frame is malformed; only frame 17 (a protocol ID other than 1) has an
+        expert info, in one and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number')
+            assert stdout.split() == ['17']
+
+    def test_gvrp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 17 frames are GVRP (802.3 + LLC to 01:80:c2:00:00:21); frames 11-17
+        that GVRP does not understand end in a Data item.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Tfields', '-e_ws.col.protocol')
+        assert stdout.split() == ['GVRP'] * 17
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'data', '-Tfields', '-eframe.number')
+        assert stdout.split() == [str(n) for n in range(11, 18)]
+
+    def test_gvrp_attributes(self, cmd_tshark, capture_file, test_env):
+        '''VID attributes with every event, Leave All and several messages.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number <= 10', '-Tfields', '-eframe.number',
+                              '-egvrp.attribute_type', '-egvrp.attribute_length', '-egvrp.attribute_event',
+                              '-egvrp.attribute_value', '-egvrp.end_of_mark')
+        assert stdout.splitlines() == [
+            '1\t0x01\t4\t1\t100\t1,1',
+            '2\t0x01\t4\t2\t200\t1,1',
+            '3\t0x01\t4\t3\t300\t1,1',
+            '4\t0x01\t4\t4\t400\t1,1',
+            '5\t0x01\t4\t5\t500\t1,1',
+            '6\t0x01\t2\t0\t\t1,1',
+            '7\t0x01\t4,4,4\t2,2,4\t1,2,4094\t1,1',
+            '8\t0x01,0x01\t2,4,4,4\t0,2,1,3\t10,20,30\t1,1,1',
+            '9\t0x01\t4\t2\t5\t',
+            '10\t0x01\t4\t2\t5\t1',
+        ]
+
+    def test_gvrp_tree(self, cmd_tshark, capture_file, test_env):
+        '''Messages and attributes are numbered, with the end of mark in the message.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'frame.number == 8', '-V')
+        lines = stdout.splitlines()
+        start = lines.index('GARP VLAN Registration Protocol')
+        tree = [l.strip() for l in lines[start + 1:] if 'Message ' in l or 'Attribute ' in l or 'End of' in l]
+        assert tree == ['Message 1', 'Attribute 1', 'Attribute 2', 'Attribute 3', 'End of Mark',
+                        'Message 2', 'Attribute 1', 'End of Mark', 'End of Mark']
+
+    def test_gvrp_not_understood(self, cmd_tshark, capture_file, test_env):
+        '''Unknown attribute types, bad lengths or events and a protocol ID other than 1
+        show the rest as data (the protocol ID also gives a warning).'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env, '-Y', 'data', '-Tfields',
+                              '-eframe.number', '-edata.len', '-e_ws.expert.message')
+        assert stdout.splitlines() == [
+            '11\t6\t', '12\t1\t', '13\t2\t', '14\t3\t', '15\t2\t', '16\t4\t',
+            '17\t7\tWarning: this version of Wireshark only knows about protocol id = 1',
+        ]
+
+
+class TestDissectGvsp:
+    @staticmethod
+    def _rows(cmd_tshark, capture_file, test_env, *extra):
+        stdout = subprocess.check_output((cmd_tshark, *extra,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Tfields', '-eframe.number', '-e_ws.col.Protocol',
+                '-e_ws.col.Info',
+            ), encoding='utf-8', env=test_env)
+        return {int(l.split('\t')[0]): l.split('\t')[1:]
+                for l in stdout.splitlines()}
+
+    def test_gvsp_protocols(self, cmd_tshark, capture_file, test_env):
+        '''GVSP is reached through the stream port that the GVCP register
+        write in frame 1 announces; the UDP 55555/55556 frames only match
+        the heuristic dissector, which is disabled by default.  None of
+        the frames is malformed or has an expert info, in one and two
+        passes.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Tfields', '-e_ws.col.Protocol',
+            ), encoding='utf-8', env=test_env)
+        protocols = stdout.split()
+        assert len(protocols) == 228
+        assert protocols.count('GVCP') == 2
+        assert protocols.count('GVSP') == 213
+        assert protocols.count('UDP') == 13
+        for passes in ((), ('-2',), ('--enable-heuristic', 'gvsp_udp'),
+                ('-2', '--enable-heuristic', 'gvsp_udp')):
+            stdout = subprocess.check_output((cmd_tshark, *passes,
+                    '-r', capture_file('gvsp_coverage.pcap.gz'),
+                    '-Y', '_ws.malformed || _ws.expert',
+                    '-Tfields', '-eframe.number',
+                ), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+
+    def test_gvsp_heuristic(self, cmd_tshark, capture_file, test_env):
+        '''With the heuristic dissector enabled the plain UDP frames of the
+        stream on port 55555 and a short leader on 55556 are GVSP; frames
+        with a bad status, format or payload type stay UDP.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env,
+                          '--enable-heuristic', 'gvsp_udp')
+        assert [rows[n][0] for n in range(216, 229)] == [
+            'GVSP', 'GVSP', 'GVSP', 'GVSP', 'UDP', 'UDP', 'UDP', 'UDP',
+            'UDP', 'UDP', 'UDP', 'UDP', 'GVSP']
+        assert rows[216][1] == 'LEADER [Block ID: 90 Packet ID: 0] IMAGE '
+        assert rows[219][1] == 'ALLIN [Block ID: 90 Packet ID: 3] RAW DATA '
+
+    def test_gvsp_blocks(self, cmd_tshark, capture_file, test_env):
+        '''Info of the image block, the 16 bit and the extended ids, flags
+        and the unknown formats.'''
+        rows = self._rows(cmd_tshark, capture_file, test_env)
+        assert rows[1][1].startswith('> WRITEREG_CMD [SCP0 (Stream Channel #0 Port)] Value=0x0000C35A')
+        assert rows[3] == ['GVSP', 'LEADER [Block ID: 1 Packet ID: 0] IMAGE ']
+        assert rows[4][1] == 'PAYLOAD [Block ID: 1 Packet ID: 1] '
+        assert rows[7][1] == 'TRAILER [Block ID: 1 Packet ID: 4] IMAGE '
+        assert rows[11][1] == 'ALLIN [Block ID: 2 Packet ID: 0] IMAGE '
+        assert rows[150][1] == ('TRAILER [Block ID: 8589934665 Packet ID: 70000] '
+                                'EXTENDED CHUNK DATA (obsolete with v2.0) ')
+        assert rows[179][1] == 'PAYLOAD [Block ID: 83 Packet ID: 5] [PACKET_RESEND] '
+        assert rows[180][1] == 'PAYLOAD [Block ID: 83 Packet ID: 6] [BLOCK_DROPPED] '
+        assert rows[181][1] == 'PAYLOAD [Block ID: 83 Packet ID: 7] [RANGE_ERROR] '
+        assert rows[182][1] == ('PAYLOAD [Block ID: 83 Packet ID: 8] [RANGE_ERROR] '
+                                '[BLOCK_DROPPED] [PACKET_RESEND] ')
+        assert rows[184][1] == 'H264 [Block ID: 83 Packet ID: 5] [PACKET_RESEND] '
+        assert rows[185][1] == 'MULTI-ZONE [Block ID: 83 Packet ID: 5] '
+        assert rows[189][1] == ('Unknown Format (0x9) [Block ID: 83 Packet ID: 0] '
+                                'Unknown Payload Type (0x0) ')
+
+    def test_gvsp_image(self, cmd_tshark, capture_file, test_env):
+        '''Image leader AOI and the 16 bit ids, file name.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 8',
+                '-Tfields', '-egvsp.sizex', '-egvsp.sizey',
+                '-egvsp.blockid16', '-egvsp.packetid24',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split('\t') == ['640', '480', '2', '0\n']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'gvsp.filename && frame.number < 30',
+                '-Tfields', '-eframe.number', '-egvsp.filename',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['24', 'image.bin', '27', 'image.bin', '28', 'image.bin']
+
+    def test_gvsp_multipart(self, cmd_tshark, capture_file, test_env):
+        '''A multi-part leader with all the data types and the trailer.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 190',
+                '-Tfields', '-egvsp.numparts', '-egvsp.multipartdatatype',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [
+            '13', '0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,'
+                  '0x0009,0x000a,0x000b,0x000c,0x8000']
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 194',
+                '-Tfields', '-egvsp.multipartdatatype',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == [
+            '0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,0x0008,'
+            '0x0009,0x000a,0x000b,0x000c,0x8000']
+
+    def test_gvsp_gendc(self, cmd_tshark, capture_file, test_env):
+        '''The GenDC container descriptor of frame 209: three components
+        with two and three parts of every part header type.  The component
+        and part headers sit at the offsets the descriptor gives (they
+        started in the wrong place before "GVSP: Limit the work done for
+        GenDC component and part offsets").'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'frame.number == 209',
+                '-Tfields',
+                '-egvsp.gendc.container.header.signature',
+                '-egvsp.gendc.container.header.componentcount',
+                '-egvsp.gendc.container.header.componentoffset',
+                '-egvsp.gendc.component.header.partcount',
+                '-egvsp.gendc.header.type',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.rstrip('\n').split('\t') == [
+            'GNDC', '0x00000003',
+            '0x0000000000000050,0x0000000000000110,0x0000000000000218',
+            '0x0002,0x0003,0x0003',
+            '0x1000,0x2000,0x4200,0x4100,0x2000,0x4001,0x4000,0x4201,'
+            '0x2000,0x4202,0x4203,0x9999']
+        stdout = subprocess.check_output((cmd_tshark, '-2',
+                '-r', capture_file('gvsp_coverage.pcap.gz'),
+                '-Y', 'gvsp.gendc.part.header.flags.xml.zip',
+                '-Tfields', '-eframe.number',
+            ), encoding='utf-8', env=test_env)
+        assert stdout.split() == ['209', '212', '214']
+        rows = self._rows(cmd_tshark, capture_file, test_env)
+        assert rows[208][1] == 'LEADER [Block ID: 34359738457 Packet ID: 0] GENDC '
+        assert rows[209][1] == 'GENDC [Block ID: 34359738457 Packet ID: 1] '
+
+
+class TestDissectH1:
+    '''Sinec H1 (heuristic over TCP and COTP) from the synthetic capture
+    h1_coverage.pcap.gz.'''
+
+    @staticmethod
+    def h1_fields(cmd_tshark, capture_file, test_env, *fields, filt='h1', passes=()):
+        args = [cmd_tshark, *passes, '-r', capture_file('h1_coverage.pcap.gz'),
+                '-Y', filt, '-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_h1_protocols(self, cmd_tshark, capture_file, test_env):
+        '''All 28 frames are H1 (24 over TCP, 4 over COTP) and none is
+        malformed or has an expert info, in one and two passes.'''
+        rows = self.h1_fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol', filt='frame')
+        assert len(rows) == 28
+        assert all(r[1] == 'H1' for r in rows)
+        assert len(self.h1_fields(cmd_tshark, capture_file, test_env, filt='h1 && cotp')) == 4
+        for passes in ((), ('-2',)):
+            rows = self.h1_fields(cmd_tshark, capture_file, test_env,
+                                  filt='_ws.malformed || _ws.expert', passes=passes)
+            assert rows == []
+
+    def test_h1_length_unsigned(self, cmd_tshark, capture_file, test_env):
+        '''h1.dlen is unsigned: 40000 and 65535 words were shown as negative
+        numbers when the field was FT_INT16.'''
+        rows = self.h1_fields(cmd_tshark, capture_file, test_env, 'h1.dlen', filt='frame.number in {20, 21}')
+        assert rows == [['20', '40000'], ['21', '65535']]
+
+    def test_h1_info(self, cmd_tshark, capture_file, test_env):
+        '''Opcode, memory type and return code names, including the unknown
+        values (the unknown return code string lacked its closing
+        parenthesis).'''
+        rows = self.h1_fields(cmd_tshark, capture_file, test_env, '_ws.col.info')
+        info = {int(r[0]): r[1] for r in rows}
+        assert info[1] == 'S5: Read Request DB 3 DW 257 Count 20'
+        assert info[11] == 'S5: Read Request DE 3 DW 272 Count 20'
+        assert info[13] == 'S5: Write Request Unknown Type (0x77) 255 DW 65535 Count 1'
+        assert info[15] == 'S5: Write Response No error'
+        assert info[16] == 'S5: Read Response Requested block does not exist'
+        assert info[17] == 'S5: Read Response Requested block too small'
+        assert info[18] == 'S5: Write Response Error, reason unknown'
+        assert info[19] == 'S5: Unknown Opcode (0x77) Unknown Returncode (0x55)'
+        assert info[25] == 'S5: Read Request DB 5 DW 10 Count 8'
+
+    def test_h1_trailing_data(self, cmd_tshark, capture_file, test_env):
+        '''Octets after the H1 length indicator, or after a block of length 0,
+        are handed to the data dissector.'''
+        rows = self.h1_fields(cmd_tshark, capture_file, test_env, 'h1.len', 'data.data',
+                              filt='frame.number in {22, 23, 24, 27}')
+        assert rows == [
+            ['22', '19', '0011223344556677'],
+            ['23', '8', 'ff007461696c'],
+            ['24', '6', '03080101000000047061796c6f6164'],
+            ['27', '16', 'deadbeefdeadbeefdeadbeefdeadbeef'],
+        ]
+
+
+class TestDissectH221Nonstd:
+    '''Microsoft NetMeeting H.221 non-standard parameters (t35 0xb5, 0x00,
+    manufacturer 0x534c) in H.225 RAS (frames 1-19) and in H.245 on the
+    connection announced by a Setup (frames 21-28), from the synthetic
+    capture h221_nonstd_coverage.pcap.gz.'''
+
+    @staticmethod
+    def ns_fields(cmd_tshark, capture_file, test_env, filt='frame', passes=()):
+        stdout = subprocess.check_output((cmd_tshark, *passes,
+                '-r', capture_file('h221_nonstd_coverage.pcap.gz'), '-Y', filt, '-Tfields',
+                '-eframe.number', '-eh221nonstd.netmeeting.codec', '-eh221nonstd.netmeeting.non_standard',
+            ), encoding='utf-8', env=test_env, timeout=120)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_h221_nonstd_no_errors(self, cmd_tshark, capture_file, test_env):
+        '''28 frames; none is malformed or has an error expert info, in one
+        and two passes.  Frame 13 holds a 23 octet item: it threw an
+        exception before "Require 24 bytes before reading the codec".'''
+        assert len(self.ns_fields(cmd_tshark, capture_file, test_env)) == 28
+        for passes in ((), ('-2',)):
+            rows = self.ns_fields(cmd_tshark, capture_file, test_env,
+                                  filt='_ws.malformed || _ws.expert.severity >= 0x00800000', passes=passes)
+            assert rows == []
+
+    def test_h221_nonstd_codecs(self, cmd_tshark, capture_file, test_env):
+        '''Codec names are looked up when the 0x0100 marker is at offset
+        22; otherwise the octets are shown as non-standard data.'''
+        rows = self.ns_fields(cmd_tshark, capture_file, test_env)
+        codecs = {int(r[0]): r[1] for r in rows}
+        assert [codecs[i] for i in range(1, 11)] == [
+            '0x00000111', '0x00000200', '0x00000211', '0x00000311', '0x00000411',
+            '0x00001100', '0x00003100', '0x0000feff', '0x00009999', '0x00000111']
+        assert [bool(r[2]) for r in rows if int(r[0]) in (11, 12)] == [True, True]
+        # 23, 22, 10 and 1 octets, another manufacturer / country / object identifier: nothing
+        for n in (13, 14, 15, 16, 17, 18, 19):
+            assert rows[n - 1][1:] == ['', '']
+
+    def test_h221_nonstd_h245(self, cmd_tshark, capture_file, test_env):
+        '''The same parameters in H.245 NonStandardMessages (frames 21-28).'''
+        rows = self.ns_fields(cmd_tshark, capture_file, test_env, filt='h245')
+        assert [r[0] for r in rows] == [str(i) for i in range(21, 29)]
+        assert [r[1] for r in rows[:4]] == ['0x00000111', '0x00000200', '0x00000211', '0x00000311']
+        assert [bool(r[2]) for r in rows[4:6]] == [True, True]
+
+
+class TestDissectH223:
+    '''H.223 multiplex (ITU-T H.223 level 2) carried in IAX2 circuits and in
+    RTP CLEARMODE, with H.245 on VC 0, from the synthetic capture
+    h223_coverage.pcap.gz.  Frames 54-61 are TCP port 5555 and are H.223
+    only with Decode As.'''
+
+    @staticmethod
+    def h223_fields(cmd_tshark, capture_file, test_env, *fields, filt='h223', passes=(), opts=()):
+        args = [cmd_tshark, *passes, *opts, '-r', capture_file('h223_coverage.pcap.gz'),
+                '-Y', filt, '-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env, timeout=120)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_h223_protocols(self, cmd_tshark, capture_file, test_env):
+        '''61 frames: 32 H.223, 16 H.245 (on VC 0), 2 IAX2, 2 SIP, 1 RTP and
+        8 TCP; none is malformed or has an error expert info, in one and
+        two passes.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol', filt='frame')
+        assert len(rows) == 61
+        protocols = [r[1] for r in rows]
+        counts = {p: protocols.count(p) for p in set(protocols)}
+        assert counts == {'H.223': 32, 'H.245': 16, 'IAX2': 2, 'SIP/SDP': 2, 'RTP': 1, 'TCP': 8}
+        for passes in ((), ('-2',)):
+            rows = self.h223_fields(cmd_tshark, capture_file, test_env,
+                                    filt='_ws.malformed || _ws.expert.severity >= 0x00800000', passes=passes)
+            assert rows == []
+
+    def test_h223_sublist_reproducer(self, cmd_tshark, capture_file, test_env):
+        '''MC 5 is one sublist whose last element has an untilClosingFlag
+        repeat count.  Its size was computed as 0 (it skipped the first
+        element), which hit DISSECTOR_ASSERT(length != 0) in
+        mux_element_sublist_size().  Frame 17 decodes: VC 0 twice.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.mc', 'h223.mux.vc',
+                                filt='frame.number == 17')
+        assert rows == [['17', '5', '0,0']]
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, '_ws.expert.message',
+                                filt='frame.number == 17 && _ws.expert')
+        assert rows == []
+
+    def test_h223_mux_lists(self, cmd_tshark, capture_file, test_env):
+        '''The virtual circuits of the MUX-PDUs follow the multiplex table
+        sent by H.245: finite and until-closing elements, sublists with
+        finite and until-closing repeat counts, nested sublists.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.mc', 'h223.mux.vc',
+                                filt='frame.number in {13, 14, 15, 16, 18, 19}')
+        assert rows == [
+            ['13', '2', '5,3'],
+            ['14', '3', '5,6,5,6,5,6,3'],
+            ['15', '4', '3,5,3,5,3,5'],
+            ['16', '6', '5,6,5,6,3,5,6,5,6,3,5,6,5,6,3'],
+            ['18', '7', '3'],
+            ['19', '8', '3'],      # MC 8 was defined twice in one H.245 PDU: the last wins
+        ]
+
+    def test_h223_no_entry(self, cmd_tshark, capture_file, test_env):
+        '''MC 9 has no table entry (never defined) and MC 15 an entry without element list:
+        both are shown as deactivated data; the huge nested sublist after
+        the second MultiplexEntrySend (size above 32 bits) is not
+        dissected and does not loop.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.mc', 'h223.mux.vc',
+                                filt='frame.number in {20, 21, 39}')
+        assert rows == [['20', '9', ''], ['21', '15', ''], ['39', '14', '']]
+
+    def test_h223_payload_length_field(self, cmd_tshark, capture_file, test_env):
+        '''h223.mux.mpl is an unsigned 8 bit field without a mask: 255 shows
+        as 255 (it was FT_UINT16 with mask 0xf00f).'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.mpl',
+                                filt='frame.number in {33, 14}')
+        assert rows == [['14', '16'], ['33', '255']]
+
+    def test_h223_al2_reassembly(self, cmd_tshark, capture_file, test_env):
+        '''Frame 12 carries the two fragments of an AL2 PDU with sequence
+        number 1; frame 11 one with sequence number 0.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.al2.seqno', 'h223.mux.vc',
+                                'h223.al.reassembled.length', filt='frame.number in {11, 12}')
+        assert rows == [['11', '0', '1', ''], ['12', '1', '1,1', '6']]
+
+    def test_h223_golay(self, cmd_tshark, capture_file, test_env):
+        '''A header with a corrected bit error, with three corrected errors
+        and one that cannot be corrected (frames 29-31).'''
+        stdout = subprocess.check_output((cmd_tshark, '-r', capture_file('h223_coverage.pcap.gz'),
+                '-Y', 'frame.number in {29, 30, 31}', '-V', '-O', 'h223'),
+            encoding='utf-8', env=test_env, timeout=120)
+        raws = [l.strip() for l in stdout.splitlines() if 'Raw value:' in l]
+        assert raws == ['Raw value: 0x9df071 (errors are 0x000010)',
+                        'Raw value: 0xddf160 (errors are 0x400101)',
+                        'Raw value: 0x8320ee (uncorrectable errors)']
+
+    def test_h223_stuffing_and_extra(self, cmd_tshark, capture_file, test_env):
+        '''Frame 28 holds two stuffing PDUs; frame 32 a PDU with data
+        beyond the payload length.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.stuffing', 'h223.mux.extra',
+                                filt='frame.number in {28, 32}')
+        assert rows == [['28', '1,1', ''], ['32', '', '1']]
+
+    def test_h223_mux_redefinition(self, cmd_tshark, capture_file, test_env):
+        '''A later MultiplexEntrySend redefines MC 1 (frame 37): the data
+        of frame 38 now goes to VC 2; frame 42 redefines it again in the
+        same frame, before the data PDU.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.mc', 'h223.mux.vc',
+                                filt='frame.number in {38, 42, 43}')
+        assert rows == [['38', '1', '2'], ['42', '0,1', '0,1'], ['43', '1', '1']]
+
+    def test_h223_rtp_clearmode(self, cmd_tshark, capture_file, test_env):
+        '''The conversation (RTP CLEARMODE) path: MultiplexEntrySend,
+        OpenLogicalChannel and Ack from both sides, then data.'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, 'h223.mux.vc', 'h223.al2.seqno',
+                                filt='h223 && frame.number >= 44 && frame.number <= 52')
+        assert [r[0] for r in rows] == ['46', '47', '48', '49', '50', '51', '52']
+        assert rows[2][1:] == ['1', '0']
+        assert rows[3][1:] == ['2,3,2,3,2,3', '']
+
+    def test_h223_tcp(self, cmd_tshark, capture_file, test_env):
+        '''With Decode As, TCP port 5555 carries H.223 whose PDUs are split
+        over segments (desegmentation).'''
+        rows = self.h223_fields(cmd_tshark, capture_file, test_env, '_ws.col.info', 'h223.mux.mc',
+                                filt='frame.number >= 54', opts=('-d', 'tcp.port==5555,h223'))
+        assert [(r[0], r[1]) for r in rows] == [
+            ('54', '(No complete PDUs)'), ('55', 'multiplexEntrySend '), ('56', 'openLogicalChannel '),
+            ('57', ''), ('58', 'openLogicalChannelAck '), ('59', '(No complete PDUs)'),
+            ('60', ''), ('61', '')]
+        assert rows[-1][2] == '0,0,0'
+
+
+class TestDissectH224:
+    '''H.224 (far end camera control and client management) carried in RTP
+    payload type 100, named "H224" by the SDP of a SIP INVITE, from the
+    synthetic capture h224_coverage.pcap.gz.'''
+
+    @staticmethod
+    def h224_fields(cmd_tshark, capture_file, test_env, *fields, filt='h224', passes=()):
+        args = [cmd_tshark, *passes, '-r', capture_file('h224_coverage.pcap.gz'),
+                '-Y', filt, '-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_h224_protocols(self, cmd_tshark, capture_file, test_env):
+        '''Frame 1 is the SIP INVITE, frames 2-36 are H.224 without
+        malformed packets or error expert infos, in one and two passes.'''
+        rows = self.h224_fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol', filt='frame')
+        assert len(rows) == 36
+        assert rows[0][1] == 'SIP/SDP'
+        assert all(r[1] == 'H.224' for r in rows[1:])
+        for passes in ((), ('-2',)):
+            rows = self.h224_fields(cmd_tshark, capture_file, test_env,
+                                    filt='_ws.malformed || _ws.expert', passes=passes)
+            assert rows == []
+
+    def test_h224_start_action_timeout(self, cmd_tshark, capture_file, test_env):
+        '''The START ACTION timeout is computed from the low 4 bits of the
+        octet (0 means 800 ms); the whole octet was multiplied before the
+        fix (163 gave 8150 ms).'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('h224_coverage.pcap.gz'),
+                '-Y', 'h224.fecc_message_code == 1', '-V',
+            ), encoding='utf-8', env=test_env)
+        texts = [l.strip() for l in stdout.splitlines() if l.strip().endswith(' milliseconds)')
+                 and l.strip()[0].isdigit()]
+        assert texts == ['0 (800 milliseconds)', '3 (150 milliseconds)', '15 (750 milliseconds)',
+                         '163 (150 milliseconds)', '240 (800 milliseconds)']
+
+    def test_h224_unterminated_string(self, cmd_tshark, capture_file, test_env):
+        '''Frame 9 has video source id 6 and a string without a
+        terminator within 16 octets: no string item is shown (the
+        terminator offset was uninitialized before the fix); frame 7 has a
+        terminated string.'''
+        rows = self.h224_fields(cmd_tshark, capture_file, test_env, 'h224.ascii_str', 'h224.pan_cap',
+                                filt='frame.number in {7, 9}')
+        assert rows == [['7', 'Main camera', 'True'], ['9', '', 'False']]
+
+    def test_h224_client_ids(self, cmd_tshark, capture_file, test_env):
+        '''Client list with CME, FECC, an extended and a non-standard
+        client; the extended and non-standard IDs of the extra capability
+        messages are recognised with the extension bit set.'''
+        rows = self.h224_fields(cmd_tshark, capture_file, test_env, 'h224.number_of_clients',
+                                'h224.extended_client_id_list', 'h224.manufacturer_code',
+                                filt='frame.number in {2, 3, 10, 11, 15, 16}')
+        assert rows == [
+            ['2', '5', '0x7e', '0xb500534c'],
+            ['3', '3', '0x7e', ''],
+            ['10', '', '0x7e', ''],
+            ['11', '', '', '0xb500534c'],
+            ['15', '', '0x7e', ''],
+            ['16', '', '', '0xb500534c'],
+        ]
+
+    def test_h224_fecc_messages(self, cmd_tshark, capture_file, test_env):
+        '''Every FECC message code from 1 to 7 and an unknown one.'''
+        rows = self.h224_fields(cmd_tshark, capture_file, test_env, 'h224.fecc_message_code',
+                                filt='h224.fecc_message_code')
+        assert [r[1] for r in rows] == ['0x01'] * 5 + ['0x02', '0x03', '0x04', '0x05', '0x06', '0x07', '0x09']
+
+
+class TestDissectH225:
+    '''H.225.0 RAS (UDP 1719) and call signalling (Q.931 in TPKT, with
+    H.245 tunnelled or on its own connection) from the synthetic capture
+    h225_coverage.pcap.gz.  The PER encodings of the 350 frames are
+    produced by a generator driven by the ASN.1 sources of H.225, H.235
+    and H.245; frames 224-319 are RAS request/response sequences, 320-328
+    NonStandardParameters, 331-350 an H.225 call.'''
+
+    @staticmethod
+    def h225_fields(cmd_tshark, capture_file, test_env, *fields, filt='frame', passes=(), extra=()):
+        args = [cmd_tshark, *passes, *extra, '-r', capture_file('h225_coverage.pcap.gz'),
+                '-Y', filt, '-Tfields', '-eframe.number']
+        for f in fields:
+            args.append('-e' + f)
+        stdout = subprocess.check_output(args, encoding='utf-8', env=test_env, timeout=300)
+        return [l.split('\t') for l in stdout.splitlines()]
+
+    def test_h225_protocols(self, cmd_tshark, capture_file, test_env):
+        '''350 frames; none is malformed or has an error expert info, in
+        one and two passes.'''
+        rows = self.h225_fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol')
+        assert len(rows) == 350
+        protocols = [r[1] for r in rows]
+        assert protocols.count('H.225.0') == 307
+        assert protocols.count('H.225.0/H.245') == 34
+        assert protocols.count('H.245') == 7
+        for passes in ((), ('-2',)):
+            rows = self.h225_fields(cmd_tshark, capture_file, test_env,
+                                    filt='_ws.malformed || _ws.expert.severity >= 0x00800000', passes=passes)
+            assert rows == []
+
+    def test_h225_ras_matching(self, cmd_tshark, capture_file, test_env):
+        '''Request/response matching of the gatekeeper category: response
+        in frame 226, duplicate request, duplicate responses, a new request
+        after 400 s (new call), and a response without request.'''
+        rows = self.h225_fields(cmd_tshark, capture_file, test_env, 'h225.ras.rspframe',
+                                'h225.ras.reqframe', 'h225.ras.dup',
+                                filt='frame.number >= 224 && frame.number <= 236')
+        assert [r[1:] for r in rows[:7]] == [
+            ['', '', ''], ['', '224', ''], ['225', '', '1000'], ['', '224', '1000'], ['', '224', '1000'],
+            ['', '', ''],      # response with another request number
+            ['', '', '']]      # response in an unknown conversation
+
+    def test_h225_ras_stats(self, cmd_tshark, capture_file, test_env):
+        '''The RAS response time table has one row per category.'''
+        stdout = subprocess.check_output((cmd_tshark, '-r', capture_file('h225_coverage.pcap.gz'),
+                '-q', '-z', 'h225_ras,rtd'), encoding='utf-8', env=test_env, timeout=300)
+        assert 'Gatekeeper' in stdout and 'Location' in stdout
+
+    def test_h225_h245_connection(self, cmd_tshark, capture_file, test_env):
+        '''The H.245 address of the Connect (frame 334) makes TCP port
+        11001 an H.245 connection: frames 336-341 are H.245.'''
+        rows = self.h225_fields(cmd_tshark, capture_file, test_env, '_ws.col.protocol',
+                                filt='frame.number >= 336 && frame.number <= 341')
+        assert [r[1] for r in rows] == ['H.245'] * 6
+
+    def test_h225_nonstandard_h221(self, cmd_tshark, capture_file, test_env):
+        '''NonStandardParameter with the NetMeeting H.221 identifier goes to
+        the h221nonstd dissector: the 24 octet item with 0x0100 at offset 22
+        shows the codec, the 23 octet one (it threw an exception before the
+        "Require 24 bytes" fix) shows nothing.'''
+        rows = self.h225_fields(cmd_tshark, capture_file, test_env, 'h221nonstd.netmeeting.codec',
+                                'h221nonstd.netmeeting.non_standard',
+                                filt='frame.number >= 320 && frame.number <= 326')
+        assert [bool(r[1]) for r in rows] == [True, True, False, False, False, False, True]
+        assert [bool(r[2]) for r in rows] == [False, False, False, True, False, False, False]
+
+
+# GTP session tracking is off by default.
+GTP_SESSION_OPTS = ('-o', 'gtp.track_gtp_session:TRUE')
+
+
+class TestDissectGtpSession:
+    def imsi_rows(self, cmd_tshark, capture_file, test_env, *args):
+        stdout = subprocess.check_output((cmd_tshark, *GTP_SESSION_OPTS, *args,
+                '-r', capture_file('gtpv2_session.pcap'),
+                '-q', '-z', 'imsi',
+            ), encoding='utf-8', env=test_env)
+        # IMSI, first frame, last frame
+        return [[cols[0], cols[2], cols[3]]
+                for cols in (row.split() for row in stdout.splitlines())
+                if cols and cols[0].isdigit()]
+
+    def test_gtp_session_imsi(self, cmd_tshark, capture_file, test_env):
+        '''The messages and the GTP-U T-PDU of a session get the IMSI of the
+        Create Session Request, in one and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *GTP_SESSION_OPTS, *passes,
+                    '-r', capture_file('gtpv2_session.pcap'),
+                    '-Y', 'frame.number <= 4',
+                    '-Tfields', '-egtpv2.session', '-egtp.session', '-ee212.assoc.imsi',
+                    '-Eoccurrence=f',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '1\t\t001010000000001',
+                '1\t\t001010000000001',
+                '1\t\t001010000000001',
+                '\t1\t001010000000001',
+            ]
+
+    def test_gtp_session_imsi_tap(self, cmd_tshark, capture_file, test_env):
+        '''The session IMSI reaches the "imsi" tap, which dissects without a
+        tree, and not only the frame that carries the IMSI IE.'''
+        for passes in ((), ('-2',)):
+            rows = self.imsi_rows(cmd_tshark, capture_file, test_env, *passes)
+            assert ['001010000000001', '1', '4'] in rows
+
+    def test_gtp_session_sessionless_message(self, cmd_tshark, capture_file, test_env):
+        '''An S11 Create Session Response without its request (frame 7)
+        carries the PGW S5/S8 F-TEID of a session. It does not take the
+        F-TEID over, so the Modify Bearer Request to that TEID (frame 8)
+        still gets the session and its IMSI.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *GTP_SESSION_OPTS, *passes,
+                    '-r', capture_file('gtpv2_session.pcap'),
+                    '-Y', 'frame.number >= 5',
+                    '-Tfields', '-egtpv2.session', '-ee212.assoc.imsi',
+                    '-Eoccurrence=f',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == [
+                '2\t001010000000002',
+                '2\t001010000000002',
+                '\t',
+                '2\t001010000000002',
+            ]
+            rows = self.imsi_rows(cmd_tshark, capture_file, test_env, *passes)
+            assert ['001010000000002', '5', '8'] in rows
+
+
+# PFCP session tracking is off by default.
+PFCP_SESSION_OPTS = ('-o', 'pfcp.track_pfcp_session:TRUE')
+
+
+class TestDissectPfcpSession:
+    def test_pfcp_session_imsi(self, cmd_tshark, capture_file, test_env):
+        '''The messages of a session get the IMSI of the User ID of the
+        Session Establishment Request, in one and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *PFCP_SESSION_OPTS, *passes,
+                    '-r', capture_file('pfcp_session.pcap'),
+                    '-Tfields', '-epfcp.session', '-ee212.assoc.imsi',
+                    '-Eoccurrence=f',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['1\t001010000000003'] * 3
+
+    def test_pfcp_session_imsi_tap(self, cmd_tshark, capture_file, test_env):
+        '''The session IMSI reaches the "imsi" tap, which dissects without a
+        tree, and not only the frame that carries the User ID.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *PFCP_SESSION_OPTS, *passes,
+                    '-r', capture_file('pfcp_session.pcap'),
+                    '-q', '-z', 'imsi',
+                ), encoding='utf-8', env=test_env)
+            # IMSI, first frame, last frame
+            rows = [[cols[0], cols[2], cols[3]]
+                    for cols in (row.split() for row in stdout.splitlines())
+                    if cols and cols[0].isdigit()]
+            assert rows == [['001010000000003', '1', '3']]

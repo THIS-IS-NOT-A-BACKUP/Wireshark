@@ -285,7 +285,8 @@ workflow:
     - printf "\e[0Ksection_end:%s:cmake_section\r\e[0K" "$( date +%s)"
     - ninja
     - ninja test-programs
-    - pytest --enable-stratoshark --disable-capture --junitxml=../macos_tests.xml
+    - !reference [.changed-since, script]
+    - pytest --enable-stratoshark --disable-capture --junitxml=../macos_tests.xml $CHANGED_SINCE
   needs: []
 
 .build-mingw:
@@ -662,7 +663,8 @@ Windows x64 Package:
     - $stratosharkNsisSha256 = (Get-FileHash -Algorithm SHA256 .\packaging\nsis\Stratoshark-*-x64.exe).Hash.ToLower()
     - Set-Content -Path stratoshark-release-info-$($stratosharkVersion)-windows-x64.ini -Value ("[DEFAULT]`nminimum_system_version = 10.0-19044`nnsis_sha256 = $stratosharkNsisSha256")
     - if (Test-Path env:S3_DESTINATION_RELEASE) { rclone copy . "wireshark:$env:S3_DESTINATION_RELEASE" --include "*shark-release-info-*-windows-*.ini" --missing-on-dst - }
-    - C:\Windows\py.exe -m pytest --enable-stratoshark --enable-release
+    - !reference [.changed-since-windows, script]
+    - C:\Windows\py.exe -m pytest --enable-stratoshark --enable-release @ChangedSince
   artifacts:
     paths:
       - build/*shark-release-info-*-windows-*.ini
@@ -710,7 +712,8 @@ Windows Arm64 Package:
     - $stratosharkNsisSha256 = (Get-FileHash -Algorithm SHA256 .\packaging\nsis\Stratoshark-*-arm64.exe).Hash.ToLower()
     - Set-Content -Path stratoshark-release-info-$($stratosharkVersion)-windows-arm64.ini -Value ("[DEFAULT]`nminimum_system_version = 10.0-19044`nnsis_sha256 = $stratosharkNsisSha256")
     - if (Test-Path env:S3_DESTINATION_RELEASE) { rclone copy . "wireshark:$env:S3_DESTINATION_RELEASE" --include "*shark-release-info-*-windows-*.ini" --missing-on-dst - }
-    - C:\Windows\py.exe -m pytest --enable-stratoshark --enable-release
+    - !reference [.changed-since-windows, script]
+    - C:\Windows\py.exe -m pytest --enable-stratoshark --enable-release @ChangedSince
   artifacts:
     paths:
       - build/*shark-release-info-*-windows-*.ini
@@ -815,7 +818,8 @@ macOS Universal Package:
         aws s3 cp stratoshark-release-info-*-macos-intel64.ini "s3://$S3_DESTINATION_RELEASE/" ;
       fi
     - cd ..
-    - ninja test
+    - !reference [.changed-since, script]
+    - PYTEST_ADDOPTS="$CHANGED_SINCE" ninja test
   artifacts:
     paths:
       - build/run/*shark-release-info-*-macos-*.ini
@@ -955,6 +959,77 @@ Commit Check:
     reports:
       junit: commit_checks.xml
 
+# Run only the coverage tests of suite_dissection.py that the changes can
+# affect (see test/dissection_select.py); every other test still runs. In
+# a merge request pipeline, including merge trains, the changes are those
+# since the MR's diff base; after a merge (a push to the default branch)
+# they are those since the previous tip of the branch. It sets
+# CHANGED_SINCE, which the test jobs pass to pytest. Other pipelines, and
+# any pipeline whose base is not available, run everything.
+.changed-since:
+  script:
+    - |
+      CHANGED_SINCE=""
+      base=""
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        base="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+      elif [ "$CI_PIPELINE_SOURCE" = "push" ] && [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        base="${CI_COMMIT_BEFORE_SHA:-}"
+      fi
+      if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ]; then
+        # The clone is shallow; fetch enough history to find the base, both
+        # of the MR and of the checked-out commit (in a merge train that is
+        # a new commit on top of the target branch and the MRs before it).
+        if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+          git -C "$CI_PROJECT_DIR" fetch --quiet --depth 200 origin "refs/merge-requests/$CI_MERGE_REQUEST_IID/head" || true
+        fi
+        git -C "$CI_PROJECT_DIR" fetch --quiet --depth 200 origin "refs/pipelines/$CI_PIPELINE_ID" || true
+        if git -C "$CI_PROJECT_DIR" merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+          CHANGED_SINCE="--changed-since=$base"
+          # The tests run git as "user" in a checkout owned by root. Git
+          # ignores safe.directory in the repository's own config and "user"
+          # has no home directory, so set it in the environment, which su
+          # passes on.
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$CI_PROJECT_DIR"
+        fi
+      fi
+      echo "CHANGED_SINCE=$CHANGED_SINCE"
+
+# PowerShell version of .changed-since for the Windows jobs. It sets
+# $ChangedSince, the extra pytest arguments (empty: run everything).
+.changed-since-windows:
+  script:
+    - |
+      $ChangedSince = @()
+      $base = ""
+      if ($env:CI_PIPELINE_SOURCE -eq "merge_request_event") {
+        $base = "$env:CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      } elseif ($env:CI_PIPELINE_SOURCE -eq "push" -and $env:CI_COMMIT_BRANCH -eq $env:CI_DEFAULT_BRANCH) {
+        $base = "$env:CI_COMMIT_BEFORE_SHA"
+      }
+      if ($base -and $base -ne "0000000000000000000000000000000000000000") {
+        # A failing git command must not stop the job; it only means
+        # that everything runs.
+        $savedPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        # The checkout may belong to another user than the one running
+        # git; Git ignores safe.directory in the repository's own config.
+        $env:GIT_CONFIG_COUNT = "1"
+        $env:GIT_CONFIG_KEY_0 = "safe.directory"
+        $env:GIT_CONFIG_VALUE_0 = "*"
+        if ($env:CI_MERGE_REQUEST_IID) {
+          $null = git -C "$env:CI_PROJECT_DIR" fetch --quiet --depth 200 origin "refs/merge-requests/$($env:CI_MERGE_REQUEST_IID)/head" 2>&1
+        }
+        $null = git -C "$env:CI_PROJECT_DIR" fetch --quiet --depth 200 origin "refs/pipelines/$($env:CI_PIPELINE_ID)" 2>&1
+        $null = git -C "$env:CI_PROJECT_DIR" merge-base --is-ancestor $base HEAD 2>&1
+        if ($LASTEXITCODE -eq 0) {
+          $ChangedSince = @("--changed-since=$base")
+        }
+        $ErrorActionPreference = $savedPreference
+      }
+      $global:LASTEXITCODE = 0
+      Write-Output "CHANGED_SINCE=$ChangedSince"
+
 Ubuntu GCC Build:
   extends: .build-ubuntu
   rules: !reference [.if-merge-request]
@@ -983,7 +1058,8 @@ Ubuntu GCC Build:
     - chown -R user .
     - if [ -f run/dumpcap ]; then setcap cap_net_raw,cap_net_admin+eip run/dumpcap; fi
     - if [ -f run/dumpcap ]; then su user -c "run/dumpcap -D" ; fi
-    - PYTEST_ADDOPTS=--skip-missing-programs=dumpcap,falcodump,rawshark,sshdig su user -c "pytest --junitxml=../ubuntu_tests.xml"
+    - !reference [.changed-since, script]
+    - PYTEST_ADDOPTS="--skip-missing-programs=dumpcap,falcodump,rawshark,sshdig $CHANGED_SINCE" su user -c "pytest --junitxml=../ubuntu_tests.xml"
     # Test CMake install code and CPack config code. Select any one of the archive generators.
     - ninja user_guide_html
     - ninja developer_guide_html
@@ -1117,7 +1193,8 @@ Clang ASAN Build:
     - chown -R user .
     - if [ -f run/dumpcap ]; then setcap cap_net_raw,cap_net_admin+eip run/dumpcap; fi
     - if [ -f run/dumpcap ]; then su user -c "run/dumpcap -D" ; fi
-    - WIRESHARK_DEBUG_WMEM_OVERRIDE=simple PYTEST_ADDOPTS="--skip-missing-programs=dumpcap,rawshark --enable-stratoshark" su user -c "pytest --junitxml=../clang_asan_tests.xml"
+    - !reference [.changed-since, script]
+    - WIRESHARK_DEBUG_WMEM_OVERRIDE=simple PYTEST_ADDOPTS="--skip-missing-programs=dumpcap,rawshark --enable-stratoshark $CHANGED_SINCE" su user -c "pytest --junitxml=../clang_asan_tests.xml"
   artifacts:
     when: always
     reports:
@@ -1144,7 +1221,8 @@ Windows Build:
     - msbuild -property:Configuration=Debug Wireshark.slnx
     - msbuild -property:Configuration=Debug test-programs.vcxproj
     - C:\Windows\py.exe -m pip install --quiet jsonschema
-    - C:\Windows\py.exe -m pytest --build-type=Debug --disable-gui --enable-stratoshark --junitxml=../windows_tests.xml
+    - !reference [.changed-since-windows, script]
+    - C:\Windows\py.exe -m pytest --build-type=Debug --disable-gui --enable-stratoshark --junitxml=../windows_tests.xml @ChangedSince
     # Test CMake install code. The installation is tested in "Windows Install Test".
     # Run the cpack next to the cmake in use. Chocolatey also has a "cpack" command.
     - $cpack = Join-Path (Split-Path (Get-Command cmake).Source) cpack.exe
