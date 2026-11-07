@@ -2253,7 +2253,7 @@ dissect_HI2Operations_EPSCorrelationNumber(bool implicit_tag _U_, tvbuff_t *tvb 
   item = proto_tree_add_item(tree, hf_HI2Operations_ePSCorrelationNumber, tvb, offset, tvb_len, ENC_NA);
 
   value = tvb_get_uint64_with_length(tvb, offset, tvb_len, ENC_BIG_ENDIAN);
-  proto_item_append_text(item, " (%"PRId64")", value);
+  proto_item_append_text(item, " (%"PRIu64")", value);
 
   offset = tvb_len;
 
@@ -2767,7 +2767,7 @@ static const ber_sequence_t EPSLocation_sequence[] = {
   { NULL, 0, 0, 0, NULL }
 };
 
-static unsigned
+unsigned
 dissect_HI2Operations_EPSLocation(bool implicit_tag _U_, tvbuff_t *tvb _U_, unsigned offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
   offset = dissect_ber_sequence(implicit_tag, actx, tree, tvb, offset,
                                    EPSLocation_sequence, hf_index, ett_HI2Operations_EPSLocation);
@@ -2912,7 +2912,7 @@ dissect_HI2Operations_APN(bool implicit_tag _U_, tvbuff_t *tvb _U_, unsigned off
   if (!parameter_tvb)
     return offset;
 
-  proto_tree_add_item(tree, hf_HI2Operations_apn_str, parameter_tvb, 0, tvb_captured_length(tvb), ENC_APN_STR);
+  proto_tree_add_item(tree, hf_HI2Operations_apn_str, parameter_tvb, 0, tvb_captured_length(parameter_tvb), ENC_APN_STR);
 
 
   return offset;
@@ -4494,7 +4494,7 @@ static const ber_sequence_t IRI_Parameters_sequence[] = {
   { NULL, 0, 0, 0, NULL }
 };
 
-static unsigned
+unsigned
 dissect_HI2Operations_IRI_Parameters(bool implicit_tag _U_, tvbuff_t *tvb _U_, unsigned offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
   offset = dissect_ber_sequence(implicit_tag, actx, tree, tvb, offset,
                                    IRI_Parameters_sequence, hf_index, ett_HI2Operations_IRI_Parameters);
@@ -4542,7 +4542,7 @@ dissect_HI2Operations_EpsIRISequence(bool implicit_tag _U_, tvbuff_t *tvb _U_, u
 }
 
 
-static const value_string HI2Operations_EpsIRIsContent_vals[] = {
+const value_string HI2Operations_EpsIRIsContent_vals[] = {
   {   0, "epsiRIContent" },
   {   1, "epsIRISequence" },
   { 0, NULL }
@@ -4554,7 +4554,7 @@ static const ber_choice_t EpsIRIsContent_choice[] = {
   { 0, NULL, 0, 0, 0, NULL }
 };
 
-static unsigned
+unsigned
 dissect_HI2Operations_EpsIRIsContent(bool implicit_tag _U_, tvbuff_t *tvb _U_, unsigned offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
   offset = dissect_ber_choice(actx, tree, tvb, offset,
                                  EpsIRIsContent_choice, hf_index, ett_HI2Operations_EpsIRIsContent,
@@ -4604,7 +4604,7 @@ dissect_HI2Operations_Direction_Indication(bool implicit_tag _U_, tvbuff_t *tvb 
 
 static unsigned
 dissect_HI2Operations_T_bearer_capability(bool implicit_tag _U_, tvbuff_t *tvb _U_, unsigned offset _U_, asn1_ctx_t *actx _U_, proto_tree *tree _U_, int hf_index _U_) {
-  tvbuff_t *parameter_tvb;
+  tvbuff_t *parameter_tvb=NULL;
 
   offset = dissect_ber_constrained_octet_string(implicit_tag, actx, tree, tvb, offset,
                                                    1, 12, hf_index, &parameter_tvb);
