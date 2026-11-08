@@ -3926,6 +3926,22 @@ dissect_gtpv2_f_teid(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, proto_
                 copy_address_wmem(pinfo->pool, &args->last_ip, ipv6);
                 wmem_list_prepend(args->ip_list, ipv6);
             }
+            /* The reserved TEID 0 (ex the PGW S5/S8 F-TEID on S11 on an
+             * initial attach) is not of a tunnel */
+            if (args->fteid_list && teid_cp != 0) {
+                if (ipv4 != NULL) {
+                    gtp_fteid_t *fteid = wmem_new(pinfo->pool, gtp_fteid_t);
+                    fteid->teid = teid_cp;
+                    copy_address_shallow(&fteid->addr, ipv4);
+                    wmem_list_append(args->fteid_list, fteid);
+                }
+                if (ipv6 != NULL) {
+                    gtp_fteid_t *fteid = wmem_new(pinfo->pool, gtp_fteid_t);
+                    fteid->teid = teid_cp;
+                    copy_address_shallow(&fteid->addr, ipv6);
+                    wmem_list_append(args->fteid_list, fteid);
+                }
+            }
         }
     }
 }
@@ -5628,8 +5644,7 @@ dissect_gtpv2_pdn_numbers(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tre
     uint8_t     nsapi;
     unsigned offset = 0;
 
-    nsapi = (tvb_get_uint8(tvb, offset) & 0x08);
-    nsapi_ti = proto_tree_add_item(tree, hf_gtpv2_nsapi08, tvb, offset, 1, ENC_BIG_ENDIAN);
+    nsapi_ti = proto_tree_add_item_ret_uint8(tree, hf_gtpv2_nsapi08, tvb, offset, 1, ENC_BIG_ENDIAN, &nsapi);
     nsapi_tree = proto_item_add_subtree(nsapi_ti, ett_gtpv2_pdn_numbers_nsapi);
     proto_tree_add_bits_item(nsapi_tree, hf_gtpv2_spare_bits, tvb, offset << 3, 4, ENC_BIG_ENDIAN);
     proto_tree_add_item(nsapi_tree, hf_gtpv2_pdn_numbers_nsapi, tvb, offset, 1, ENC_BIG_ENDIAN);
@@ -9549,16 +9564,6 @@ track_gtpv2_session(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, gtpv
         /* If the message does not have any session ID */
         session = GPOINTER_TO_UINT(wmem_map_lookup(session_table, GUINT_TO_POINTER(pinfo->num)));
         if (!session) {
-            /* If the message is not a CSESRES, CSESREQ, UBEAREQ, UBEARES, CBEAREQ, CBEARES, MBEAREQ or MBEARES then we remove its information from teid and ip lists */
-            if ((gtpv2_hdr->message != GTPV2_CREATE_SESSION_RESPONSE && gtpv2_hdr->message != GTPV2_CREATE_SESSION_REQUEST && gtpv2_hdr->message != GTPV2_UPDATE_BEARER_RESPONSE
-                && gtpv2_hdr->message != GTPV2_UPDATE_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_CREATE_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_CREATE_BEARER_RESPONSE
-                && gtpv2_hdr->message != GTPV2_MODIFY_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_MODIFY_BEARER_RESPONSE)) {
-                /* If the lists are not empty*/
-                if (wmem_list_count(args->teid_list) && wmem_list_count(args->ip_list)) {
-                    remove_frame_info_lists(args->teid_list, args->ip_list, pinfo->num);
-                }
-            }
-
             if (gtpv2_hdr->message == GTPV2_CREATE_SESSION_REQUEST){
                 /* If CPDPCREQ and not already in the list then we create a new session*/
                 add_gtp_session(pinfo->num, gtp_session_count);
@@ -9578,7 +9583,7 @@ track_gtpv2_session(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, gtpv
                     conversation_t  *conversation;
                     conversation = find_conversation_strat(pinfo, CONVERSATION_IP, NO_PORT_X, false);
 
-                    if ((get_gtp_session_frame(pinfo->dst, (uint32_t)gtpv2_hdr->teid, conversation ? conversation->conv_index : 0, &frame_teid_cp, 0) == 1)) {
+                    if ((get_gtp_session_frame(pinfo->dst, (uint32_t)gtpv2_hdr->teid, conversation ? conversation->conv_index : 0, &frame_teid_cp) == 1)) {
 
                         /* Then we have to set its session ID */
                         session = GPOINTER_TO_UINT(wmem_map_lookup(session_table, GUINT_TO_POINTER(frame_teid_cp)));
@@ -9654,6 +9659,16 @@ track_gtpv2_session(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, gtpv
     }
 
     if (!PINFO_FD_VISITED(pinfo)) {
+        /* If the message has no session (also not from its TEID) and is not
+         * a CSESRES, CSESREQ, UBEAREQ, UBEARES, CBEAREQ, CBEARES, MBEAREQ or
+         * MBEARES, then we remove its information from teid and ip lists */
+        if (!GPOINTER_TO_UINT(wmem_map_lookup(session_table, GUINT_TO_POINTER(pinfo->num)))
+            && gtpv2_hdr->message != GTPV2_CREATE_SESSION_RESPONSE && gtpv2_hdr->message != GTPV2_CREATE_SESSION_REQUEST && gtpv2_hdr->message != GTPV2_UPDATE_BEARER_RESPONSE
+            && gtpv2_hdr->message != GTPV2_UPDATE_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_CREATE_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_CREATE_BEARER_RESPONSE
+            && gtpv2_hdr->message != GTPV2_MODIFY_BEARER_REQUEST && gtpv2_hdr->message != GTPV2_MODIFY_BEARER_RESPONSE
+            && wmem_list_count(args->fteid_list)) {
+            remove_frame_info_fteids(args->fteid_list, pinfo->num);
+        }
         /* Do not let a message without a session take over the TEIDs of a session */
         restore_frame_info(pinfo->num, args->replaced_list);
     }
@@ -9851,6 +9866,7 @@ dissect_gtpv2(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, void* data
         args->teid_list = wmem_list_new(pinfo->pool);
         args->ip_list = wmem_list_new(pinfo->pool);
         args->replaced_list = wmem_list_new(pinfo->pool);
+        args->fteid_list = wmem_list_new(pinfo->pool);
     }
 
     /*
@@ -9964,11 +9980,11 @@ dissect_gtpv2(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, void* data
     if (args && !PINFO_FD_VISITED(pinfo)) {
         /* We insert the lists inside the table*/
         if(is_deinterlacing_supported(pinfo)) {
-            fill_map(args->teid_list, args->ip_list, pinfo->num, conversation->conv_index, 0, args->replaced_list);
+            fill_map_fteids(args->fteid_list, pinfo->num, conversation->conv_index, 0, pinfo->pool, args->replaced_list);
         }
         else {
             // no deinterlacing supported/asked
-            fill_map(args->teid_list, args->ip_list, pinfo->num, 0, 1, args->replaced_list);
+            fill_map_fteids(args->fteid_list, pinfo->num, 0, 1, pinfo->pool, args->replaced_list);
         }
         cause_aux = args->last_cause;
     }

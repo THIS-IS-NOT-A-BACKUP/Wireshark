@@ -163,6 +163,12 @@ typedef struct gtp_hdr_ext_info {
 extern uint32_t gtp_session_count;
 extern bool g_gtp_session;
 
+/* The <teid,ip> pair of a F-TEID */
+typedef struct {
+    uint32_t teid;
+    address addr;
+} gtp_fteid_t;
+
 typedef struct session_args {
     wmem_list_t *teid_list;
     wmem_list_t *ip_list;
@@ -171,6 +177,7 @@ typedef struct session_args {
     uint8_t last_cause;
     const char *imsi;
     wmem_list_t *replaced_list; /* <teid,ip> mappings that fill_map() replaced */
+    wmem_list_t *fteid_list;    /* F-TEIDs (gtp_fteid_t) of a GTPv2 message, if not NULL */
 } session_args_t;
 
 /* Relation between frame -> session */
@@ -189,11 +196,16 @@ extern wmem_map_t* frame_map_deint;
 
 uint32_t get_frame(address ip, uint32_t teid, uint32_t *frame);
 
-/* Similar to get_frame() but relies on the deinterlacer Map (frame_map_deint)
- * XXX - For now GTP ignores deinterlacing, and GTPv2 supports it.
+/* Similar to get_frame() but relies on the deinterlacer Map (frame_map_deint),
+ * for the <teid,ip> in the conversation convid.
+ * GTP ignores deinterlacing, and GTPv2 supports it.
  */
-uint32_t get_gtp_session_frame(address ip, uint32_t teid, uint32_t convid, uint32_t *frame, bool ignore_conv);
+uint32_t get_gtp_session_frame(address ip, uint32_t teid, uint32_t convid, uint32_t *frame);
 
+/**
+ * Makes the <teid,ip> mappings to frame f in frame_map no longer count, e.g.
+ * when the response to it was not accepted.
+ */
 void remove_frame_info(uint32_t f);
 
 /**
@@ -212,9 +224,21 @@ bool ip_exists(address ip, wmem_list_t *ip_list);
 /**
  * Fills the frame_map or frame_map_deint according to the deinterlacing mode.
  * The mappings it replaces are added to replaced_list (if not NULL), for
- * restore_frame_info().
+ * restore_frame_info(); scope (ex pinfo->pool) is used for them.
  */
-void fill_map(wmem_list_t *teid_list, wmem_list_t *ip_list, uint32_t frame, uint32_t convid, bool ignore_conv, wmem_list_t *replaced_list);
+void fill_map(wmem_list_t *teid_list, wmem_list_t *ip_list, uint32_t frame, uint32_t convid, bool ignore_conv, wmem_allocator_t *scope, wmem_list_t *replaced_list);
+
+/**
+ * Like fill_map(), but maps only the <teid,ip> pairs of fteid_list
+ * (gtp_fteid_t), instead of all combinations of the TEIDs and addresses.
+ */
+void fill_map_fteids(wmem_list_t *fteid_list, uint32_t frame, uint32_t convid, bool ignore_conv, wmem_allocator_t *scope, wmem_list_t *replaced_list);
+
+/**
+ * Like remove_frame_info_lists(), for the <teid,ip> pairs that
+ * fill_map_fteids() added for fteid_list.
+ */
+void remove_frame_info_fteids(wmem_list_t *fteid_list, uint32_t frame);
 
 /**
  * If frame has no session, puts back the mappings in replaced_list that

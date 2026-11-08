@@ -119,6 +119,7 @@ static int ett_ipcomp;
 
 static expert_field ei_esp_sequence_analysis_wrong_sequence_number;
 static expert_field ei_esp_pad_bogus;
+static expert_field ei_ah_nesting_too_deep;
 
 
 static int exported_pdu_tap = -1;
@@ -908,9 +909,7 @@ get_full_ipv4_addr(char* ipv4_address_expanded, char *ipv4_address)
   char addr_byte_string[12];
 
   unsigned addr_byte = 0;
-  unsigned i = 0;
-  unsigned j = 0;
-  unsigned k = 0;
+  unsigned i = 0, j, k;
   unsigned cpt = 0;
   bool done_flag = false;
   unsigned mask = IPSEC_IPV4_ADDR_LEN;
@@ -1430,6 +1429,11 @@ capture_ah(const unsigned char *pd, int offset, int len, capture_packet_info_t *
   return try_capture_dissector("ip.proto", nxt, pd, offset, len, cpinfo, pseudo_header);
 }
 
+/* AH can be nested through itself or through MIPv6 (next header 51 or
+ * 135). Count the nesting per packet and stop at a small limit, well
+ * before the tree and dissection depth limits are reached. */
+#define AH_MAX_NESTING 8
+
 static int
 dissect_ah(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
 {
@@ -1443,6 +1447,7 @@ dissect_ah(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
   tvbuff_t   *next_tvb;
   dissector_handle_t dissector_handle;
   uint32_t saved_match_uint;
+  unsigned    nesting;
 
   col_set_str(pinfo->cinfo, COL_PROTOCOL, "AH");
   col_clear(pinfo->cinfo, COL_INFO);
@@ -1477,6 +1482,14 @@ dissect_ah(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
 
   next_tvb = tvb_new_subset_remaining(tvb, ah_hdr_len);
 
+  nesting = p_get_proto_depth(pinfo, proto_ah);
+  if (nesting >= AH_MAX_NESTING) {
+    proto_tree_add_expert_remaining(ah_tree, pinfo, &ei_ah_nesting_too_deep, next_tvb, 0);
+    return tvb_captured_length(tvb);
+  }
+  p_set_proto_depth(pinfo, proto_ah, nesting + 1);
+  increment_dissection_depth(pinfo);
+
   if (pinfo->dst.type == AT_IPv6) {
     ipv6_dissect_next(ah_nxt, next_tvb, pinfo, tree, (ws_ip6 *)data);
   } else {
@@ -1492,6 +1505,8 @@ dissect_ah(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
     call_dissector(dissector_handle, next_tvb, pinfo, tree);
     pinfo->match_uint = saved_match_uint;
   }
+  decrement_dissection_depth(pinfo);
+  p_set_proto_depth(pinfo, proto_ah, nesting);
   return tvb_captured_length(tvb);
 }
 
@@ -1715,9 +1730,7 @@ dissect_esp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U_)
                 sn_upper++;
               }
             } else {
-              if (sequence_number >= (status->firstValidSN - window)) {
-                sn_upper--;
-              }
+              sn_upper--;
             }
           }
         }
@@ -2221,31 +2234,30 @@ dissect_esp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data _U_)
        /*
         * Add the encrypted portion to the tree and store it in a packet scope buffer for later decryption.
         */
-       if (esp_encr_data_len) {
-         encr_data_item = proto_tree_add_item(esp_tree, hf_esp_encrypted_data, tvb, offset, esp_encr_data_len, ENC_NA);
-         proto_item_append_text(encr_data_item, " (%d bytes) <%s>",
-                                esp_encr_data_len,
-                                esp_get_encr_algo_name(esp_encr_algo));
 
-         esp_encr_data = (unsigned char *)tvb_memdup(pinfo->pool, tvb, offset, esp_encr_data_len);
-         offset += esp_encr_data_len;
+        encr_data_item = proto_tree_add_item(esp_tree, hf_esp_encrypted_data, tvb, offset, esp_encr_data_len, ENC_NA);
+        proto_item_append_text(encr_data_item, " (%d bytes) <%s>",
+                               esp_encr_data_len,
+                               esp_get_encr_algo_name(esp_encr_algo));
 
-         /*
-          * Verify that the encrypted payload data is properly aligned: The ciphertext length
-          * needs to be a multiple of the of block size (which equals 1 for 'stream ciphers'
-          * like AES-GCM and AES-CTR) and the ciphertext needs to terminate on a 4-byte boundary,
-          * according to RFC 2406, section 2.4. Given the fact that all current block sizes are
-          * powers of 2, only the stricter alignment requirement needs to be checked:
-          */
-         if (esp_block_len > 4 && esp_encr_data_len % esp_block_len != 0) {
-           proto_item_append_text(encr_data_item, "[Invalid length, ciphertext should be a multiple of block size (%u)]",
-                                  esp_block_len);
-           decrypt_using_libgcrypt = false;
-         } else if (esp_encr_data_len % 4 != 0) {
-           proto_item_append_text(encr_data_item, "[Invalid length, ciphertext should terminate at 4-byte boundary]");
-           decrypt_using_libgcrypt = false;
-         }
-       }
+        esp_encr_data = (unsigned char *)tvb_memdup(pinfo->pool, tvb, offset, esp_encr_data_len);
+        offset += esp_encr_data_len;
+
+        /*
+         * Verify that the encrypted payload data is properly aligned: The ciphertext length
+         * needs to be a multiple of the of block size (which equals 1 for 'stream ciphers'
+         * like AES-GCM and AES-CTR) and the ciphertext needs to terminate on a 4-byte boundary,
+         * according to RFC 2406, section 2.4. Given the fact that all current block sizes are
+         * powers of 2, only the stricter alignment requirement needs to be checked:
+         */
+        if (esp_block_len > 4 && esp_encr_data_len % esp_block_len != 0) {
+          proto_item_append_text(encr_data_item, "[Invalid length, ciphertext should be a multiple of block size (%u)]",
+                                 esp_block_len);
+          decrypt_using_libgcrypt = false;
+        } else if (esp_encr_data_len % 4 != 0) {
+          proto_item_append_text(encr_data_item, "[Invalid length, ciphertext should terminate at 4-byte boundary]");
+          decrypt_using_libgcrypt = false;
+        }
 
 
         /*
@@ -2813,6 +2825,10 @@ proto_register_ipsec(void)
     &ett_ipcomp,
   };
 
+  static ei_register_info ei_ah[] = {
+    { &ei_ah_nesting_too_deep, { "ah.nesting_too_deep", PI_MALFORMED, PI_ERROR, "AH nested too deeply", EXPFILL }},
+  };
+
   static ei_register_info ei[] = {
     { &ei_esp_sequence_analysis_wrong_sequence_number, { "esp.sequence-analysis.wrong-sequence-number", PI_SEQUENCE, PI_WARN, "Wrong Sequence Number", EXPFILL }},
     { &ei_esp_pad_bogus, { "esp.pad.bogus", PI_PROTOCOL, PI_WARN, "Padding MUST increment starting with 1 [RFC 4303 2.4]", EXPFILL }}
@@ -2854,6 +2870,7 @@ proto_register_ipsec(void)
   module_t *esp_module;
 
   expert_module_t* expert_esp;
+  expert_module_t* expert_ah;
 
   proto_ah = proto_register_protocol("Authentication Header", "AH", "ah");
   proto_register_field_array(proto_ah, hf_ah, array_length(hf_ah));
@@ -2868,6 +2885,9 @@ proto_register_ipsec(void)
 
   expert_esp = expert_register_protocol(proto_esp);
   expert_register_field_array(expert_esp, ei, array_length(ei));
+
+  expert_ah = expert_register_protocol(proto_ah);
+  expert_register_field_array(expert_ah, ei_ah, array_length(ei_ah));
 
   ah_module = prefs_register_protocol_obsolete(proto_ah);
 

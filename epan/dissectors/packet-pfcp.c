@@ -2343,42 +2343,46 @@ pfcp_info_equal(const void *key1, const void *key2)
     return (a->seid == b->seid && (cmp_address(&a->addr, &b->addr) == 0));
 }
 
+/* Frames whose response was not accepted. Their <seid,ip> mappings stay in
+ * pfcp_frame_map but no longer count, which is much faster than going through
+ * the whole map to remove them.
+ */
+static wmem_map_t* pfcp_rejected_frames;
+
+/* The frame that key maps to in pfcp_frame_map, or 0 */
+static uint32_t
+pfcp_lookup_frame(const pfcp_info_t *key) {
+    uint32_t frame = GPOINTER_TO_UINT(wmem_map_lookup(pfcp_frame_map, key));
+
+    if (frame && wmem_map_contains(pfcp_rejected_frames, GUINT_TO_POINTER(frame))) {
+        return 0;
+    }
+    return frame;
+}
+
 static uint32_t
 pfcp_get_frame(address ip, uint64_t seid, uint32_t *frame) {
     pfcp_info_t info;
-    uint32_t *value;
+    uint32_t value;
 
     info.seid = seid;
     copy_address_shallow(&info.addr, &ip);
-    value = wmem_map_lookup(pfcp_frame_map, &info);
-    if (value != NULL) {
-        *frame = GPOINTER_TO_UINT(value);
+    value = pfcp_lookup_frame(&info);
+    if (value) {
+        *frame = value;
         return 1;
     }
     return 0;
 }
 
-static gboolean
-pfcp_frame_equal(void *key _U_, void *value, void *data){
-    uint32_t frame = GPOINTER_TO_UINT(data);
-
-    return (GPOINTER_TO_UINT(value) == frame);
-}
-
+/* Makes the <seid,ip> mappings to frame f no longer count */
 static void
-pfcp_remove_frame_info(uint32_t f) {
-    /* XXX: This iterates through the entire map and it is slow if done
-     * often. For large files with lots of removals, there are better
-     * alternatives, e.g. marking sessions as expired and then periodically
-     * removing all expired sessions from the map, or using a bijective
-     * map to coordinate removals.
-     */
-    wmem_map_foreach_remove(pfcp_frame_map, pfcp_frame_equal, GUINT_TO_POINTER(f));
+pfcp_reject_frame_info(uint32_t f) {
+    wmem_map_insert(pfcp_rejected_frames, GUINT_TO_POINTER(f), GUINT_TO_POINTER(1));
 }
 
-/* Like pfcp_remove_frame_info(), but only for the <seid,ip> mappings that
- * pfcp_fill_map() added for the seid_list and ip_list of frame, without
- * going through the whole map.
+/* Removes the <seid,ip> mappings to frame that pfcp_fill_map() added for
+ * its seid_list and ip_list.
  */
 static void
 pfcp_remove_frame_info_lists(wmem_list_t *seid_list, wmem_list_t *ip_list, uint32_t frame) {
@@ -2434,25 +2438,12 @@ pfcp_ip_exists(address ip, wmem_list_t *ip_list) {
     return found;
 }
 
-/* wmem_map_foreach() callback used in fill_map() */
-static void
-pfcp_remove_session_from_table(void *key, void *val, void *userdata) {
-    unsigned fr = GPOINTER_TO_UINT(key);
-    unsigned session = GPOINTER_TO_UINT(val);
-    unsigned remove_session = GPOINTER_TO_UINT(userdata);
-
-    /* If it's the session we are looking for, we remove all the frame information */
-    if (session == remove_session) {
-        pfcp_remove_frame_info(fr);
-    }
-}
-
 static void
 pfcp_fill_map(wmem_list_t *seid_list, wmem_list_t *ip_list, uint32_t frame) {
     wmem_list_frame_t *elem_ip, *elem_seid;
-    pfcp_info_t *pfcp_info;
+    pfcp_info_t info;
+    const void *map_key;
     uint64_t seid;
-    uint32_t session;
     address *ip;
 
     elem_ip = wmem_list_head(ip_list);
@@ -2462,20 +2453,16 @@ pfcp_fill_map(wmem_list_t *seid_list, wmem_list_t *ip_list, uint32_t frame) {
         elem_seid = wmem_list_head(seid_list);
         while (elem_seid) {
             seid = *(uint64_t*)wmem_list_frame_data(elem_seid);
-            pfcp_info = wmem_new0(wmem_file_scope(), pfcp_info_t);
-            pfcp_info->seid = seid;
-            copy_address_wmem(wmem_file_scope(), &pfcp_info->addr, ip);
-            if (wmem_map_lookup(pfcp_frame_map, pfcp_info)) {
-                /* If the seid and ip already maps to a session, that means
-                 * that we need to remove old info about that session */
-                /* We look for its session ID */
-                session = GPOINTER_TO_UINT(wmem_map_lookup(pfcp_session_table, GUINT_TO_POINTER(frame)));
-                if (session) {
-                    /* If the msg has the same session ID and it's not the upd req we have to remove its info */
-                    wmem_map_foreach(pfcp_session_table, pfcp_remove_session_from_table, GUINT_TO_POINTER(session));
-                }
+            info.seid = seid;
+            copy_address_shallow(&info.addr, ip);
+            /* Copy the key only if the map does not have it */
+            if (!wmem_map_lookup_extended(pfcp_frame_map, &info, &map_key, NULL)) {
+                pfcp_info_t *pfcp_info = wmem_new0(wmem_file_scope(), pfcp_info_t);
+                pfcp_info->seid = seid;
+                copy_address_wmem(wmem_file_scope(), &pfcp_info->addr, ip);
+                map_key = pfcp_info;
             }
-            wmem_map_insert(pfcp_frame_map, pfcp_info, GUINT_TO_POINTER(frame));
+            wmem_map_insert(pfcp_frame_map, map_key, GUINT_TO_POINTER(frame));
             elem_seid = wmem_list_frame_next(elem_seid);
         }
         elem_ip = wmem_list_frame_next(elem_ip);
@@ -11594,7 +11581,7 @@ pfcp_match_response(tvbuff_t * tvb, packet_info * pinfo, proto_tree * tree, unsi
 
                 if (!pfcp_is_cause_accepted(last_cause)){
                     /* If the cause is not accepted then we have to remove all the session information about its corresponding request */
-                    pfcp_remove_frame_info(pcrp->req_frame);
+                    pfcp_reject_frame_info(pcrp->req_frame);
                 }
             }
         }
@@ -14900,6 +14887,7 @@ pfcp_init(void)
     pfcp_session_table = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_direct_hash, g_direct_equal);
     pfcp_session_imsi = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_direct_hash, g_direct_equal);
     pfcp_frame_map = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), pfcp_info_hash, pfcp_info_equal);
+    pfcp_rejected_frames = wmem_map_new_autoreset(wmem_epan_scope(), wmem_file_scope(), g_direct_hash, g_direct_equal);
 }
 
 void

@@ -2110,7 +2110,8 @@
   ],
   "TestDissectGsmMap": [
    "epan/dissectors/packet-gsm_map.c",
-   "epan/dissectors/packet-gsm_sms.c"
+   "epan/dissectors/packet-gsm_sms.c",
+   "epan/dissectors/packet-isup.c"
   ],
   "TestDissectGsmOsmux": [
    "epan/dissectors/packet-gsm_osmux.c",
@@ -2806,6 +2807,268 @@
   "TestDissectIsi": [
    "epan/dissectors/packet-isi.c"
   ],
+  "TestDissectIsisClv": [
+   "epan/dissectors/packet-isis-clv.c",
+   "epan/dissectors/packet-isis-hello.c",
+   "epan/dissectors/packet-isis-lsp.c",
+   "epan/dissectors/packet-isis-snp.c"
+  ],
+  "TestDissectIsisCoverage": [
+   "epan/dissectors/packet-isis-hello.c",
+   "epan/dissectors/packet-isis-lsp.c",
+   "epan/dissectors/packet-isis-snp.c",
+   "epan/dissectors/packet-isis.c"
+  ],
+  "TestDissectIsisHello": [
+   "epan/dissectors/packet-isis-hello.c"
+  ],
+  "TestDissectIsisLsp": [
+   "epan/dissectors/packet-isis-lsp.c"
+  ],
+  "TestDissectIsisSnp": [
+   "epan/dissectors/packet-isis-snp.c"
+  ],
+  "TestDissectIsl": [
+   "epan/dissectors/packet-isl.c"
+  ],
+  "TestDissectIsmacryp": [
+   "epan/dissectors/packet-ismacryp.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectIsmp": [
+   "epan/dissectors/packet-ismp.c"
+  ],
+  "TestDissectIsns": [
+   "epan/dissectors/packet-isns.c"
+  ],
+  "TestDissectIso10681": [
+   "epan/dissectors/packet-exported_pdu.c",
+   "epan/dissectors/packet-flexray.c",
+   "epan/dissectors/packet-iso10681.c"
+  ],
+  "TestDissectIso14443": [
+   "epan/dissectors/packet-iso14443.c"
+  ],
+  "TestDissectIso15765": [
+   "epan/dissectors/packet-autosar-ipdu-multiplexer.c",
+   "epan/dissectors/packet-exported_pdu.c",
+   "epan/dissectors/packet-flexray.c",
+   "epan/dissectors/packet-iso15765.c",
+   "epan/dissectors/packet-pdu-transport.c"
+  ],
+  "TestDissectIso7816": [
+   "epan/dissectors/packet-iso14443.c",
+   "epan/dissectors/packet-iso7816.c"
+  ],
+  "TestDissectIso8583": [
+   "epan/dissectors/packet-iso8583.c"
+  ],
+  "TestDissectIsobus": [
+   "epan/dissectors/packet-exported_pdu.c",
+   "epan/dissectors/packet-isobus.c",
+   "epan/dissectors/packet-socketcan.c"
+  ],
+  "TestDissectIsobusVt": [
+   "epan/dissectors/packet-isobus-vt.c",
+   "epan/dissectors/packet-socketcan.c"
+  ],
+  "TestDissectIsup": [
+   "epan/dissectors/packet-isup.c",
+   "epan/dissectors/packet-q931.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectItdm": [
+   "epan/dissectors/packet-itdm.c"
+  ],
+  "TestDissectItsCoverage": [
+   "epan/dissectors/packet-its.c"
+  ],
+  "TestDissectIua": [
+   "epan/dissectors/packet-gsm_abis_pgsl.c",
+   "epan/dissectors/packet-iua.c",
+   "epan/dissectors/packet-q931.c",
+   "epan/dissectors/packet-rsl.c",
+   "epan/dissectors/packet-x25.c"
+  ],
+  "TestDissectIuup": [
+   "epan/dissectors/packet-iuup.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectIwarpDdpRdmap": [
+   "epan/dissectors/packet-iwarp-ddp-rdmap.c"
+  ],
+  "TestDissectIwarpMpa": [
+   "epan/dissectors/packet-iwarp-mpa.c"
+  ],
+  "TestDissectIxiatrailer": [
+   "epan/dissectors/packet-ixiatrailer.c"
+  ],
+  "TestDissectIxveriwave": [
+   "epan/dissectors/packet-dis.c",
+   "epan/dissectors/packet-ixveriwave.c"
+  ],
+  "TestDissectJ1939": [
+   "epan/dissectors/packet-exported_pdu.c",
+   "epan/dissectors/packet-j1939.c",
+   "epan/dissectors/packet-socketcan.c"
+  ],
+  "TestDissectJmirror": [
+   "epan/dissectors/packet-jmirror.c"
+  ],
+  "TestDissectKadm5": [
+   "epan/dissectors/packet-kadm5.c"
+  ],
+  "TestDissectKafkaCoverage": [
+   "epan/dissectors/packet-kafka.c"
+  ],
+  "TestDissectKdp": [
+   "epan/dissectors/packet-kdp.c"
+  ],
+  "TestDissectKdsp": [
+   "epan/dissectors/packet-ieee80211.c",
+   "epan/dissectors/packet-kdsp.c"
+  ],
+  "TestDissectKerberos4": [
+   "epan/dissectors/packet-ftp.c",
+   "epan/dissectors/packet-kerberos.c",
+   "epan/dissectors/packet-kerberos4.c"
+  ],
+  "TestDissectKingfisher": [
+   "epan/dissectors/packet-kingfisher.c"
+  ],
+  "TestDissectKink": [
+   "epan/dissectors/packet-kink.c"
+  ],
+  "TestDissectKismet": [
+   "epan/dissectors/packet-kismet.c"
+  ],
+  "TestDissectKlm": [
+   "epan/dissectors/packet-klm.c"
+  ],
+  "TestDissectKnet": [
+   "epan/dissectors/packet-knet.c"
+  ],
+  "TestDissectKnxipCoverage": [
+   "epan/dissectors/packet-cemi.c",
+   "epan/dissectors/packet-knxip.c"
+  ],
+  "TestDissectKnxipDecrypt": [
+   "epan/dissectors/packet-knxip.c",
+   "epan/dissectors/packet-knxip_decrypt.c"
+  ],
+  "TestDissectKpasswd": [
+   "epan/dissectors/packet-kpasswd.c"
+  ],
+  "TestDissectKpmV2": [
+   "epan/dissectors/packet-kpm-v2.c"
+  ],
+  "TestDissectKt": [
+   "epan/dissectors/packet-kt.c"
+  ],
+  "TestDissectL1Events": [
+   "epan/dissectors/packet-l1-events.c"
+  ],
+  "TestDissectL2tp": [
+   "epan/dissectors/packet-atm.c",
+   "epan/dissectors/packet-l2tp.c",
+   "epan/dissectors/packet-ppp.c"
+  ],
+  "TestDissectLacp": [
+   "epan/dissectors/packet-lacp.c"
+  ],
+  "TestDissectLanforge": [
+   "epan/dissectors/packet-lanforge.c"
+  ],
+  "TestDissectLapb": [
+   "epan/dissectors/packet-lapb.c",
+   "epan/dissectors/packet-x25.c"
+  ],
+  "TestDissectLapbether": [
+   "epan/dissectors/packet-lapbether.c",
+   "epan/dissectors/packet-x25.c"
+  ],
+  "TestDissectLapd": [
+   "epan/dissectors/packet-gsm_a_dtap.c",
+   "epan/dissectors/packet-gsm_abis_oml.c",
+   "epan/dissectors/packet-gsm_abis_pgsl.c",
+   "epan/dissectors/packet-gsm_abis_tfp.c",
+   "epan/dissectors/packet-lapd.c",
+   "epan/dissectors/packet-q931.c"
+  ],
+  "TestDissectLapdm": [
+   "epan/dissectors/packet-gsm_a_dtap.c",
+   "epan/dissectors/packet-gsm_a_rr.c",
+   "epan/dissectors/packet-lapdm.c"
+  ],
+  "TestDissectLaplink": [
+   "epan/dissectors/packet-laplink.c"
+  ],
+  "TestDissectLapsat": [
+   "epan/dissectors/packet-gmr1_bcch.c",
+   "epan/dissectors/packet-gsm_a_dtap.c",
+   "epan/dissectors/packet-lapsat.c"
+  ],
+  "TestDissectLat": [
+   "epan/dissectors/packet-lat.c"
+  ],
+  "TestDissectLbm": [
+   "epan/dissectors/packet-lbm.c",
+   "epan/dissectors/packet-lbmc.c",
+   "epan/dissectors/packet-lbmpdmtcp.c",
+   "epan/dissectors/packet-lbmr.c",
+   "epan/dissectors/packet-lbtrm.c",
+   "epan/dissectors/packet-lbtru.c",
+   "epan/dissectors/packet-lbttcp.c"
+  ],
+  "TestDissectLbmc": [
+   "epan/dissectors/packet-lbmc.c",
+   "epan/dissectors/packet-lbmr.c",
+   "epan/dissectors/packet-lbtrm.c",
+   "epan/dissectors/packet-lbttcp.c"
+  ],
+  "TestDissectLbmpdm": [
+   "epan/dissectors/packet-lbmpdm.c",
+   "epan/dissectors/packet-lbmpdmtcp.c"
+  ],
+  "TestDissectLbmpdmTcp": [
+   "epan/dissectors/packet-lbmpdm.c",
+   "epan/dissectors/packet-lbmpdmtcp.c"
+  ],
+  "TestDissectLbmr": [
+   "epan/dissectors/packet-classicstun.c",
+   "epan/dissectors/packet-lbmr.c",
+   "epan/dissectors/packet-wireguard.c"
+  ],
+  "TestDissectLbmsrs": [
+   "epan/dissectors/packet-lbmsrs.c"
+  ],
+  "TestDissectLbtrm": [
+   "epan/dissectors/packet-lbtrm.c"
+  ],
+  "TestDissectLbtru": [
+   "epan/dissectors/packet-lbtru.c"
+  ],
+  "TestDissectLbttcp": [
+   "epan/dissectors/packet-lbttcp.c",
+   "epan/dissectors/packet-smpp.c"
+  ],
+  "TestDissectLcsap": [
+   "epan/dissectors/packet-lcsap.c"
+  ],
+  "TestDissectLdaNeoTrailer": [
+   "epan/dissectors/packet-lda-neo-trailer.c"
+  ],
+  "TestDissectLdapCoverage": [
+   "epan/dissectors/packet-ldap.c",
+   "epan/dissectors/packet-ntlmssp.c",
+   "epan/dissectors/packet-tls.c"
+  ],
+  "TestDissectLdp": [
+   "epan/dissectors/packet-ldp.c"
+  ],
+  "TestDissectLg8979": [
+   "epan/dissectors/packet-lg8979.c"
+  ],
   "TestDissectLi5g": [
    "epan/dissectors/packet-HI2Operations.c",
    "epan/dissectors/packet-dhcp.c",
@@ -2821,9 +3084,706 @@
    "epan/dissectors/packet-li-ps-pdu.c",
    "epan/dissectors/packet-syslog.c"
   ],
+  "TestDissectLisp": [
+   "epan/dissectors/packet-lisp.c"
+  ],
+  "TestDissectLispData": [
+   "epan/dissectors/packet-lisp-data.c",
+   "epan/dissectors/packet-lisp.c"
+  ],
+  "TestDissectLispTcp": [
+   "epan/dissectors/packet-lisp-tcp.c"
+  ],
+  "TestDissectLix2": [
+   "epan/dissectors/packet-lix2.c"
+  ],
+  "TestDissectLlcCoverage": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-at-ldf.c",
+   "epan/dissectors/packet-atalk.c",
+   "epan/dissectors/packet-bpdu.c",
+   "epan/dissectors/packet-cdp.c",
+   "epan/dissectors/packet-hpteam.c",
+   "epan/dissectors/packet-ipx.c",
+   "epan/dissectors/packet-llc.c",
+   "epan/dissectors/packet-netbios.c",
+   "epan/dissectors/packet-sna.c"
+  ],
+  "TestDissectLlcV1": [
+   "epan/dissectors/packet-llc-v1.c"
+  ],
+  "TestDissectLldpCoverage": [
+   "epan/dissectors/packet-lldp.c"
+  ],
+  "TestDissectLlrpCoverage": [
+   "epan/dissectors/packet-llrp.c"
+  ],
+  "TestDissectLnpdqp": [
+   "epan/dissectors/packet-lnpdqp.c",
+   "epan/dissectors/packet-mtp3.c"
+  ],
+  "TestDissectLog3gpp": [
+   "epan/dissectors/packet-gprs-llc.c",
+   "epan/dissectors/packet-gsm_a_dtap.c",
+   "epan/dissectors/packet-gsm_a_rr.c",
+   "epan/dissectors/packet-log3gpp.c",
+   "epan/dissectors/packet-lte-rrc.c",
+   "epan/dissectors/packet-rrc.c",
+   "epan/dissectors/packet-sndcp-xid.c",
+   "epan/dissectors/packet-sndcp.c",
+   "epan/dissectors/packet-uma.c"
+  ],
+  "TestDissectLogcat": [
+   "epan/dissectors/packet-logcat.c",
+   "epan/dissectors/packet-text-media.c"
+  ],
+  "TestDissectLogcatText": [
+   "epan/dissectors/packet-logcat-text.c"
+  ],
+  "TestDissectLogotypecertextn": [
+   "epan/dissectors/packet-logotypecertextn.c"
+  ],
+  "TestDissectLon": [
+   "epan/dissectors/packet-lon.c"
+  ],
+  "TestDissectLoop": [
+   "epan/dissectors/packet-loop.c"
+  ],
+  "TestDissectLoratap": [
+   "epan/dissectors/packet-loratap.c",
+   "epan/dissectors/packet-lorawan.c"
+  ],
+  "TestDissectLorawan": [
+   "epan/dissectors/packet-lorawan.c"
+  ],
+  "TestDissectLpd": [
+   "epan/dissectors/packet-lpd.c"
+  ],
+  "TestDissectLpp": [
+   "epan/dissectors/packet-lpp.c",
+   "epan/dissectors/packet-lte-rrc.c",
+   "epan/dissectors/packet-nr-rrc.c",
+   "epan/dissectors/packet-xml.c"
+  ],
+  "TestDissectLppa": [
+   "epan/dissectors/packet-lppa.c"
+  ],
+  "TestDissectLppe": [
+   "epan/dissectors/packet-lppe.c"
+  ],
+  "TestDissectLsc": [
+   "epan/dissectors/packet-lsc.c"
+  ],
+  "TestDissectLsd": [
+   "epan/dissectors/packet-lsd.c"
+  ],
+  "TestDissectLsdp": [
+   "epan/dissectors/packet-lsdp.c"
+  ],
+  "TestDissectLtp": [
+   "epan/dissectors/packet-ltp.c"
+  ],
+  "TestDissectLustre": [
+   "epan/dissectors/packet-lustre.c"
+  ],
+  "TestDissectLwapp": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-lwapp.c"
+  ],
+  "TestDissectLwm": [
+   "epan/dissectors/packet-lwm.c"
+  ],
+  "TestDissectLwm2mtlv": [
+   "epan/dissectors/packet-lwm2mtlv.c"
+  ],
+  "TestDissectLwres": [
+   "epan/dissectors/packet-ftp.c",
+   "epan/dissectors/packet-lwres.c"
+  ],
+  "TestDissectM2ap": [
+   "epan/dissectors/packet-m2ap.c"
+  ],
+  "TestDissectM2pa": [
+   "epan/dissectors/packet-m2pa.c",
+   "epan/dissectors/packet-mtp3mg.c"
+  ],
+  "TestDissectM2tp": [
+   "epan/dissectors/packet-m2tp.c",
+   "epan/dissectors/packet-mtp3mg.c"
+  ],
+  "TestDissectM2ua": [
+   "epan/dissectors/packet-m2ua.c",
+   "epan/dissectors/packet-mtp3mg.c"
+  ],
+  "TestDissectM3ap": [
+   "epan/dissectors/packet-m3ap.c"
+  ],
+  "TestDissectM3ua": [
+   "epan/dissectors/packet-isup.c",
+   "epan/dissectors/packet-m3ua.c",
+   "epan/dissectors/packet-mtp3mg.c"
+  ],
+  "TestDissectMaap": [
+   "epan/dissectors/packet-maap.c"
+  ],
+  "TestDissectMacLte": [
+   "epan/dissectors/packet-mac-lte.c"
+  ],
+  "TestDissectMacLteFramed": [
+   "epan/dissectors/packet-mac-lte.c"
+  ],
+  "TestDissectMacNr": [
+   "epan/dissectors/packet-mac-nr.c"
+  ],
+  "TestDissectMacNrFramed": [
+   "epan/dissectors/packet-mac-nr.c"
+  ],
+  "TestDissectMaccontrol": [
+   "epan/dissectors/packet-maccontrol.c"
+  ],
+  "TestDissectMacsec": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-lldp.c",
+   "epan/dissectors/packet-macsec.c"
+  ],
+  "TestDissectMactelnet": [
+   "epan/dissectors/packet-mactelnet.c"
+  ],
+  "TestDissectManolito": [
+   "epan/dissectors/packet-manolito.c"
+  ],
+  "TestDissectMarker": [
+   "epan/dissectors/packet-marker.c"
+  ],
+  "TestDissectMatter": [
+   "epan/dissectors/packet-matter.c"
+  ],
+  "TestDissectMausb": [
+   "epan/dissectors/packet-mausb.c"
+  ],
+  "TestDissectMbim": [
+   "epan/dissectors/packet-etsi_card_app_toolkit.c",
+   "epan/dissectors/packet-gsm_sim.c",
+   "epan/dissectors/packet-gsm_sms.c",
+   "epan/dissectors/packet-mbim.c"
+  ],
+  "TestDissectMbtcp": [
+   "epan/dissectors/packet-mbtcp.c"
+  ],
+  "TestDissectMcNmf": [
+   "epan/dissectors/packet-mc-nmf.c",
+   "epan/dissectors/packet-ntlmssp.c",
+   "epan/dissectors/packet-tls.c"
+  ],
+  "TestDissectMcdata": [
+   "epan/dissectors/packet-mcdata.c"
+  ],
+  "TestDissectMcpe": [
+   "epan/dissectors/packet-mcpe.c"
+  ],
+  "TestDissectMctp": [
+   "epan/dissectors/packet-mctp-control.c",
+   "epan/dissectors/packet-mctp.c",
+   "epan/dissectors/packet-ncsi.c",
+   "epan/dissectors/packet-pldm.c"
+  ],
+  "TestDissectMctpControl": [
+   "epan/dissectors/packet-mctp-control.c"
+  ],
+  "TestDissectMctpSmbus": [
+   "epan/dissectors/packet-mctp-control.c",
+   "epan/dissectors/packet-mctp-smbus.c",
+   "epan/dissectors/packet-pldm.c"
+  ],
+  "TestDissectMdb": [
+   "epan/dissectors/packet-mdb.c"
+  ],
+  "TestDissectMdp": [
+   "epan/dissectors/packet-mdp.c"
+  ],
+  "TestDissectMdshdr": [
+   "epan/dissectors/packet-fc.c",
+   "epan/dissectors/packet-mdshdr.c"
+  ],
+  "TestDissectMedia": [
+   "epan/dissectors/packet-cbor.c",
+   "epan/dissectors/packet-json.c",
+   "epan/dissectors/packet-media.c",
+   "epan/dissectors/packet-xml.c"
+  ],
+  "TestDissectMediaType": [
+   "epan/dissectors/file-png.c",
+   "epan/dissectors/packet-http-urlencoded.c",
+   "epan/dissectors/packet-json.c",
+   "epan/dissectors/packet-media-type.c",
+   "epan/dissectors/packet-text-media.c",
+   "epan/dissectors/packet-xml.c"
+  ],
+  "TestDissectMegaco": [
+   "epan/dissectors/packet-h248.c",
+   "epan/dissectors/packet-megaco.c"
+  ],
+  "TestDissectMemcache": [
+   "epan/dissectors/packet-memcache.c"
+  ],
+  "TestDissectMesh": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-mesh.c"
+  ],
+  "TestDissectMessageAnalyzer": [
+   "epan/dissectors/packet-dns.c",
+   "epan/dissectors/packet-ieee80211.c",
+   "epan/dissectors/packet-messageanalyzer.c"
+  ],
+  "TestDissectMeta": [
+   "epan/dissectors/packet-meta.c",
+   "epan/dissectors/packet-mtp2.c",
+   "epan/dissectors/packet-nsip.c",
+   "epan/dissectors/packet-sscop.c",
+   "epan/dissectors/packet-umts_fp.c"
+  ],
+  "TestDissectMetamako": [
+   "epan/dissectors/packet-metamako.c"
+  ],
+  "TestDissectMgcp": [
+   "epan/dissectors/packet-mgcp.c"
+  ],
+  "TestDissectMidiSysex": [
+   "epan/dissectors/packet-midi-sysex.c",
+   "epan/dissectors/packet-midi-sysex_digitech.c",
+   "epan/dissectors/packet-midi.c"
+  ],
+  "TestDissectMidiSysexDigitech": [
+   "epan/dissectors/packet-midi-sysex_digitech.c"
+  ],
+  "TestDissectMih": [
+   "epan/dissectors/packet-mih.c"
+  ],
+  "TestDissectMikey": [
+   "epan/dissectors/packet-mikey.c"
+  ],
+  "TestDissectMint": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-mint.c"
+  ],
+  "TestDissectMiop": [
+   "epan/dissectors/packet-giop.c",
+   "epan/dissectors/packet-miop.c",
+   "epan/dissectors/packet-tapa.c"
+  ],
+  "TestDissectMip": [
+   "epan/dissectors/packet-mip.c"
+  ],
+  "TestDissectMip6": [
+   "epan/dissectors/packet-mip6.c"
+  ],
+  "TestDissectMiwiP2pstar": [
+   "epan/dissectors/packet-miwi-p2pstar.c"
+  ],
+  "TestDissectMka": [
+   "epan/dissectors/packet-eapol.c",
+   "epan/dissectors/packet-mka.c"
+  ],
+  "TestDissectMle": [
+   "epan/dissectors/packet-mle.c"
+  ],
+  "TestDissectMms": [
+   "epan/dissectors/packet-mms.c"
+  ],
+  "TestDissectMmse": [
+   "epan/dissectors/packet-mmse.c"
+  ],
+  "TestDissectMndp": [
+   "epan/dissectors/packet-mndp.c"
+  ],
+  "TestDissectMojito": [
+   "epan/dissectors/packet-mojito.c"
+  ],
+  "TestDissectMoldudp": [
+   "epan/dissectors/packet-moldudp.c"
+  ],
+  "TestDissectMoldudp64": [
+   "epan/dissectors/packet-moldudp64.c"
+  ],
+  "TestDissectMonero": [
+   "epan/dissectors/packet-monero.c"
+  ],
+  "TestDissectMongo": [
+   "epan/dissectors/packet-mongo.c"
+  ],
+  "TestDissectMoqFile": [
+   "epan/dissectors/packet-moq-file.c"
+  ],
+  "TestDissectMoqLiteCov": [
+   "epan/dissectors/packet-moq-lite.c"
+  ],
+  "TestDissectMoqtCoverage": [
+   "epan/dissectors/packet-moqt.c"
+  ],
+  "TestDissectMount": [
+   "epan/dissectors/packet-mount.c"
+  ],
+  "TestDissectMp2t": [
+   "epan/dissectors/packet-knet.c",
+   "epan/dissectors/packet-mp2t.c",
+   "epan/dissectors/packet-mpeg-pes.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectMp4ves": [
+   "epan/dissectors/packet-mp4ves.c"
+  ],
+  "TestDissectMpeg1": [
+   "epan/dissectors/packet-mpeg1.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectMpegAudio": [
+   "epan/dissectors/packet-id3v2.c",
+   "epan/dissectors/packet-mpeg-audio.c"
+  ],
+  "TestDissectMpegCa": [
+   "epan/dissectors/packet-mpeg-ca.c",
+   "epan/dissectors/packet-mpeg-descriptor.c"
+  ],
+  "TestDissectMpegDescriptor": [
+   "epan/dissectors/packet-ff.c",
+   "epan/dissectors/packet-mpeg-descriptor.c",
+   "epan/dissectors/packet-mpeg-pmt.c",
+   "epan/dissectors/packet-x11.c",
+   "epan/dissectors/packet-x75.c"
+  ],
+  "TestDissectMpegDsmcc": [
+   "epan/dissectors/packet-mpeg-dsmcc.c"
+  ],
+  "TestDissectMpegPat": [
+   "epan/dissectors/packet-mpeg-pat.c"
+  ],
+  "TestDissectMpegPes": [
+   "epan/dissectors/packet-h264.c",
+   "epan/dissectors/packet-h265.c",
+   "epan/dissectors/packet-mpeg-audio.c",
+   "epan/dissectors/packet-mpeg-pes.c",
+   "epan/dissectors/packet-mpeg-pmt.c"
+  ],
+  "TestDissectMpegPmt": [
+   "epan/dissectors/packet-mpeg-descriptor.c",
+   "epan/dissectors/packet-mpeg-pmt.c"
+  ],
+  "TestDissectMpegSect": [
+   "epan/dissectors/packet-eiss.c",
+   "epan/dissectors/packet-mpeg-sect.c"
+  ],
+  "TestDissectMpls": [
+   "epan/dissectors/packet-bfd.c",
+   "epan/dissectors/packet-mpls.c"
+  ],
+  "TestDissectMplsEcho": [
+   "epan/dissectors/packet-mpls-echo.c"
+  ],
+  "TestDissectMplsMac": [
+   "epan/dissectors/packet-mpls-mac.c"
+  ],
+  "TestDissectMplsPm": [
+   "epan/dissectors/packet-mpls-pm.c",
+   "epan/dissectors/packet-ntp.c",
+   "epan/dissectors/packet-ptp.c"
+  ],
+  "TestDissectMplsPsc": [
+   "epan/dissectors/packet-mpls-psc.c"
+  ],
+  "TestDissectMplsY1711": [
+   "epan/dissectors/packet-mpls-y1711.c"
+  ],
+  "TestDissectMplstpOam": [
+   "epan/dissectors/packet-bfd.c",
+   "epan/dissectors/packet-mplstp-oam.c"
+  ],
+  "TestDissectMqtt": [
+   "epan/dissectors/packet-json.c",
+   "epan/dissectors/packet-mqtt.c",
+   "epan/dissectors/packet-protobuf.c",
+   "epan/dissectors/packet-text-media.c"
+  ],
+  "TestDissectMqttsn": [
+   "epan/dissectors/packet-mqtt-sn.c"
+  ],
+  "TestDissectMrcpv2": [
+   "epan/dissectors/packet-mrcpv2.c"
+  ],
+  "TestDissectMrd": [
+   "epan/dissectors/packet-mrd.c"
+  ],
+  "TestDissectMrpMmrp": [
+   "epan/dissectors/packet-mrp-mmrp.c"
+  ],
+  "TestDissectMrpMsrp": [
+   "epan/dissectors/packet-mrp-msrp.c"
+  ],
+  "TestDissectMsDo": [
+   "epan/dissectors/packet-ms-do.c"
+  ],
+  "TestDissectMsMms": [
+   "epan/dissectors/packet-clip.c",
+   "epan/dissectors/packet-ms-mms.c"
+  ],
+  "TestDissectMsNns": [
+   "epan/dissectors/packet-gssapi.c",
+   "epan/dissectors/packet-mc-nmf.c",
+   "epan/dissectors/packet-ms-nns.c"
+  ],
+  "TestDissectMsdp": [
+   "epan/dissectors/packet-msdp.c"
+  ],
+  "TestDissectMsgpack": [
+   "epan/dissectors/packet-msgpack.c"
+  ],
+  "TestDissectMsnMessenger": [
+   "epan/dissectors/packet-msn-messenger.c"
+  ],
+  "TestDissectMsnip": [
+   "epan/dissectors/packet-msnip.c"
+  ],
+  "TestDissectMsnlb": [
+   "epan/dissectors/packet-msnlb.c"
+  ],
+  "TestDissectMtp2": [
+   "epan/dissectors/packet-mtp2.c",
+   "epan/dissectors/packet-mtp3mg.c",
+   "epan/dissectors/packet-rtp.c",
+   "epan/dissectors/packet-sdp.c"
+  ],
+  "TestDissectMtp3": [
+   "epan/dissectors/packet-isup.c",
+   "epan/dissectors/packet-mtp3.c",
+   "epan/dissectors/packet-mtp3mg.c",
+   "epan/dissectors/packet-sccpmg.c"
+  ],
+  "TestDissectMtp3mg": [
+   "epan/dissectors/packet-mtp3mg.c"
+  ],
+  "TestDissectMudurl": [
+   "epan/dissectors/packet-mudurl.c"
+  ],
+  "TestDissectMultipart": [
+   "epan/dissectors/packet-isup.c",
+   "epan/dissectors/packet-multipart.c",
+   "epan/dissectors/packet-ppp.c",
+   "epan/dissectors/packet-xml.c"
+  ],
+  "TestDissectMux27010": [
+   "epan/dissectors/packet-mux27010.c"
+  ],
+  "TestDissectMysqlx": [
+   "epan/dissectors/packet-mysqlx.c"
+  ],
+  "TestDissectNano": [
+   "epan/dissectors/packet-nano.c"
+  ],
+  "TestDissectNasEps": [
+   "epan/dissectors/packet-gsm_a_dtap.c",
+   "epan/dissectors/packet-lpp.c",
+   "epan/dissectors/packet-nas_eps.c",
+   "epan/dissectors/packet-nbifom.c"
+  ],
+  "TestDissectNasdaqItch": [
+   "epan/dissectors/packet-nasdaq-itch.c",
+   "epan/dissectors/packet-nasdaq-soup.c"
+  ],
+  "TestDissectNasdaqSoup": [
+   "epan/dissectors/packet-nasdaq-soup.c"
+  ],
+  "TestDissectNatPmp": [
+   "epan/dissectors/packet-nat-pmp.c"
+  ],
+  "TestDissectNats": [
+   "epan/dissectors/packet-nats.c",
+   "epan/dissectors/packet-text-media.c"
+  ],
+  "TestDissectNavitrol": [
+   "epan/dissectors/packet-navitrol.c"
+  ],
+  "TestDissectNbRtpmux": [
+   "epan/dissectors/packet-nb_rtpmux.c"
+  ],
+  "TestDissectNbd": [
+   "epan/dissectors/packet-nbd.c"
+  ],
+  "TestDissectNbifom": [
+   "epan/dissectors/packet-nbifom.c"
+  ],
+  "TestDissectNbipx": [
+   "epan/dissectors/packet-nbipx.c",
+   "epan/dissectors/packet-smb.c"
+  ],
+  "TestDissectNbt": [
+   "epan/dissectors/packet-nbt.c"
+  ],
+  "TestDissectNcp": [
+   "epan/dissectors/packet-ipx.c",
+   "epan/dissectors/packet-ncp-nmas.c",
+   "epan/dissectors/packet-ncp-sss.c",
+   "epan/dissectors/packet-ncp.c"
+  ],
+  "TestDissectNcp2222": [
+   "epan/dissectors/packet-ncp.c",
+   "epan/dissectors/packet-ncp2222.c"
+  ],
+  "TestDissectNcpNmas": [
+   "epan/dissectors/packet-json.c",
+   "epan/dissectors/packet-ncp-nmas.c",
+   "epan/dissectors/packet-ncp.c",
+   "epan/dissectors/packet-tr.c"
+  ],
+  "TestDissectNcpSss": [
+   "epan/dissectors/packet-ncp-sss.c",
+   "epan/dissectors/packet-ncp.c"
+  ],
+  "TestDissectNcs": [
+   "epan/dissectors/packet-ncs.c"
+  ],
+  "TestDissectNcsi": [
+   "epan/dissectors/packet-ncsi.c"
+  ],
+  "TestDissectNdmp": [
+   "epan/dissectors/packet-ndmp.c"
+  ],
+  "TestDissectNdp": [
+   "epan/dissectors/packet-ndp.c"
+  ],
+  "TestDissectNdps": [
+   "epan/dissectors/packet-ipx.c",
+   "epan/dissectors/packet-ndps.c"
+  ],
+  "TestDissectNegoex": [
+   "epan/dissectors/packet-negoex.c"
+  ],
+  "TestDissectNetanalyzer": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-netanalyzer.c"
+  ],
+  "TestDissectNetbios": [
+   "epan/dissectors/packet-netbios.c",
+   "epan/dissectors/packet-smb.c"
+  ],
+  "TestDissectNetdump": [
+   "epan/dissectors/packet-netdump.c"
+  ],
+  "TestDissectNetgearEnsemble": [
+   "epan/dissectors/packet-netgear-ensemble.c"
+  ],
+  "TestDissectNetlink": [
+   "epan/dissectors/packet-netlink-net_dm.c",
+   "epan/dissectors/packet-netlink.c"
+  ],
+  "TestDissectNetlinkGeneric": [
+   "epan/dissectors/packet-netlink-generic.c",
+   "epan/dissectors/packet-netlink-net_dm.c"
+  ],
+  "TestDissectNetlinkHwsim": [
+   "epan/dissectors/packet-netlink-mac80211-hwsim.c"
+  ],
+  "TestDissectNetlinkNetfilter": [
+   "epan/dissectors/packet-netlink-netfilter.c",
+   "epan/dissectors/packet-nflog.c"
+  ],
+  "TestDissectNetlinkNl80211": [
+   "epan/dissectors/packet-eapol.c",
+   "epan/dissectors/packet-ieee80211.c",
+   "epan/dissectors/packet-netlink-nl80211.c"
+  ],
+  "TestDissectNetlinkOvsCtLimit": [
+   "epan/dissectors/packet-netlink-ovs_ct_limit.c"
+  ],
+  "TestDissectNetlinkOvsDatapath": [
+   "epan/dissectors/packet-netlink-ovs_datapath.c"
+  ],
+  "TestDissectNetlinkOvsFlow": [
+   "epan/dissectors/packet-netlink-ovs_flow.c",
+   "epan/dissectors/packet-netlink-ovs_packet.c"
+  ],
+  "TestDissectNetlinkOvsMeter": [
+   "epan/dissectors/packet-netlink-ovs_meter.c"
+  ],
+  "TestDissectNetlinkOvsPacket": [
+   "epan/dissectors/packet-netlink-ovs_flow.c",
+   "epan/dissectors/packet-netlink-ovs_packet.c"
+  ],
+  "TestDissectNetlinkOvsVport": [
+   "epan/dissectors/packet-netlink-ovs_vport.c"
+  ],
+  "TestDissectNetlinkPsample": [
+   "epan/dissectors/packet-netlink-psample.c",
+   "epan/dissectors/packet-socketcan.c"
+  ],
+  "TestDissectNetlinkRoute": [
+   "epan/dissectors/packet-netlink-route.c"
+  ],
+  "TestDissectNetlinkSockDiag": [
+   "epan/dissectors/packet-netlink-sock_diag.c"
+  ],
   "TestDissectNetmon80211": [
    "epan/dissectors/packet-ieee80211.c",
    "epan/dissectors/packet-netmon.c"
+  ],
+  "TestDissectNfapi": [
+   "epan/dissectors/packet-nfapi.c"
+  ],
+  "TestDissectNflog": [
+   "epan/dissectors/packet-arp.c",
+   "epan/dissectors/packet-nflog.c"
+  ],
+  "TestDissectNfsCoverage": [
+   "epan/dissectors/file-file.c",
+   "epan/dissectors/packet-mount.c",
+   "epan/dissectors/packet-nfs.c"
+  ],
+  "TestDissectNfsacl": [
+   "epan/dissectors/packet-nfs.c",
+   "epan/dissectors/packet-nfsacl.c"
+  ],
+  "TestDissectNfsauth": [
+   "epan/dissectors/packet-nfsauth.c"
+  ],
+  "TestDissectNgapCoverage": [
+   "epan/dissectors/packet-nas_5gs.c",
+   "epan/dissectors/packet-ngap.c",
+   "epan/dissectors/packet-nrppa.c"
+  ],
+  "TestDissectNhrp": [
+   "epan/dissectors/packet-cdp.c",
+   "epan/dissectors/packet-clnp.c",
+   "epan/dissectors/packet-nhrp.c"
+  ],
+  "TestDissectNisplus": [
+   "epan/dissectors/packet-nisplus.c"
+  ],
+  "TestDissectNistCsor": [
+   "epan/dissectors/packet-nist-csor.c"
+  ],
+  "TestDissectNlm": [
+   "epan/dissectors/packet-nlm.c"
+  ],
+  "TestDissectNlsp": [
+   "epan/dissectors/packet-ipx.c",
+   "epan/dissectors/packet-nlsp.c"
+  ],
+  "TestDissectNmea0183Coverage": [
+   "epan/dissectors/packet-nmea0183.c"
+  ],
+  "TestDissectNmea2000": [
+   "epan/dissectors/packet-nmea2000.c",
+   "epan/dissectors/packet-socketcan.c"
+  ],
+  "TestDissectNmf": [
+   "epan/dissectors/packet-nmf.c",
+   "epan/dissectors/packet-spnego.c",
+   "epan/dissectors/packet-x11.c"
+  ],
+  "TestDissectNntp": [
+   "epan/dissectors/packet-nntp.c",
+   "epan/dissectors/packet-tls.c"
+  ],
+  "TestDissectNoe": [
+   "epan/dissectors/packet-noe.c"
   ],
   "TestDissectOran": [
    "epan/dissectors/packet-oran.c"
