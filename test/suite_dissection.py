@@ -51172,6 +51172,60 @@ class TestDissectEap:
         ]
 
 
+class TestDissectEapNoob:
+    @staticmethod
+    def _tshark(cmd_tshark, capture_file, test_env, *args):
+        return subprocess.check_output((cmd_tshark, '-r', capture_file('eap-noob.pcap'), *args),
+                                       encoding='utf-8', env=test_env)
+
+    def test_eap_noob_type(self, cmd_tshark, capture_file, test_env):
+        '''EAP type 56 is EAP-NOOB, and the JSON "Type" member gives the message type.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'eap.noob.type', '-Tfields', '-eframe.number',
+                              '-eeap.type', '-eeap.noob.type')
+        assert stdout.splitlines() == ['1\t56\t1', '2\t56\t1', '3\t56\t2', '4\t56\t0']
+
+    def test_eap_noob_info_column(self, cmd_tshark, capture_file, test_env):
+        '''The message type is shown in the Info column, and the JSON dissector
+        does not change the Protocol or Info columns.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number == 2', '-Tfields',
+                              '-e_ws.col.protocol', '-e_ws.col.info')
+        assert stdout.strip() == ('EAP\tResponse, Nimble Out-of-Band Authentication EAP (EAP-NOOB), '
+                                  'PeerId and PeerState discovery')
+
+    def test_eap_noob_peer(self, cmd_tshark, capture_file, test_env):
+        '''PeerId and PeerState in the common handshake response.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number == 2', '-Tfields',
+                              '-eeap.noob.peer_id', '-eeap.noob.peer_state')
+        assert stdout.strip() == '07KRU6OgqX0HIeRFldnbSW\t1'
+
+    def test_eap_noob_error(self, cmd_tshark, capture_file, test_env):
+        '''ErrorCode and ErrorInfo in an error notification.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'eap.noob.error_code', '-Tfields', '-eframe.number',
+                              '-eeap.noob.error_code', '-eeap.noob.error_info')
+        assert stdout.strip() == '4\t2002\tState mismatch'
+
+    def test_eap_noob_json(self, cmd_tshark, capture_file, test_env):
+        '''The whole message, including nested objects, is also dissected as JSON.'''
+        stdout = self._tshark(cmd_tshark, capture_file, test_env,
+                              '-Y', 'frame.number == 3', '-Tfields', '-ejson.key')
+        # The JSON dissector adds a nested object's keys before the key of
+        # the object itself, so compare the keys without relying on order.
+        assert sorted(stdout.strip().split(',')) == sorted(
+            ['Type', 'Vers', 'PeerId', 'Cryptosuites', 'Dirs', 'ServerInfo', 'Name', 'Url'])
+
+    def test_eap_noob_invalid_json(self, cmd_tshark, capture_file, test_env):
+        '''A payload that is not a JSON object gets an expert info, in one and two passes.'''
+        for passes in ((), ('-2',)):
+            stdout = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                                  '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number',
+                                  '-e_ws.expert.message')
+            assert stdout.strip() == '5\tEAP-NOOB message is not a valid JSON object'
+
+
 class TestDissectEapol:
     def test_eapol_protocols(self, cmd_tshark, capture_file, test_env):
         '''Every frame is EAPOL; none is malformed or has a warning or
@@ -69153,7 +69207,7 @@ class TestDissectGtpSession:
         for passes in ((), ('-2',)):
             stdout = subprocess.check_output((cmd_tshark, *GTP_SESSION_OPTS, *passes,
                     '-r', capture_file('gtpv2_session.pcap'),
-                    '-Y', 'frame.number >= 17',
+                    '-Y', 'frame.number >= 17 && frame.number <= 18',
                     '-Tfields', '-egtpv2.session', '-ee212.assoc.imsi',
                     '-Eoccurrence=f',
                 ), encoding='utf-8', env=test_env)
@@ -69161,6 +69215,18 @@ class TestDissectGtpSession:
                 '2\t001010000000002',
                 '2\t001010000000002',
             ]
+
+    def test_gtp_session_modify_bearer_header_teid(self, cmd_tshark, capture_file, test_env):
+        '''The Modify Bearer Request that starts a session (frame 9) maps
+        its TEID, so the next one to that TEID (frame 19) gets the same
+        session instead of a new one.'''
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *GTP_SESSION_OPTS, *passes,
+                    '-r', capture_file('gtpv2_session.pcap'),
+                    '-Y', 'frame.number == 9 || frame.number == 19',
+                    '-Tfields', '-egtpv2.session',
+                ), encoding='utf-8', env=test_env)
+            assert stdout.splitlines() == ['3', '3']
 
 
 # PFCP session tracking is off by default.
@@ -69198,7 +69264,8 @@ class TestDissectPfcpSession:
     def test_pfcp_session_gtpu_imsi(self, cmd_tshark, capture_file, test_env):
         '''With GTP session tracking as well, the GTP-U to the TEID of the
         Created PDR (frame 4) and to the TEID of the Outer Header Creation
-        (frame 5) gets the IMSI of the PFCP session, in one and two passes.'''
+        (frame 5) gets the IMSI of the PFCP session, in one and two passes,
+        but not the GTP-U with the same TEID to another UP (frame 13).'''
         for passes in ((), ('-2',)):
             stdout = subprocess.check_output((cmd_tshark, *PFCP_SESSION_OPTS, *GTP_SESSION_OPTS, *passes,
                     '-r', capture_file('pfcp_session.pcap'),
@@ -69208,6 +69275,7 @@ class TestDissectPfcpSession:
             assert stdout.splitlines() == [
                 '0x00003101\t001010000000003',
                 '0x00004101\t001010000000003',
+                '0x00003101\t',
             ]
 
     def test_pfcp_session_without_imsi(self, cmd_tshark, capture_file, test_env):
@@ -69244,7 +69312,7 @@ class TestDissectPfcpSession:
         for passes in ((), ('-2',)):
             stdout = subprocess.check_output((cmd_tshark, *PFCP_SESSION_OPTS, *passes,
                     '-r', capture_file('pfcp_session.pcap'),
-                    '-Y', 'frame.number >= 11',
+                    '-Y', 'frame.number >= 11 && frame.number <= 12',
                     '-Tfields', '-epfcp.session', '-ee212.assoc.imsi',
                 ), encoding='utf-8', env=test_env)
             assert stdout.splitlines() == [
@@ -69266,12 +69334,14 @@ class TestDissectRanapSession:
         '''With SCCP association tracking, the GTP-U to the SGSN TEID of the
         RAB Assignment Request (frame 6) and to the RNC TEID of the RAB
         Assignment Response (frame 7) gets the IMSI of the Common ID of the
-        SCCP connection, in one and two passes.'''
+        SCCP connection, in one and two passes, but not the GTP-U with the
+        same TEID to another SGSN (frame 8).'''
         for passes in ((), ('-2',)):
             assert self.gtpu_imsi(cmd_tshark, capture_file, test_env, *passes,
                     '-o', 'sccp.trace_sccp:TRUE') == [
                 '0x00005101\t001010000000006',
                 '0x00006101\t001010000000006',
+                '0x00005101\t',
             ]
 
     def test_ranap_session_without_sccp_tracking(self, cmd_tshark, capture_file, test_env):
@@ -69280,6 +69350,7 @@ class TestDissectRanapSession:
         assert self.gtpu_imsi(cmd_tshark, capture_file, test_env) == [
             '0x00005101\t',
             '0x00006101\t',
+            '0x00005101\t',
         ]
         stdout = subprocess.check_output((cmd_tshark, '-o', 'sccp.trace_sccp:TRUE',
                 '-r', capture_file('ranap_session.pcap'),
@@ -102874,6 +102945,12 @@ class TestDissectNats:
             ), encoding='utf-8', env=test_env, timeout=120)
         ops = {int(l.split('\t')[0]): (l.split('\t') + [''])[1] for l in stdout.splitlines()}
         assert [ops[n] for n in (80, 82, 84, 86, 88, 90)] == ['INFO', 'CONNECT', '-ERR', 'INFO', 'INFO', '-ERR']
+        # INFO {"a":1} ending with a LF only passes the whole JSON object on
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('nats_coverage.pcap.gz'),
+                '-Y', 'frame.number == 86', '-Tfields', '-ejson.member_with_value', '-edata-text-lines',
+            ), encoding='utf-8', env=test_env, timeout=120)
+        assert stdout.splitlines() == ['a:1\t']
         # PUB foo 4294967295 and HPUB with 4294967294 header bytes are not dissected as complete messages
         stdout = subprocess.check_output((cmd_tshark,
                 '-r', capture_file('nats_coverage.pcap.gz'),
@@ -108150,3 +108227,33 @@ class TestDissectNoe:
         rows = self.fields(cmd_tshark, capture_file, test_env, 'frame.number == 231',
                            ('_ws.col.info', 'noe.errcode', 'noe.class', 'noe.objectid', 'noe.value'))
         assert rows == [['Data - NOE Protocol (CS): Notify EVT_ERROR_PROTOCOL', '3', '134', '0x0009', '0x0000004d']]
+
+
+class TestDissectDnsSvcbDocpath:
+    def test_docpath_segment(self, cmd_tshark, capture_file, test_env):
+        '''SVCB docpath SvcParam segments are decoded correctly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dns_svcb_docpath.pcap'),
+                '-Tfields',
+                '-e', 'dns.qry.type',
+                '-e', 'svc_params.docpath',
+            ), encoding='utf-8', env=test_env)
+        assert '64' in stdout           # SVCB type
+        assert 'dns-query' in stdout    # docpath segment
+
+
+class TestDissectDhcpv6SlapQuad:
+    def test_slap_quad_option(self, cmd_tshark, capture_file, test_env):
+        '''DHCPv6 SLAP QUAD option quadrants and preferences are decoded correctly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dhcpv6_slap_quad.pcap'),
+                '-Tfields',
+                '-e', 'dhcpv6.msgtype',
+                '-e', 'dhcpv6.slap_quad.quadrant',
+                '-e', 'dhcpv6.slap_quad.preference',
+            ), encoding='utf-8', env=test_env)
+        assert '2' in stdout        # Advertise
+        assert '0' in stdout        # AAI quadrant
+        assert '3' in stdout        # SAI quadrant
+        assert '100' in stdout      # AAI preference
+        assert '200' in stdout      # SAI preference

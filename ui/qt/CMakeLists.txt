@@ -123,6 +123,7 @@ set(WIRESHARK_UTILS_HEADERS
 	utils/themes/color_math.h
 	utils/themes/legacy_color_prefs_migration.h
 	utils/themes/native_title_bar.h
+	utils/themes/native_push_button.h
 	utils/themes/system_theme_detector.h
 	utils/themes/theme_format.h
 	utils/themes/theme_palette_builder.h
@@ -466,6 +467,7 @@ if(APPLE)
 	set(WIRESHARK_THEMES_PLATFORM_SRC
 		utils/themes/system_theme_detector_mac.mm
 		utils/themes/native_title_bar_mac.mm
+		utils/themes/native_push_button_mac.mm
 	)
 elseif(WIN32)
 	set(WIRESHARK_THEMES_PLATFORM_SRC
@@ -1109,7 +1111,13 @@ if(Qt6DBus_FOUND)
 	target_link_libraries(qtui PUBLIC Qt6::DBus)
 endif()
 
-target_link_libraries(qtui PRIVATE GCrypt::GCrypt $<TARGET_NAME_IF_EXISTS:Minizipng::Minizipng>)
+target_link_libraries(qtui
+	PRIVATE
+		GCrypt::GCrypt
+		$<TARGET_NAME_IF_EXISTS:Minizipng::Minizipng>
+		$<TARGET_NAME_IF_EXISTS:ZLIB::ZLIB>
+		$<TARGET_NAME_IF_EXISTS:ZLIBNG::ZLIBNG>
+)
 
 target_include_directories(qtui
 	SYSTEM PRIVATE
@@ -1117,8 +1125,6 @@ target_include_directories(qtui
 		${PCAP_INCLUDE_DIRS}
 		${SPEEXDSP_INCLUDE_DIRS}
 		${WINSPARKLE_INCLUDE_DIRS}
-		$<$<CXX_COMPILER_ID:MSVC>:${ZLIB_INCLUDE_DIRS}>
-		$<$<CXX_COMPILER_ID:MSVC>:${ZLIBNG_INCLUDE_DIRS}>
 	PRIVATE
 		${CMAKE_CURRENT_BINARY_DIR}
 		${CMAKE_CURRENT_SOURCE_DIR}
