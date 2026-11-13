@@ -135,6 +135,7 @@ set(CLEAN_ASN1_DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-ldap.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-li-ps-pdu.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-lix2.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-lixer.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-llc-v1.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-lnpdqp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-logotypecertextn.c
@@ -414,6 +415,7 @@ set(DISSECTOR_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-6lowpan.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-9p.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-a21.c
+	${CMAKE_CURRENT_SOURCE_DIR}/packet-a2a.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-aarp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-aastra-aasp.c
 	${CMAKE_CURRENT_SOURCE_DIR}/packet-acap.c

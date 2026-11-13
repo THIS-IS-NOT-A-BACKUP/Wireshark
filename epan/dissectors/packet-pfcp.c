@@ -8810,28 +8810,28 @@ dissect_pfcp_qos_monitoring_measurement(tvbuff_t *tvb, packet_info *pinfo, proto
         offset += 4;
     }
 
-    /* r Downlink Congestion information  */
+    /* r to (r+1) Downlink Congestion information  */
     if ((qos_monitoring_measurement_flags & 0x10)) {
-        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_downlink_congestion_information, tvb, offset, 1, ENC_BIG_ENDIAN);
-        offset += 1;
+        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_downlink_congestion_information, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
     }
 
-    /* r Uplink Congestion information  */
+    /* s to (s+1) Uplink Congestion information  */
     if ((qos_monitoring_measurement_flags & 0x20)) {
-        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_uplink_congestion_information, tvb, offset, 1, ENC_BIG_ENDIAN);
-        offset += 1;
+        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_uplink_congestion_information, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
     }
 
-    /* m to (m+3) Downlink packet rate */
+    /* t to (t+4) Average downlink data rate */
     if ((qos_monitoring_measurement_flags & 0x40)) {
-        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_downlink_packet_rate, tvb, offset, 4, ENC_BIG_ENDIAN);
-        offset += 4;
+        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_downlink_packet_rate, tvb, offset, 5, ENC_BIG_ENDIAN);
+        offset += 5;
     }
 
-    /* p to (p+3) Uplink packet rate */
+    /* u to (u+4) Average uplink data rate */
     if ((qos_monitoring_measurement_flags & 0x80)) {
-        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_uplink_packet_rate, tvb, offset, 4, ENC_BIG_ENDIAN);
-        offset += 4;
+        proto_tree_add_item(tree, hf_pfcp_qos_monitoring_measurement_uplink_packet_rate, tvb, offset, 5, ENC_BIG_ENDIAN);
+        offset += 5;
     }
     if (offset < length) {
         proto_tree_add_expert(tree, pinfo, &ei_pfcp_ie_data_not_decoded, tvb, offset, length);
@@ -9401,7 +9401,7 @@ dissect_pfcp_thresholds(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, pro
 
     /* PLR */
     if ((flags & 0x2)) {
-        /* m to (m+1)   RTT  */
+        /* p   Packet Loss Rate  */
         proto_tree_add_item(tree, hf_pfcp_thresholds_plr, tvb, offset, 1, ENC_BIG_ENDIAN);
         offset++;
     }
@@ -10496,24 +10496,24 @@ dissect_pfcp_reporting_thresholds(tvbuff_t *tvb, packet_info *pinfo, proto_tree 
 
     /* m to (m+1) DL Congestion information threshold */
     if ((reporting_thresholds_flags & 0x1)) {
-        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_dl_congestion_information_threshold, tvb, offset, 1, ENC_BIG_ENDIAN);
-        offset += 1;
+        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_dl_congestion_information_threshold, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
     }
 
     /* p to (p+1) UL Congestion information threshold */
     if ((reporting_thresholds_flags & 0x2)) {
-        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_ul_congestion_information_threshold, tvb, offset, 1, ENC_BIG_ENDIAN);
-        offset += 1;
+        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_ul_congestion_information_threshold, tvb, offset, 2, ENC_BIG_ENDIAN);
+        offset += 2;
     }
 
     /* q to (q+4) DL Data Rate threshold */
     if ((reporting_thresholds_flags & 0x4)) {
-        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_dl_data_rate_threshold, tvb, offset, 4, ENC_BIG_ENDIAN);
-        offset += 4;
+        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_dl_data_rate_threshold, tvb, offset, 5, ENC_BIG_ENDIAN);
+        offset += 5;
 
         /* r to (r+4) UL Data Rate threshold */
-        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_ul_data_rate_threshold, tvb, offset, 4, ENC_BIG_ENDIAN);
-        offset += 4;
+        proto_tree_add_item(tree, hf_pfcp_reporting_thresholds_ul_data_rate_threshold, tvb, offset, 5, ENC_BIG_ENDIAN);
+        offset += 5;
     }
 
     if (offset < length) {
@@ -18509,22 +18509,22 @@ proto_register_pfcp(void)
         },
         { &hf_pfcp_qos_monitoring_measurement_downlink_congestion_information,
         { "Downlink Congestion information", "pfcp.qos_monitoring_measurement.downlink_congestion_information",
-            FT_UINT8, BASE_DEC_HEX, NULL, 0x0,
+            FT_UINT16, BASE_DEC_HEX, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_pfcp_qos_monitoring_measurement_uplink_congestion_information,
         { "Uplink Congestion information", "pfcp.qos_monitoring_measurement.uplink_congestion_information",
-            FT_UINT8, BASE_DEC_HEX, NULL, 0x0,
+            FT_UINT16, BASE_DEC_HEX, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_pfcp_qos_monitoring_measurement_downlink_packet_rate,
         { "Average Downlink packet rate (kilobits per second)", "pfcp.qos_monitoring_measurement.downlink_packet_rate",
-            FT_UINT32, BASE_DEC, NULL, 0x0,
+            FT_UINT40, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_pfcp_qos_monitoring_measurement_uplink_packet_rate,
         { "Average Uplink packet rate (kilobits per second)", "pfcp.qos_monitoring_measurement.uplink_packet_rate",
-            FT_UINT32, BASE_DEC, NULL, 0x0,
+            FT_UINT40, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
 
@@ -19384,12 +19384,12 @@ proto_register_pfcp(void)
         },
         { &hf_pfcp_reporting_thresholds_dl_data_rate_threshold,
         { "DL Data Rate threshold (kilobits)", "pfcp.reporting_thresholds.dl_data_rate",
-            FT_UINT32, BASE_DEC, NULL, 0x0,
+            FT_UINT40, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
         { &hf_pfcp_reporting_thresholds_ul_data_rate_threshold,
         { "UL Data Rate threshold (kilobits)", "pfcp.reporting_thresholds.ul_data_rate",
-            FT_UINT32, BASE_DEC, NULL, 0x0,
+            FT_UINT40, BASE_DEC, NULL, 0x0,
             NULL, HFILL }
         },
 
