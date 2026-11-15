@@ -694,7 +694,9 @@ QModelIndex ProfileModel::addNewProfile(QString name, QString reference, bool is
     beginInsertRows(QModelIndex(), row, row);
 
 
-    ProfileItem* item = new ProfileItem(newName, reference, ProfileItem::StatusType::New, isGlobal, fromGlobal, isImport);
+    // Imported profiles already exist on disk, so they can be renamed and deleted like existing ones
+    ProfileItem* item = new ProfileItem(newName, reference, isImport ? ProfileItem::StatusType::Existing : ProfileItem::StatusType::New,
+                                        isGlobal, fromGlobal, isImport);
     profile_items_ << item;
 
     endInsertRows();
@@ -717,7 +719,7 @@ QModelIndex ProfileModel::duplicateEntry(QModelIndex idx, ProfileItem::StatusTyp
     if (item->getStatus() == ProfileItem::StatusType::Copy && !item->isGlobal())
     {
         int row = findByNameAndVisibility(item->getReference(), false);
-        ProfileItem* copyItem = profile_items_[row];
+        ProfileItem* copyItem = (row >= 0) ? profile_items_[row] : Q_NULLPTR;
         if (copyItem && copyItem->getStatus() == ProfileItem::StatusType::New)
         {
             // We recurse here, but our depth is limited
