@@ -1984,8 +1984,9 @@ class TestDissectMoqt:
                 b''.join(cls._vi64(len(field)) + field for field in fields))
 
     @classmethod
-    def _message(cls, message_type, payload):
-        return cls._vi64(message_type) + len(payload).to_bytes(2, 'big') + payload
+    def _message(cls, message_type, payload, draft=18):
+        length = cls._vi64(len(payload)) if draft >= 23 else len(payload).to_bytes(2, 'big')
+        return cls._vi64(message_type) + length + payload
 
     @classmethod
     def _parameters(cls, entries):
@@ -2024,7 +2025,8 @@ class TestDissectMoqt:
         capture_path = result_file(f'{name}.pcapng')
         with open(text_path, 'w') as text_file:
             text_file.write(cls._hexdump(packets))
-        dissector = dissector.replace('moqt', f'moqt-{draft}', 1)
+        if draft is not None:
+            dissector = dissector.replace('moqt', f'moqt-{draft}', 1)
         subprocess.check_call(
             (cmd_text2pcap, '-q', '-P', dissector, text_path, capture_path),
             env=base_env)
@@ -2061,6 +2063,121 @@ class TestDissectMoqt:
                                     for value in values))
             rows.append(row)
         return rows
+
+    @pytest.mark.parametrize('extra_args', ((), ('-2',)))
+    def test_moqt_draft23_control_messages(
+            self, cmd_text2pcap, cmd_tshark, result_file,
+            base_env, test_env, extra_args):
+        '''Draft-23 framing, counted fill, new parameters and Error Details.'''
+        vi, params, kv = self._vi64, self._parameters, self._key_values
+        lp = lambda value: vi(len(value)) + value
+        message = lambda kind, body: self._message(kind, body, draft=23)
+        track = self._namespace((b'live',)) + lp(b'video')
+        fill = params(((0x20, b'\x09'), (0x21, vi(4) + vi(10) + vi(0) + vi(2) + vi(3))))
+        redirect = lp(b'moqt://relay.example') + track
+        packets = (
+            message(0x2f00, kv(((9, lp(vi(100000))),))),
+            message(3, vi(0) + track + params(((0x11, b'\x01'), (0x23, fill), (0x35, b'\x01')))),
+            message(0x1d, vi(1) + track + vi(7) + params(((0x11, b'\x00'), (0x36, vi(77))))),
+            message(8, self._namespace((b'demo',)) + params(())),
+            message(7, params(((8, vi(5)), (9, vi(12) + vi(3)))) + kv(((0x0e, vi(44)),))),
+            message(5, vi(0x34) + vi(0) + lp(b'') + kv(((1, lp(redirect)), (3, lp(b'x')), (3, lp(b'y'))))),
+            message(5, vi(0x33) + vi(0) + lp(b'') + kv(((2, vi(0x4000)), (2, vi(0x4001))))),
+            message(5, vi(0x0a) + vi(0) + lp(b'')),
+            message(0x0b, vi(7) + vi(0) + lp(b'')),
+            message(0x10, lp(b'moqt://' + b'a' * 200) + vi(10)),
+            # Each unknown Detail fits its KVP limit; the message exceeds 65535.
+            message(5, vi(1) + vi(0) + lp(b'') + kv(((3, lp(b'a' * 65000)), (5, lp(b'b' * 1000))))),
+        )
+        capture = self._make_capture(cmd_text2pcap, result_file, base_env,
+                                     'moqt-draft23-control', 'moqt', packets, draft=23)
+        fields = lambda display, columns: self._field_rows(
+            cmd_tshark, capture, test_env, display, columns, extra_args)
+        assert fields('frame.number == 1', ('moqt.setup.option.integer',)) == [['100000']]
+        assert fields('frame.number == 2', ('moqt.parameter.type', 'moqt.parameter.uint8',
+                                           'moqt.location_filter.type')) == [['17,35,32,33,53', '1,9,1', '4']]
+        assert fields('frame.number == 3', ('moqt.request_id',)) == [['1,77']]
+        assert fields('frame.number == 4', ('moqt.parameter.count',)) == [['0']]
+        assert fields('frame.number == 5', ('moqt.message.type', 'moqt.group_id',
+                                           'moqt.object_id', 'moqt.property.integer')) == [['7', '12', '3', '44']]
+        assert fields('frame.number == 6', ('moqt.error_detail.type', 'moqt.uri')) == [['1,3,3', 'moqt://relay.example']]
+        assert fields('frame.number == 7', ('moqt.error_detail.type', 'moqt.property.type')) == [['2,2', '16384,16385']]
+        assert int(fields('frame.number == 11', ('moqt.message.length',))[0][0]) > 65535
+        assert self._matching_frames(cmd_tshark, capture, test_env,
+                                     '_ws.expert.severity == 0x00800000 || _ws.malformed', extra_args) == []
+
+    @pytest.mark.parametrize('extra_args', ((), ('-2',)))
+    def test_moqt_draft23_fetch_indicators(
+            self, cmd_text2pcap, cmd_tshark, result_file, base_env, test_env, extra_args):
+        '''All range markers carry delta IDs; Group/Track markers carry no fields.'''
+        vi = self._vi64
+        first = vi(0x1f) + vi(10) + vi(2) + vi(5) + b'\x07' + vi(1) + b'a'
+        second = vi(0x05) + vi(0) + vi(1) + b'b'  # Object ID 5 + 0 + 2 = 7.
+        indicators = b''.join(vi(kind) + vi(0) + vi(1) for kind in (0x8c, 0x10c, 0x20c, 0x40c))
+        packets = (vi(5) + vi(4) + first + second + indicators + vi(0x80),
+                   vi(5) + vi(6) + first + vi(0x81))
+        capture = self._make_capture(cmd_text2pcap, result_file, base_env,
+                                     'moqt-draft23-fetch', 'moqt', packets, draft=23)
+        assert self._field_rows(cmd_tshark, capture, test_env, 'moqt',
+                               ('moqt.fetch.serialization_flags', 'moqt.group_id_delta',
+                                'moqt.object_id_delta', 'moqt.object.payload'), extra_args) == [
+            ['31,5,140,268,524,1036,128', '10,0,0,0,0', '5,0,1,1,1,1', '61,62'],
+            ['31,129', '10', '5', '61'],
+        ]
+        assert self._matching_frames(cmd_tshark, capture, test_env,
+                                     '_ws.expert.severity == 0x00800000 || _ws.malformed', extra_args) == []
+
+    @pytest.mark.parametrize('extra_args', ((), ('-2',)))
+    def test_moqt_draft23_invalid_layouts(
+            self, cmd_text2pcap, cmd_tshark, result_file, base_env, test_env, extra_args):
+        '''Removed types, missing Redirect Details, forbidden fill, and bad lengths.'''
+        vi, params = self._vi64, self._parameters
+        message = lambda kind, body: self._message(kind, body, draft=23)
+        track = vi(0) + vi(1) + b'a'
+        packets = (
+            message(0x18, b'\x00'),  # FETCH_OK no longer has a separate type.
+            message(3, vi(0) + track + params(((0x10, b'\x01'),))),
+            message(5, vi(0x34) + vi(0) + vi(0)),  # Missing required REDIRECT.
+            message(3, vi(0) + track + params(((0x23, params(((0x35, b'\x01'),))),))),
+            b'\x03\xff' + b'\xff' * 8,  # Length cannot fit in a tvbuff.
+            b'\x03\x80',  # Incomplete vi64 Length.
+            vi(5) + vi(0) + vi(0x40c) + vi(0),  # Missing range Object ID Delta.
+            message(3, vi(0) + track + params(((0x11, b'\x02'),))),
+            message(0x2f00, vi(9) + vi(1) + vi(0)),  # Invalid maximum message size.
+        )
+        capture = self._make_capture(cmd_text2pcap, result_file, base_env,
+                                     'moqt-draft23-invalid', 'moqt', packets, draft=23)
+        assert self._matching_frames(cmd_tshark, capture, test_env,
+                                     '_ws.expert.severity == 0x00800000', extra_args) == [
+            str(i) for i in range(1, len(packets) + 1)]
+
+    @pytest.mark.parametrize('extra_args', ((), ('-2',)))
+    def test_moqt_draft23_native_quic(self, cmd_tshark, capture_file, test_env, extra_args):
+        '''ALPN selection, fragmented headers/Objects, and native datagrams.'''
+        capture = capture_file('moqt-draft23.pcapng.gz')
+        args = ('-d', 'udp.port==4443,quic', *extra_args)
+        for display in ('moqt.draft == 23 && moqt.message.type == 3',
+                        'moqt.message.type == 7 && moqt.parameter.type == 9',
+                        'moqt.parameter.type == 0x36 && moqt.request_id == 10',
+                        'moqt.error_detail.type == 1 && moqt.uri',
+                        'moqt.fetch.serialization_flags == 0x40c',
+                        'moqt.fetch.serialization_flags == 0x80',
+                        'moqt.object.status == 3', 'moqt.datagram.type == 0',
+                        'moqt.status_code == 7'):
+            assert self._matching_frames(cmd_tshark, capture, test_env, display, args)
+        assert self._matching_frames(cmd_tshark, capture, test_env,
+                                     'moqt && (_ws.expert.severity == 0x00800000 || moqt.unparsed)', args) == []
+
+    @pytest.mark.parametrize('dissector', ('moqt', 'moqt.datagram'))
+    def test_moqt_latest_draft(self, cmd_text2pcap, cmd_tshark, result_file,
+                               base_env, test_env, dissector):
+        '''Unversioned exported-PDU aliases select draft 23.'''
+        packet = (self._message(7, b'\x00', draft=23) if dissector == 'moqt'
+                  else b'\x0c\x01\x02a')
+        capture = self._make_capture(cmd_text2pcap, result_file, base_env,
+                                     'moqt-latest', dissector, (packet,), draft=None)
+        assert self._field_rows(cmd_tshark, capture, test_env, 'moqt',
+                               ('moqt.draft', 'moqt.unparsed', 'moqt.type.invalid')) == [['23', '', '']]
 
     def test_moqt_draft18_control_messages(
             self, cmd_text2pcap, cmd_tshark, result_file,
@@ -4562,6 +4679,26 @@ class TestDissectTns:
         assert rows[3][6] == '1', rows[3]
         assert all(r[7] == '' for r in rows), rows
 
+    def test_tns_tpc_10g(self, cmd_tshark, capture_file, test_env):
+        '''A 10g transaction switch has no internal or external name.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_tpc_10g.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_tpc.format_id',
+            '-T', 'fields',
+            '-e', 'tns.data_tpc.switch_op',
+            '-e', 'tns.data_tpc.change_op',
+            '-e', 'tns.data_tpc.gtrid',
+            '-e', 'tns.data_tpc.bqual',
+            '-e', 'tns.data_tpc.app_value',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['0x00000001', '', '67747269642d31', '627175616c2d31', '0', ''],
+            ['', '0x00000003', '67747269642d31', '627175616c2d31', '', ''],
+        ], rows
+
     def test_tns_session_release(self, cmd_tshark, capture_file, test_env):
         '''A DRCP session release carries a tag and a release mode.'''
         stdout = subprocess.check_output((cmd_tshark,
@@ -5126,6 +5263,90 @@ class TestDissectTns:
             ['OCI, wide (8-byte slots)', '8', '1', '', ''],
             ['OCI, by cursor id', '1', '', '15', ''],
             ['OCI, wide (8-byte slots)', '8', '1', '', ''],
+        ], rows
+
+    def test_tns_resend_flags(self, cmd_tshark, capture_file, test_env):
+        '''A listener's RESEND sets flag 0x08 in the header when the
+        server it hands a TLS connection to runs its own handshake.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_resend.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-T', 'fields',
+            '-e', 'tns.packet_flags',
+            '-e', 'tns.packet_flags.tls_renegotiation',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [['0x00', 'False'], ['0x08', 'True']], rows
+
+    def test_tns_aq_11g(self, cmd_tshark, capture_file, test_env):
+        '''Before 12.1 the strings of an Advanced Queuing call's data
+        section have no length byte in front.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_aq_11g.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_aq.queue',
+            '-T', 'fields',
+            '-e', 'tns.data_aq.queue',
+            '-e', 'tns.data_aq.consumer',
+            '-e', 'tns.data_aq.correlation',
+            '-e', 'tns.data_aq.condition',
+            '-e', 'tns.data_aq.payload',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['PYO_AQ_RAW', '', '', '', '6869', ''],
+            ['PYO_AQ_RAW', 'SUB1', 'corr-1', 'tab.priority = 5', '', ''],
+        ], rows
+
+    def test_tns_oci_10g(self, cmd_tshark, capture_file, test_env):
+        '''An OCI 11.2 client's session with a 10g server runs at the
+        server's field version, 10.2, though the client's data-type
+        request says 11.2: the execute is 10.2's narrow form, and a REF
+        CURSOR comes back without the fields 11g adds to its describe.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oci_10g.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'frame.number >= 5',
+            '-T', 'fields',
+            '-e', 'tns.data.field_version',
+            '-e', 'tns.data_all8.oci_preamble',
+            '-e', 'tns.data_all8.oci_stmt_type',
+            '-e', 'tns.data_dcb.num_columns',
+            '-e', 'tns.data_col.name',
+            '-e', 'tns.data_oer.err_code',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['4', 'OCI, narrow (4-byte slots), 10.2', '1', '', '', '', ''],
+            ['4', 'OCI, narrow (4-byte slots), 10.2', '8', '', '', '', ''],
+            ['4', '', '', '1', '7', '0', ''],
+            ['4', 'OCI, narrow (4-byte slots), 10.2', '8', '', '', '', ''],
+            ['4', '', '', '0', '', '0', ''],
+        ], rows
+
+    def test_tns_oci_describe(self, cmd_tshark, capture_file, test_env):
+        '''The describe of a query's columns, as an OCI client gets it,
+        from a 10g server without the uds flags 11g adds to each column.'''
+        stdout = subprocess.check_output((cmd_tshark,
+            '-r', capture_file('tns_oci_describe.pcap'),
+            '-d', 'tcp.port==1521,tns',
+            '-Y', 'tns.data_dcb.num_columns',
+            '-T', 'fields',
+            '-e', 'tns.data.field_version',
+            '-e', 'tns.data_dcb.num_columns',
+            '-e', 'tns.data_col.name',
+            '-e', 'tns.data_col.type',
+            '-e', 'tns.data_col.uds_flags',
+            '-e', '_ws.malformed',
+        ), encoding='utf-8', env=test_env)
+        rows = [r.split('\t') for r in stdout.rstrip('\n').splitlines()]
+        assert rows == [
+            ['4', '1', '1', '2', '', ''],
+            ['4', '2', 'G,AVG(N)', '2,2', '', ''],
+            ['6', '4', 'N,S,D,Z', '2,96,12,1',
+             '0x00000000,0x00000001,0x00000002,0x00000003', ''],
         ], rows
 
     def test_tns_oci_binds(self, cmd_tshark, capture_file, test_env):
@@ -75600,9 +75821,9 @@ class TestDissectI2c:
         assert lines[5][1:3] == ['5', '0x00000020']
         assert lines[10] == ['11', '1', '0x00000020',
                 'The I2C controller is detached from an I2C bus']
-        assert lines[11][3] == 'The I2C controller is detached from an I2C bus: unable to drive data LO'
-        assert lines[16][3].endswith('physically disconnected from the bus')
-        assert lines[17][3].endswith('undiagnosed failure')
+        # The error bits belong to the offline event; a detached event
+        # carrying them is still just detached.
+        assert {l[3] for l in lines[10:18]} == {'The I2C controller is detached from an I2C bus'}
         assert lines[18][3] == '<unknown state event>'
         assert lines[19][3] == '<unknown state event>'
 
@@ -75625,10 +75846,10 @@ class TestDissectI2c:
             '27\tI2C Write, 2 bytes\t0x78\t0x00000010',
             '28\tI2C Read, 3 bytes\t0x21\t0x00002001',
             '29\tI2C Write, 2 bytes\t0x21\t0x00004000',
-            '30\tI2C, 9 bytes\t0x10\t',
-            '31\tI2C, 24 bytes\t0x40\t',
-            '32\tI2C, 13 bytes\t0x10\t',
-            '33\tI2C, 9 bytes\t0x00\t',
+            '30\tI2C Write, 9 bytes\t0x10\t',
+            '31\tI2C Read, 24 bytes\t0x40\t',
+            '32\tI2C Write, 13 bytes\t0x10\t',
+            '33\tI2C Write, 9 bytes\t0x00\t',
         ]
         stdout = subprocess.check_output((cmd_tshark,
                 '-r', capture_file('i2c_coverage.pcapng.gz'),
@@ -96458,20 +96679,26 @@ class TestDissectMctp:
 
     def test_mctp_protocols(self, cmd_tshark, capture_file, test_env):
         '''All 28 frames are MCTP over Linux cooked capture, some handed to
-        a sub-dissector, and none is malformed or has an expert info, in
-        one and two passes.'''
+        a sub-dissector, and none is malformed, in one and two passes.  The
+        frames with an expert info are the ones that break the assembly
+        and size rules (DSP0236 8.4.2, 8.7, Table 1).'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Tfields', '-e_ws.col.protocol')
         assert len(lines) == 28
-        assert lines.count('MCTP') == 20
+        assert lines.count('MCTP') == 19
         assert lines.count('MCTP Control') == 4
-        assert lines.count('PLDM') == 2
+        assert lines.count('PLDM') == 1
         assert lines.count('NCSI') == 1
+        assert lines.count('MCTP VDM') == 2
         assert lines.count('0x88b5') == 1      # Ethernet encapsulation
         for passes in ((), ('-2',)):
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
-                    '-Y', '_ws.malformed || _ws.expert', '-Tfields', '-eframe.number')
+                    '-Y', '_ws.malformed.expert', '-Tfields', '-eframe.number')
             assert count_output('\n'.join(lines)) == 0
+            lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.expert', '-Tfields', '-eframe.number')
+            assert lines == [str(n) for n in (12, 13, 15, 16, 19, 21, 22, 23,
+                                              24, 25, 26, 27)]
 
     def test_mctp_reassembly(self, cmd_tshark, capture_file, test_env):
         '''A message in three fragments, and two messages with the same tag
@@ -96489,7 +96716,7 @@ class TestDissectMctp:
         ]
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'frame.number == 12', '-Tfields', '-e_ws.col.Info')
-        assert lines == ['MCTP message frag 0']
+        assert lines == ['MCTP message fragment, seq 0']
 
     def test_mctp_bogus_packets(self, cmd_tshark, capture_file, test_env):
         '''Packets too short for a message type and with a version other
@@ -96498,10 +96725,10 @@ class TestDissectMctp:
                 '-Y', 'frame.number >= 24 && frame.number <= 27',
                 '-Tfields', '-eframe.number', '-emctp.version', '-e_ws.col.Info')
         assert lines == [
-            '24\t\tBogus length 4, minimum 5',
-            '25\t\tBogus length 3, minimum 5',
-            '26\t\tInvalid version 2',
-            '27\t\tInvalid version 0',
+            '24\t1\tBogus length 4, minimum 5',
+            '25\t1\tBogus length 3, minimum 4',
+            '26\t2\tInvalid version 2',
+            '27\t0\tInvalid version 0',
         ]
 
     def test_mctp_encapsulated_types(self, cmd_tshark, capture_file, test_env):
@@ -96527,21 +96754,22 @@ class TestDissectMctpControl:
             ), encoding='utf-8', env=test_env).splitlines()
 
     def test_mctp_control_protocols(self, cmd_tshark, capture_file, test_env):
-        '''All 52 frames are MCTP Control; none is malformed and none has
-        an error expert info, in one and two passes. The three version
-        entries with invalid BCD digits are the only warnings.'''
+        '''All 52 frames are MCTP Control.  The messages that are too short
+        or carry bytes the command does not define have an error expert
+        info, and frame 36, whose reported length ends inside a closed
+        layout, is the one that raises a reported-bounds exception.'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Tfields', '-e_ws.col.protocol')
         assert lines == ['MCTP Control'] * 52
         for passes in ((), ('-2',)):
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
-                    '-Y', '_ws.malformed || _ws.expert.severity >= 0x00800000',
-                    '-Tfields', '-eframe.number')
-            assert count_output('\n'.join(lines)) == 0
+                    '-Y', '_ws.malformed.expert', '-Tfields', '-eframe.number')
+            assert lines == ['36']
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
-                    '-Y', '_ws.expert', '-Tfields', '-eframe.number',
-                    '-e_ws.expert.severity')
-            assert lines == ['19\t6291456', '20\t6291456', '21\t6291456']
+                    '-Y', '_ws.expert.severity >= 0x00800000', '-Tfields',
+                    '-eframe.number')
+            assert lines == [str(n) for n in (31, 34, 36, 40, 43, 44, 46,
+                                              49, 50, 51, 52)]
 
     def test_mctp_control_bogus_length(self, cmd_tshark, capture_file, test_env):
         '''A control message shorter than 3 bytes, and a response of 3 bytes
@@ -96550,10 +96778,10 @@ class TestDissectMctpControl:
                 '-Y', 'frame.number >= 49', '-Tfields', '-eframe.number',
                 '-emctpc.command', '-e_ws.col.Info')
         assert lines == [
-            '49\t\tBogus length 1, minimum 3',
-            '50\t\tBogus length 2, minimum 3',
-            '51\t2\tBogus length 3 for response, minimum 4',
-            '52\t126\tBogus length 3 for response, minimum 4',
+            '49\t\tMCTP Control, incomplete header',
+            '50\t\tMCTP Control, incomplete header',
+            '51\t0x02\tMCTP Get Endpoint ID Response, missing completion code',
+            '52\t0x7e\tMCTP Reserved command 0x7e Response, missing completion code',
         ]
 
     def test_mctp_control_version_entries(self, cmd_tshark, capture_file, test_env):
@@ -96571,21 +96799,20 @@ class TestDissectMctpControl:
 
     def test_mctp_control_completion_codes(self, cmd_tshark, capture_file, test_env):
         '''The payload of a response with an error completion code is not
-        decoded (it is left as data); the same payload with Success is, and
-        bytes after a decoded payload are data.'''
+        decoded; the same payload with Success is.'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'frame.number >= 39 && frame.number <= 47',
                 '-Tfields', '-eframe.number', '-emctpc.cc',
                 '-emctpc.get_eid.eid', '-emctpc.data')
         assert lines == [
             '39\t0x01\t\t',
-            '40\t0x02\t\t01 02 03',
+            '40\t0x02\t\t',
             '41\t0x03\t\t',
             '42\t0x04\t\t',
-            '43\t0x05\t\t01 02 03',
-            '44\t0x80\t\t01 02 03',
+            '43\t0x05\t\t',
+            '44\t0x80\t\t',
             '45\t0x06\t\t',
-            '46\t0x00\t0x42\tde ad',
+            '46\t0x00\t0x42\t',
             '47\t0x03\t\t',
         ]
 
@@ -96599,38 +96826,44 @@ class TestDissectMctpSmbus:
 
     def test_mctp_smbus_heuristic(self, cmd_tshark, capture_file, test_env):
         '''Frames 1-10 are MCTP over SMBus (found by the i2c.message
-        heuristic); frames 11-18 fail one of its checks and stay I2C data
-        (read bit, command code, byte count below the minimum, shorter
-        than the byte count, IPMB source address, MCTP header version,
-        snaplen truncation, shorter than the minimum).'''
+        heuristic), and so is frame 13, whose snaplen cut it short; frames
+        11, 12 and 14-18 fail one of its checks and stay I2C data (read
+        bit, command code, byte count below the minimum, shorter than the
+        byte count, IPMB source address, MCTP header version, shorter than
+        the minimum).'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'mctp.smbus', '-Tfields', '-eframe.number')
-        assert lines == [str(n) for n in range(1, 11)]
+        assert lines == [str(n) for n in (*range(1, 11), 13)]
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Tfields', '-e_ws.col.protocol')
         assert len(lines) == 19
-        assert lines[10:] == ['I2C Write'] * 8 + ['I2C Event']
+        assert [n for n, p in enumerate(lines, 1) if p == 'I2C Write'] == [
+            11, 12, 14, 15, 16, 17, 18]
+        assert lines[18] == 'I2C Event'
 
     def test_mctp_smbus_no_errors(self, cmd_tshark, capture_file, test_env):
-        '''No malformed packets and no error expert infos in one and two
-        passes; the bad PEC and the trailing bytes are warnings.'''
+        '''No malformed packets in one and two passes; the only error is
+        frame 13, which has trailing bytes, a bad PEC and a snaplen cut.'''
         for passes in ((), ('-2',)):
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
-                    '-Y', '_ws.malformed || _ws.expert.severity >= 0x00800000',
-                    '-Tfields', '-eframe.number')
+                    '-Y', '_ws.malformed.expert', '-Tfields', '-eframe.number')
             assert count_output('\n'.join(lines)) == 0
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
-                    '-Y', '_ws.expert', '-Tfields', '-eframe.number',
-                    '-e_ws.expert.severity')
-            assert lines == ['3\t6291456', '4\t6291456']
+                    '-Y', '_ws.expert.severity >= 0x00800000', '-Tfields',
+                    '-eframe.number')
+            assert lines == ['13']
+            lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.expert', '-Tfields', '-eframe.number')
+            assert lines == ['3', '4', '7', '8', '13']
 
     def test_mctp_smbus_pec(self, cmd_tshark, capture_file, test_env):
-        '''PEC status: none, good, bad (frame 3), good when two bytes follow
-        it (frame 4; the PEC is at byte count + 3, not at the end).'''
+        '''PEC status: unchecked (frame 1, no PEC), good, bad (frame 3), good
+        when two bytes follow it (frame 4; the PEC is at byte count + 3, not
+        at the end).'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'frame.number <= 4', '-Tfields', '-eframe.number',
                 '-emctp.smbus.pec.status', '-emctp.smbus.byte_count')
-        assert lines == ['1\t\t8', '2\t1\t8', '3\t0\t8', '4\t1\t8']
+        assert lines == ['1\t3\t8', '2\t1\t8', '3\t0\t8', '4\t1\t8']
 
     def test_mctp_smbus_inner_messages(self, cmd_tshark, capture_file, test_env):
         '''The largest byte count (255), a message split over two SMBus
@@ -96642,7 +96875,7 @@ class TestDissectMctpSmbus:
         assert lines == [
             '5\t9\t\t[0x40->0x20] PLDM Messaging Control and Discovery Request',
             '6\t255\t\t[0x40->0x20] MCTP message',
-            '7\t7\t\t[0x40->0x20] MCTP message frag 0',
+            '7\t7\t\t[0x40->0x20] MCTP message fragment, seq 0',
             '8\t6\t3\t[0x40->0x20] MCTP Get Endpoint ID Request',
             '9\t6\t\t[0x40->0x20] MCTP message',
             '10\t8\t\t[0x41->0x21] MCTP Get Endpoint ID Request',
@@ -99313,8 +99546,8 @@ class TestDissectMoqtCoverage:
     moqt-18, moqt-22, moqt or one of their ".datagram" variants (QUIC
     would need ciphertext). Frames 1-161 draft 18 (setup 1-5, control
     6-74, subgroup and fetch streams 75-131, datagrams 132-161), frames
-    162-326 draft 22, 327 an empty payload, 328-331 the "moqt" names
-    for the latest draft.'''
+    162-326 draft 22, 327 an empty payload, 328-329 draft 22 control
+    messages, 330-331 the "moqt" names for the latest draft.'''
 
     @staticmethod
     def fields(cmd_tshark, capture_file, test_env, display_filter, *fields, passes=()):
@@ -99340,14 +99573,14 @@ class TestDissectMoqtCoverage:
 
     def test_moqt_drafts(self, cmd_tshark, capture_file, test_env):
         '''The draft comes from the Exported PDU name: moqt-18 and moqt-22
-        select their draft, moqt the latest one (22).'''
-        for draft, count in ((18, 161), (22, 169)):
+        select their draft, moqt the latest one (23).'''
+        for draft, count in ((18, 161), (22, 167), (23, 2)):
             rows = self.fields(cmd_tshark, capture_file, test_env,
                     f'moqt.draft == {draft}', 'frame.number')
             assert len(rows) == count
         rows = self.fields(cmd_tshark, capture_file, test_env,
-                'frame.number >= 328 && frame.number <= 330', 'moqt.draft')
-        assert rows == [['22']] * 3
+                'frame.number >= 330', 'moqt.draft')
+        assert rows == [['23']] * 2
 
     def test_moqt_goaway_request_id(self, cmd_tshark, capture_file, test_env):
         '''GOAWAY on the control stream carries a Request ID in draft 18
@@ -110721,8 +110954,16 @@ class TestDissectNvme:
 
     def test_nvme_no_errors(self, cmd_tshark, capture_file, test_env):
         '''Every frame is NVMe/TCP, 1217 of them carry an NVMe command,
-        completion or data. No frame is malformed or has a warning or
-        error expert info, in one pass and in two.'''
+        completion or data. No frame has an error expert info. The 19
+        frames that carry a warning, three of them flagged malformed
+        (365, 479, 689), are the ones that deliberately hold a value the
+        specifications do not allow (a reserved Identify CNS, a
+        descriptor whose length does not match its type, an EOM header
+        size of 0, Security Send with protocol 0 or a window past TL,
+        ...), in one pass and in two.'''
+        warned = ['203', '257', '365', '479', '689', '746', '749', '752',
+                  '1146', '1148', '1151', '1156', '1158', '1161', '1166',
+                  '1168', '1171', '1181', '1191']
         for passes in ((), ('-2',)):
             lines = self._fields(cmd_tshark, capture_file, test_env, 'nvme-tcp',
                                  'frame.number', opts=passes)
@@ -110731,9 +110972,16 @@ class TestDissectNvme:
                                  'frame.number', opts=passes)
             assert len(lines) == 1217
             lines = self._fields(cmd_tshark, capture_file, test_env,
-                                 '_ws.malformed || _ws.expert.severity >= 0x00600000',
+                                 '_ws.expert.severity >= 0x00800000',
                                  'frame.number', opts=passes)
             assert not lines
+            lines = self._fields(cmd_tshark, capture_file, test_env,
+                                 '_ws.malformed', 'frame.number', opts=passes)
+            assert lines == ['365', '479', '689']
+            lines = self._fields(cmd_tshark, capture_file, test_env,
+                                 '_ws.expert.severity >= 0x00600000',
+                                 'frame.number', opts=passes)
+            assert lines == warned
 
     def test_nvme_two_passes_same_summary(self, cmd_tshark, capture_file, test_env):
         '''The Info column is the same in one and in two passes.'''
@@ -110766,11 +111014,12 @@ class TestDissectNvme:
 
     def test_nvme_selftest_index(self, cmd_tshark, capture_file, test_env):
         '''The three results of a Self-test log page are numbered
-        latest 0, 1 and 2 (the index was never incremented).'''
+        1, 2 and 3 (the index was never incremented).'''
         out = self._tree(cmd_tshark, capture_file, test_env, 'tcp.port == 40007')
-        lines = [l.strip() for l in out.splitlines() if 'latest' in l]
-        assert lines == ['Latest Self-test Result Data Structure (latest %d)' % i
-                         for i in range(3)]
+        lines = [l.strip() for l in out.splitlines()
+                 if l.strip().startswith('Self-test Result Data Structure')]
+        assert lines == ['Self-test Result Data Structure %d (RDS%d)' % (i, i)
+                         for i in range(1, 4)]
 
     def test_nvme_ctrl_rab_mdts_overflow(self, cmd_tshark, capture_file, test_env):
         '''RAB and MDTS of 64 or more are shown as overflow instead of
@@ -111209,7 +111458,8 @@ class TestDissectNvmeTcp:
 
     def test_nvme_tcp_ready_to_transfer(self, cmd_tshark, capture_file, test_env):
         '''A Write is split in two R2T and H2CData PDUs; the R2T fields and the
-        H2CData link to the Write are shown.'''
+        H2CData link to the Write are shown. The second H2CData carries the
+        data the second R2T asked for, at offset 512.'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'nvme-tcp.r2t', '-Tfields', '-eframe.number',
                 '-envme-tcp.ttag', '-envme-tcp.r2t.offset', '-envme-tcp.r2t.length')
@@ -111218,7 +111468,7 @@ class TestDissectNvmeTcp:
                 '-Y', 'nvme-tcp.type == 6 && nvme-tcp.cmd_pkt == 88',
                 '-Tfields', '-eframe.number', '-e_ws.col.Info')
         assert lines == ['90\tNVMeOF Data for Write, offset 0',
-                         '92\tNVMeOF Data for Write, offset 0']
+                         '92\tNVMeOF Data for Write, offset 512']
 
 
 class TestDissectNwmtp:
@@ -138833,13 +139083,17 @@ class TestDissectSll:
 
     def test_sll_clean(self, cmd_tshark, capture_file, test_env):
         '''76 of the 78 frames have an SLL tree (the two netlink frames go
-        to the netlink dissector first), none is malformed and none has an expert
-        info, in one and two passes.'''
+        to the netlink dissector first) and none is malformed. Frames 47 and
+        48 carry a warning, in one and two passes: the MCTP header they hold
+        has version 0, where the header version shall be 0001b (DSP0236
+        1.3.3, MCTP packet fields).'''
         for passes in ((), ('-2',)):
             assert len(self._rows(cmd_tshark, capture_file(self.CAP), test_env, 'sll',
                     ['frame.number'], *passes)) == 76
             assert self._rows(cmd_tshark, capture_file(self.CAP), test_env,
-                    '_ws.malformed || _ws.expert', ['frame.number'], *passes) == []
+                    '_ws.malformed', ['frame.number'], *passes) == []
+            assert self._rows(cmd_tshark, capture_file(self.CAP), test_env,
+                    '_ws.expert', ['frame.number'], *passes) == ['47', '48']
 
     def test_sll_header(self, cmd_tshark, capture_file, test_env):
         '''Packet types 0-5 of SLL v1, and the link-layer address lengths 0,
@@ -146896,7 +147150,9 @@ class TestDissectTcgStorage:
 
     def test_tcg_storage_clean(self, cmd_tshark, capture_file, test_env):
         '''All 118 frames are NVMe-MI, 58 of them carry TCG Storage; no
-        malformed frame and no expert info in one and two passes.'''
+        malformed frame. Frame 111 carries a warning, in one and two passes:
+        its TPER_RESET has a Transfer Length of 0, which shall be non-zero
+        (Opal SSC 2.30, 3.2.3 TPER_RESET command).'''
         for passes in ((), ('-2',)):
             cap = capture_file(self.CAP)
             assert len(self._fields(cmd_tshark, cap, test_env, 'nvme-mi',
@@ -146904,7 +147160,9 @@ class TestDissectTcgStorage:
             assert len(self._fields(cmd_tshark, cap, test_env, 'tcg-storage',
                     ['frame.number'], *passes)) == 58
             assert self._fields(cmd_tshark, cap, test_env,
-                    '_ws.malformed || _ws.expert', ['frame.number'], *passes) == []
+                    '_ws.malformed', ['frame.number'], *passes) == []
+            assert self._fields(cmd_tshark, cap, test_env,
+                    '_ws.expert', ['frame.number'], *passes) == ['111']
 
     def test_tcg_storage_level0(self, cmd_tshark, capture_file, test_env):
         '''Feature descriptors of every kind (including a vendor specific
