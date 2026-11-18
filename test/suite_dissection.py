@@ -3375,6 +3375,35 @@ class TestDissectCommunityId:
 
         self.check_baseline(dirs, stdout, 'communityid-filtered.txt')
 
+class TestDissectDsa:
+    '''Baseline tests for the Marvell DSA (284) and EDSA (285) frame/tag
+    dissectors. The captures are synthesized based on real EDSA CPU port traffic,
+    covering every command, the tagged/untagged and trunk/rx-sniff bit
+    multiplexing, the TO_CPU code split across two bytes, the 802.3 length
+    and EtherType branches, truncated and capture-truncated frames.'''
+
+    @staticmethod
+    def check_baseline(dirs, output, baseline):
+        baseline_file = os.path.join(dirs.baseline_dir, baseline)
+        with open(baseline_file) as f:
+            baseline_data = f.read()
+
+        assert output == baseline_data
+
+    def test_dsa(self, cmd_tshark, dirs, capture_file, test_env):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dsa.pcap'),
+                '-V'), encoding='utf-8', env=test_env)
+
+        self.check_baseline(dirs, stdout, 'dsa.txt')
+
+    def test_edsa(self, cmd_tshark, dirs, capture_file, test_env):
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('edsa.pcap'),
+                '-V'), encoding='utf-8', env=test_env)
+
+        self.check_baseline(dirs, stdout, 'edsa.txt')
+
 class TestDissectTns:
     '''TNS (Oracle wire protocol) dissector tests, exercising two captures
     that previously tripped buffer-overrun / wrong-state bugs in the OPI
@@ -19065,9 +19094,9 @@ class TestDissectBtDht:
     heur = ('--enable-heuristic', 'bittorrent_dht_udp')
 
     def test_bt_dht_protocols(self, cmd_tshark, capture_file, test_env):
-        '''Every KRPC message type decodes without malformed packets or
-        error expert infos, in one and two passes. The only warning is the
-        duplicate key in frame 18.'''
+        '''Every KRPC message type decodes without unexpected expert infos,
+        in one and two passes. Frame 18 has a duplicate transaction id and
+        frame 21 is missing the final byte.'''
         stdout = subprocess.check_output((cmd_tshark, *self.heur,
                 '-r', capture_file('bt_dht_coverage.pcap.gz'),
                 '-Tfields', '-e_ws.col.protocol',
@@ -19082,7 +19111,10 @@ class TestDissectBtDht:
                     '-Y', '_ws.malformed || _ws.expert.severity >= "Warning"',
                     '-Tfields', '-eframe.number', '-e_ws.expert.message',
                 ), encoding='utf-8', env=test_env)
-            assert stdout.splitlines() == ['18\tDictionary has duplicate keys']
+            assert stdout.splitlines() == [
+                '18\tDictionary has duplicate keys',
+                '21\tMalformed Packet (Exception occurred)',
+            ]
 
     def test_bt_dht_messages(self, cmd_tshark, capture_file, test_env):
         '''Queries, responses with nodes and peers, and errors.'''
@@ -88732,6 +88764,493 @@ class TestDissectKdsp:
             ['17', '16,17', '2092'], ['20', '18,19,20', '2092']]
 
 
+class TestDissectKerberosCoverage:
+    '''Kerberos v5 (packet-kerberos.c). kerberos_coverage.pcapng.gz is
+    synthetic: every encrypted part and every checksum is made with
+    libkrb5 (krb5_c_encrypt, krb5_c_encrypt_iov, krb5_c_make_checksum,
+    krb5_c_fx_cf2_simple), the long-term keys are in its pcapng
+    decryption secrets block, and the session keys are learnt from the
+    messages that carry them.'''
+
+    # AES256 keys of krbtgt/EXAMPLE.TEST and host/files.example.test,
+    # the same ones the capture's secrets block has
+    KRBTGT_KEY = 'a6c3e0fd1a3754718eabc8e5021f3c597693b0cdea0724415e7b98b5d2ef0c29'
+    FILES_KEY = 'dbf815324f6c89a6c3e0fd1a3754718eabc8e5021f3c597693b0cdea0724415e'
+
+    @staticmethod
+    def kerberos_fields(cmd_tshark, test_env, capture, display_filter, *fields, passes=(), extra=()):
+        stdout = subprocess.check_output((cmd_tshark, *passes, *extra,
+                '-r', capture,
+                '-Y', display_filter,
+                '-Tfields', *['-e' + f for f in fields],
+            ), encoding='utf-8', env=test_env)
+        return stdout.splitlines()
+
+    @staticmethod
+    def kerberos_full(features):
+        '''PAC checksum verification (krb5_pac_verify), the ticket
+        checksum (MIT's internal decode_krb5_enc_tkt_part), FAST keys
+        (krb5_c_fx_cf2_simple), DCE style wrap tokens and all the
+        enctypes are only expected with MIT Kerberos on Linux: the
+        Windows build and the macOS Kerberos (which reports itself as
+        MIT) lack some of them.'''
+        return features.have_mit_kerberos and sys.platform.startswith('linux')
+
+    @staticmethod
+    def kerberos_experts(cmd_tshark, test_env, capture, frame, passes=()):
+        '''The expert info messages of one frame.'''
+        lines = TestDissectKerberosCoverage.kerberos_fields(cmd_tshark, test_env, capture,
+                'frame.number == %d' % frame, '_ws.expert.message', passes=passes)
+        return lines[0].split(',') if lines else []
+
+    @staticmethod
+    def kerberos_keytab(path, keys):
+        '''A version 2 keytab holding the given (principal, enctype, hex key).'''
+        out = b'\x05\x02'
+        for name, etype, key in keys:
+            comps = name.split('/')
+            realm = b'EXAMPLE.TEST'
+            entry = struct.pack('>HH', len(comps), len(realm)) + realm
+            for c in comps:
+                entry += struct.pack('>H', len(c)) + c.encode()
+            entry += struct.pack('>IIBHH', 1, 1700000000, 2, etype, len(bytes.fromhex(key)))
+            entry += bytes.fromhex(key) + struct.pack('>I', 2)
+            out += struct.pack('>i', len(entry)) + entry
+        with open(path, 'wb') as f:
+            f.write(out)
+
+    def test_kerberos_protocols(self, cmd_tshark, capture_file, features, test_env):
+        '''Frame counts: KDC messages over UDP and TCP, DCE/RPC with
+        SPNEGO, LDAP with a SASL layer and CredSSP as Exported PDUs. No
+        malformed packets or errors in one and two passes. Without
+        Kerberos nothing is decrypted and nothing warns; with it only
+        the two PAC checksums that were made wrong warn.'''
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        stdout = subprocess.check_output((cmd_tshark, '-r', cap, '-Tfields', '-e_ws.col.protocol'),
+                encoding='utf-8', env=test_env)
+        protocols = stdout.splitlines()
+        assert len(protocols) == 133
+        assert protocols.count('KRB5') == 74
+        assert protocols.count('DCERPC') == 15
+        assert protocols.count('LDAP') == 6
+        assert protocols.count('CredSSP') == 5
+        assert protocols.count('TCP') == 33
+        for passes in ((), ('-2',)):
+            stdout = subprocess.check_output((cmd_tshark, *passes, '-r', cap,
+                    '-Y', '_ws.malformed || _ws.expert.severity >= "Error"',
+                    '-Tfields', '-eframe.number'), encoding='utf-8', env=test_env)
+            assert count_output(stdout) == 0
+            stdout = subprocess.check_output((cmd_tshark, *passes, '-r', cap,
+                    '-Y', '_ws.expert.severity >= "Warning"',
+                    '-Tfields', '-eframe.number'), encoding='utf-8', env=test_env)
+            if not features.have_kerberos:
+                assert count_output(stdout) == 0
+            elif self.kerberos_full(features):
+                assert stdout.split() == ['131', '132']
+
+    def test_kerberos_messages(self, cmd_tshark, capture_file, test_env):
+        '''The message types, error codes and the SRT table, with no
+        decryption needed. -2 gives the same answers.'''
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        for passes in ((), ('-2',)):
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number <= 10', 'frame.number',
+                    'kerberos.msg_type', 'kerberos.error_code', passes=passes)
+            assert lines == [
+                '1\t10\t', '2\t30\t25', '3\t10\t', '4\t11\t', '5\t12,14\t', '6\t13\t',
+                '7\t14\t', '8\t15\t', '9\t21\t', '10\t20\t',
+            ]
+        # TGS-REQ answered by KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN, an error nobody asked for
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number >= 119 && frame.number <= 121',
+                'frame.number', 'kerberos.msg_type', 'kerberos.error_code', 'kerberos.response_to',
+                'kerberos.response_in', passes=('-2',))
+        assert lines == ['119\t12,14\t\t\t120', '120\t30\t7\t119\t', '121\t30\t60\t\t']
+        stdout = subprocess.check_output((cmd_tshark, '-r', cap, '-q', '-z', 'kerberos,srt'),
+                encoding='utf-8', env=test_env)
+        # index, procedure and calls; the times are not compared
+        rows = {l.split()[1]: l.split()[2] for l in stdout.splitlines()
+                if len(l.split()) >= 3 and l.split()[0].isdigit()}
+        assert rows == {'AS-REP': '3', 'AS-ERROR': '4', 'TGS-REP': '5', 'TGS-ERROR': '1'}
+
+    def test_kerberos_padata(self, cmd_tshark, capture_file, test_env):
+        '''Pre-authentication data decoded without keys: every type the
+        dissector knows in one AS-REQ, KRB-ERROR with each shape of
+        e-data, and the Microsoft extended error in PW-SALT.'''
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number == 33', 'kerberos.padata_type')
+        assert lines == ['2,3,135,151,151,250,250,250,250,161,149,-1,167,111,112,165,128,150']
+        # PW-SALT with the NT status of [MS-KILE] 2.2.1, and a wrong one that is plain salt
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number >= 36 && frame.number <= 38',
+                'frame.number', 'kerberos.smb.nt_status', 'kerberos.pw_salt')
+        assert lines == ['36\t0xc000006a\t', '37\t\t6a0000c001000000' + '00000000',
+                         '38\t\t78563412' + '0000000001000000']
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number == 36', '_ws.col.info')
+        assert lines == ['KRB Error: KRB5KDC_ERR_PREAUTH_FAILED NT Status: STATUS_WRONG_PASSWORD']
+
+    def test_kerberos_decrypt(self, cmd_tshark, capture_file, features, test_env):
+        '''The AS exchange: the encrypted timestamp, the reply, the
+        ticket and its PAC, decrypted with the keys of the secrets block
+        in one and two passes.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        for passes in ((), ('-2',)):
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number == 3',
+                    'kerberos.pausec', 'kerberos.cname_string', passes=passes)
+            assert lines == ['654321\t1']
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number == 4',
+                    'kerberos.nonce', 'kerberos.pac.type', 'kerberos.pac.upn.upn_name',
+                    'kerberos.pac.upn.dns_name', 'kerberos.pac.upn.samaccountname',
+                    'netlogon.acct_name', 'kerberos.pac.name', passes=passes)
+            assert lines == ['2222\t1,2,10,12,13,17,18,30,31,6,7,16,19\talice@example.test\tEXAMPLE.TEST\t'
+                             'alice\talice\talice']
+            experts = self.kerberos_experts(cmd_tshark, test_env, cap, 4, passes)
+            for usage in ('usage 2 ', 'usage 3 ', 'usage 16 '):
+                assert any(e.startswith('Decrypted keytype 18 ' + usage) for e in experts), usage
+            if not self.kerberos_full(features):
+                continue
+            for what in ('Verified Server checksum 16', 'Verified KDC checksum 16',
+                         'Verified Ticket checksum 16', 'Verified Full PAC checksum 16'):
+                assert any(e.startswith(what) for e in experts), what
+            assert not any(e.startswith('Missing') or e.startswith('Invalid') for e in experts)
+
+    def test_kerberos_enctypes(self, cmd_tshark, capture_file, features, test_env):
+        '''Service tickets of AES128, AES128 with SHA256, AES256 with
+        SHA384 and both Camellias, RC4 with HMAC-MD5 PAC checksums over
+        TCP, and every PAC verified.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        if not self.kerberos_full(features):
+            pytest.skip('Requires MIT Kerberos with PAC verification.')
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        cksum = {17: 15, 19: 19, 20: 20, 25: 17, 26: 18}
+        for frame, etype in ((89, 17), (91, 19), (93, 20), (95, 25), (97, 26)):
+            experts = self.kerberos_experts(cmd_tshark, test_env, cap, frame)
+            assert any(e.startswith('Decrypted keytype %d usage 2 ' % etype) for e in experts), frame
+            assert any(e.startswith('Verified Server checksum %d keytype %d ' % (cksum[etype], etype))
+                       for e in experts), frame
+            assert any(e.startswith('Decrypted keytype %d usage 11 ' % etype) for e in experts), frame
+        # the RC4 TGT of the TCP exchange: the HMAC-MD5 checksum type is -138
+        experts = self.kerberos_experts(cmd_tshark, test_env, cap, 27)
+        assert any(e.startswith('Verified Server checksum -138 keytype 23 ') for e in experts)
+        assert any(e.startswith('Verified KDC checksum -138 keytype 23 ') for e in experts)
+        assert any(e.startswith('Verified Ticket checksum -138 keytype 23 ') for e in experts)
+        # reassembled over several segments, and two messages in one segment
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number >= 25 && frame.number <= 29 && kerberos',
+                'frame.number', 'kerberos.rm.length', 'kerberos.msg_type', passes=('-2',))
+        assert [l.split('\t')[0] for l in lines] == ['25', '27', '28', '29']
+        assert [l.split('\t')[2] for l in lines] == ['10', '11', '12,14,12,14', '13,13']
+        assert [len(l.split('\t')[1].split(',')) for l in lines] == [1, 1, 2, 2]
+
+    def test_kerberos_wrong_checksums(self, cmd_tshark, capture_file, features, test_env):
+        '''A ticket checksum and a full PAC checksum that are wrong
+        warn; the server and KDC checksums of those PACs verify.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        if not self.kerberos_full(features):
+            pytest.skip('Requires MIT Kerberos with PAC verification.')
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        for frame, bad, good in ((131, 'Invalid Ticket checksum 16', 'Verified Full PAC checksum 16'),
+                                 (132, 'Invalid Full PAC Signature checksum 16', 'Verified Ticket checksum 16')):
+            experts = self.kerberos_experts(cmd_tshark, test_env, cap, frame)
+            assert any(e.startswith(bad) for e in experts), frame
+            assert any(e.startswith(good) for e in experts), frame
+            assert any(e.startswith('Verified Server checksum 16') for e in experts), frame
+            assert any(e.startswith('Verified KDC checksum 16') for e in experts), frame
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'kerberos.missing_keytype', 'frame.number')
+        assert lines == ['131', '132']
+
+    def test_kerberos_fast(self, cmd_tshark, capture_file, features, test_env):
+        '''FAST: an armored AS-REQ, the error and the AS-REP with its
+        strengthen key and encrypted challenges, and TGS-REQs with the
+        TGS subkey and with the compound identity armor.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        if not self.kerberos_full(features):
+            pytest.skip('FAST keys need krb5_c_fx_cf2_simple (MIT Kerberos).')
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        for passes in ((), ('-2',)):
+            want = {
+                11: ('Derived KrbFastReq_FAST_armorKey', 'usage 51 using derived KrbFastReq_FAST_armorKey'),
+                12: ('usage 52 using derived KrbFastReq_FAST_armorKey',),
+                13: ('Derived clientchallengearmor', 'usage 54 using derived clientchallengearmor'),
+                14: ('Derived kdcchallengearmor', 'usage 55 using derived kdcchallengearmor',
+                     'Learnt KrbFastResponse_strengthen-key', 'Derived strengthen-reply-key', 'usage 3 using derived'),
+                15: ('Derived KrbFastReq_TGS_armorKey', 'usage 51 using derived KrbFastReq_TGS_armorKey'),
+                16: ('usage 52 using derived KrbFastReq_TGS_armorKey', 'Derived strengthen-reply-key',
+                     'usage 9 using derived strengthen-reply-key'),
+                17: ('Derived KrbFastReq_FAST_armorKey', 'Derived KrbFastReq_explicitArmorKey',
+                     'usage 51 using derived KrbFastReq_explicitArmorKey'),
+            }
+            for frame, texts in want.items():
+                experts = self.kerberos_experts(cmd_tshark, test_env, cap, frame, passes)
+                for text in texts:
+                    if passes and (text.startswith('Derived') or text.startswith('Learnt')):
+                        # in the second pass the keys of the first one are used
+                        continue
+                    assert any(text in e for e in experts), (frame, text, passes)
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number == 14',
+                    'kerberos.nonce', 'kerberos.fast_options', passes=passes)
+            assert lines[0].split('\t')[0].startswith('4444')
+
+    def test_kerberos_gssapi_checksum(self, cmd_tshark, capture_file, features, test_env):
+        '''The GSS-API checksum of an authenticator (RFC 4121, 6542):
+        delegation with a KRB-CRED and the extensions. The authenticator
+        is encrypted, so Kerberos is needed to read them.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number >= 86 && frame.number <= 88',
+                'frame.number', 'kerberos.gssapi.dlglen', 'kerberos.gssapi.extension.type',
+                'kerberos.gssapi.extension.length', 'kerberos.gssapi.checksum.flags.dce-style',
+                'kerberos.gssapi.checksum.flags.deleg')
+        assert lines == ['86\t948\t0,2,1,77\t16,27,27,3\tFalse\tTrue',
+                         '87\t886\t\t\tFalse\tTrue',
+                         '88\t\t0\t0\tTrue\tFalse']
+
+    def test_kerberos_cfx_dce(self, cmd_tshark, capture_file, features, test_env):
+        '''DCE/RPC with SPNEGO and Kerberos at packet privacy: RFC 4121
+        wrap tokens in the DCE style, with and without header signing,
+        sealed by krb5_c_encrypt_iov and opened with the AP-REP subkey.'''
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        if not features.have_kerberos:
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'dcerpc.pkt_type == 0',
+                    'frame.number', 'dcerpc.decrypted_stub_data')
+            assert len(lines) == 3 and all(l.split('\t')[1] == '' for l in lines)
+            return
+        if not self.kerberos_full(features):
+            pytest.skip('DCE style wrap tokens are only decrypted with MIT Kerberos.')
+        first = b'sealed call one'.hex()
+        second = (b'second call with a longer stub ' * 3).hex()
+        third = b'no header signing here'.hex()
+        for passes in ((), ('-2',)):
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap,
+                    'dcerpc.pkt_type == 0 || dcerpc.pkt_type == 2', 'frame.number',
+                    'dcerpc.decrypted_stub_data', passes=passes)
+            assert lines == ['58\t' + first, '59\t' + first, '60\t' + second, '61\t' + second,
+                             '72\t' + third, '73\t' + third]
+            # the AP-REQ and the AP-REP in the SPNEGO tokens of the binds
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap,
+                    'frame.number >= 55 && frame.number <= 71 && kerberos', 'frame.number',
+                    'kerberos.msg_type', passes=passes)
+            assert lines == ['55\t14', '56\t15', '69\t14', '70\t15']
+        # the Kerberos authentication type 16 carries bare messages
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'frame.number >= 80 && frame.number <= 82',
+                'frame.number', 'dcerpc.auth_type', 'kerberos.msg_type')
+        assert lines == ['80\t16\t14', '81\t16\t15', '82\t16\t15']
+
+    def test_kerberos_sasl_credssp(self, cmd_tshark, capture_file, features, test_env):
+        '''LDAP SASL GSS-API (sealed and signed) and CredSSP carry RFC 4121
+        wrap tokens that are not DCE style; CredSSP's TSCredentials hold a
+        KERB_TICKET_LOGON.'''
+        cap = capture_file('kerberos_coverage.pcapng.gz')
+        lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'ldap.baseObject', 'frame.number', 'ldap.baseObject')
+        if features.have_kerberos:
+            assert lines == ['107\tdc=example,dc=test', '109\tdc=example,dc=test']
+            lines = self.kerberos_fields(cmd_tshark, test_env, cap, 'kerberos.KERB_TICKET_LOGON', 'frame.number',
+                    'credssp.packageName', 'kerberos.KERB_TICKET_LOGON.MessageType',
+                    'kerberos.KERB_TICKET_LOGON.ServiceTicketLength',
+                    'kerberos.KERB_TICKET_LOGON.TicketGrantingTicketLength')
+            assert lines == ['118\tKerberos,NTLM\t10\t504\t744']
+        else:
+            # not decrypted: the sealed search is only a SASL buffer, the signed one is readable
+            assert lines == ['109\tdc=example,dc=test']
+            assert not self.kerberos_fields(cmd_tshark, test_env, cap, 'kerberos.KERB_TICKET_LOGON', 'frame.number')
+
+    def test_kerberos_keytab(self, cmd_tshark, cmd_editcap, capture_file, features, result_file, test_env):
+        '''Keys from a keytab file, from a key log in a decryption secrets
+        block (in names, numbers and with lines that must be refused), and
+        no keys at all.'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        plain = result_file('kerberos_nokeys.pcapng')
+        subprocess.run((cmd_editcap, '--discard-all-secrets', capture_file('kerberos_coverage.pcapng.gz'),
+                        plain), check=True, env=test_env)
+        # no keys: nothing is decrypted and the tickets only warn
+        lines = self.kerberos_fields(cmd_tshark, test_env, plain, 'frame.number == 4', 'kerberos.nonce',
+                'kerberos.pac.type')
+        assert lines == ['\t']
+        # (a TGS-REP reports its missing key even when nothing was asked to be decrypted)
+        assert self.kerberos_fields(cmd_tshark, test_env, plain, 'kerberos.missing_keytype',
+                                    'frame.number') == ['6', '16', '29', '48', '50']
+        # the keytab with the krbtgt and the service key: ticket and PAC of frame 4 and 6 open
+        keytab = result_file('kerberos_coverage.keytab')
+        self.kerberos_keytab(keytab, [('krbtgt/EXAMPLE.TEST', 18, self.KRBTGT_KEY),
+                                      ('host/files.example.test', 18, self.FILES_KEY)])
+        for passes in ((), ('-2',)):
+            lines = self.kerberos_fields(cmd_tshark, test_env, plain, 'frame.number == 4 || frame.number == 6',
+                    'frame.number', 'kerberos.pac.type', passes=passes,
+                    extra=('-o', 'kerberos.decrypt:TRUE', '-o', 'kerberos.file:' + keytab))
+            assert lines == ['4\t1,2,10,12,13,17,18,30,31,6,7,16,19', '6\t1,10,12,13,17,18,30,31,6,7,16,19']
+        stdout = subprocess.check_output((cmd_tshark, '-r', plain, '-Y', 'frame.number == 4',
+                '-o', 'kerberos.decrypt:TRUE', '-o', 'kerberos.file:' + keytab,
+                '-Tfields', '-e_ws.expert.message'), encoding='utf-8', env=test_env)
+        assert 'Decrypted keytype 18 usage 2 using keytab' in stdout
+        # a key log with every spelling of the encryption type, comments, blanks, and bad lines
+        keylog = result_file('kerberos_coverage.keys')
+        with open(keylog, 'w') as f:
+            f.write('# comment\n\n   # indented comment\r\n')
+            f.write('aes256-cts-hmac-sha1-96 ' + self.KRBTGT_KEY + '\n')
+            f.write('ETYPE-aes256-cts\t' + self.FILES_KEY + '\n')
+            f.write('aes256-cts-hmac-sha1-96\n')
+            f.write('no-such-etype 0011223344556677\n')
+            f.write('18 0g11\n')
+            f.write('18 ' + '00' * 40 + '\n')
+            f.write('18 ' + self.KRBTGT_KEY + ' trailing\n')
+        keyed = result_file('kerberos_keylog.pcapng')
+        subprocess.run((cmd_editcap, '--inject-secrets', 'krb5,' + keylog, plain, keyed),
+                       check=True, env=test_env)
+        for passes in ((), ('-2',)):
+            lines = self.kerberos_fields(cmd_tshark, test_env, keyed, 'frame.number == 4 || frame.number == 6',
+                    'frame.number', 'kerberos.pac.type', passes=passes)
+            assert lines == ['4\t1,2,10,12,13,17,18,30,31,6,7,16,19', '6\t1,10,12,13,17,18,30,31,6,7,16,19']
+
+
+class TestDissectKerberosRegress:
+    '''Regressions of the Kerberos robustness fixes. kerberos_regress.pcapng.gz
+    is synthetic (built with struct; the only cryptography is libkrb5,
+    for the ticket of frame 11 and the PAC signature of its second PAC).
+    Its secrets block holds the AES256 key of the tickets of frames 11 and 12.
+    Frames: 1-2 a checksum that is not an OCTET STRING, 3 a key value that is
+    not, 4 a Bnd length of 0xfffffffc, 5 PAC_INFO_BUFFERs (a repeated type,
+    an overlap, one outside the PAC, one with a high dword in its offset,
+    then a good one), 6-10 nesting of 20 levels (PA-TGS-REQ, PA-FX-ERROR,
+    FAST armor, GSSAPI checksum delegation, AD-IF-RELEVANT), 11 an empty PAC
+    before the real one, 12-13 a ticket and, one frame later, its key,
+    14-15 a bare EncASRepPart and EncTGSRepPart, 16 HostAddresses whose
+    length does not match the type.'''
+
+    CAPTURE = 'kerberos_regress.pcapng.gz'
+
+    @staticmethod
+    def regress_run(cmd_tshark, test_env, capture, display_filter, *fields, passes=()):
+        '''(stdout lines, stderr), the exit status must be 0.'''
+        proc = subprocess.run((cmd_tshark, *passes, '-r', capture, '-Y', display_filter,
+                '-Tfields', *['-e' + f for f in fields]),
+                capture_output=True, encoding='utf-8', env=test_env)
+        assert proc.returncode == 0, proc.returncode
+        return proc.stdout.splitlines(), proc.stderr
+
+    @staticmethod
+    def regress_experts(cmd_tshark, test_env, capture, frame, passes=()):
+        lines, _ = TestDissectKerberosRegress.regress_run(cmd_tshark, test_env, capture,
+                'frame.number == %d' % frame, '_ws.expert.message', passes=passes)
+        return lines[0].split(',') if lines else []
+
+    @staticmethod
+    def regress_count(experts, text):
+        return len([e for e in experts if text in e])
+
+    def test_regress_no_assertion(self, cmd_tshark, capture_file, test_env):
+        '''Every frame dissects, tshark exits normally and nothing reports
+        a dissector bug, in one and two passes.'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            lines, err = self.regress_run(cmd_tshark, test_env, cap, 'frame', 'frame.number',
+                    '_ws.col.info', passes=passes)
+            assert len(lines) == 16
+            assert 'Dissector bug' not in err
+            assert not any('Dissector bug' in l for l in lines)
+
+    def test_regress_null_tvb(self, cmd_tshark, capture_file, test_env):
+        '''A checksum or a key value that is not an OCTET STRING (frames 1-3)
+        and a Bnd length that runs off the data (frame 4).'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'frame.number <= 4', 'frame.number',
+                    '_ws.col.protocol', passes=passes)
+            assert lines == ['1\tKRB5', '2\tKRB5', '3\tKRB5', '4\tKRB5']
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'kerberos.gssapi.bndlen.error',
+                    'frame.number', passes=passes)
+            assert lines == ['4']
+
+    def test_regress_pac_buffers(self, cmd_tshark, capture_file, test_env):
+        '''A repeated type, an overlap and two buffers outside the PAC are
+        skipped with an expert info each, the other buffers are dissected
+        once and the buffer after the bad ones still is.'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            experts = self.regress_experts(cmd_tshark, test_env, cap, 5, passes)
+            assert self.regress_count(experts, 'Repeated PAC_INFO_BUFFER of type 12') == 1
+            assert self.regress_count(experts, 'overlaps another buffer') == 1
+            assert self.regress_count(experts, 'is outside of the PAC') == 2
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap,
+                    'frame.number == 5 && kerberos.pac_buffer.invalid', 'frame.number', passes=passes)
+            assert lines == ['5']
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'frame.number == 5',
+                    'kerberos.pac.type', 'kerberos.pac.upn.upn_name', passes=passes)
+            assert lines == ['12,12,10,1,18,17\talice@regress.test']
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'kerberos.pac_attributes_info',
+                    'frame.number', passes=passes)
+            assert lines == ['5']
+
+    def test_regress_nesting(self, cmd_tshark, capture_file, test_env):
+        '''20 levels of each self-embedding construct stop at the limit
+        with one expert info per frame.'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'kerberos.nesting_too_deep',
+                    'frame.number', passes=passes)
+            assert lines == ['6', '7', '8', '9', '10']
+            for frame in range(6, 11):
+                experts = self.regress_experts(cmd_tshark, test_env, cap, frame, passes)
+                assert self.regress_count(experts, 'nested too deeply') == 1, frame
+
+    def test_regress_bare_enc_kdc_rep_part(self, cmd_tshark, capture_file, test_env):
+        '''A bare EncASRepPart and EncTGSRepPart no longer look up an unregistered
+        field name; the nonce is dissected.'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            lines, err = self.regress_run(cmd_tshark, test_env, cap,
+                    'frame.number == 14 || frame.number == 15', 'frame.number', 'kerberos.nonce',
+                    '_ws.expert.message', passes=passes)
+            assert 'Dissector bug' not in err
+            assert [l.split('\t')[:2] for l in lines] == [['14', '1'], ['15', '1']]
+            assert not any('Dissector bug' in l for l in lines)
+
+    def test_regress_address_length(self, cmd_tshark, capture_file, test_env):
+        '''Three HostAddresses whose length does not fit the type warn and are
+        not decoded; the good address after them is.'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            experts = self.regress_experts(cmd_tshark, test_env, cap, 16, passes)
+            assert self.regress_count(experts, 'length does not match the address type') == 3
+            lines, _ = self.regress_run(cmd_tshark, test_env, cap, 'frame.number == 16',
+                    'kerberos.addr_ip', 'kerberos.addr_ipv6', 'kerberos.addr_nb', passes=passes)
+            assert lines == ['192.0.2.1\t\t']
+
+    def test_regress_empty_pac_ticket_checksum(self, cmd_tshark, capture_file, features, test_env):
+        '''Frame 11: an empty PAC before the real one made the ticket checksum
+        check write to address 0. It now reports a missing key. (The status
+        is checked by regress_run.)'''
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            experts = self.regress_experts(cmd_tshark, test_env, cap, 11, passes)
+            if not features.have_kerberos:
+                assert self.regress_count(experts, 'Decrypted') == 0
+                continue
+            assert self.regress_count(experts, 'Decrypted keytype 18 usage 2 ') == 1
+            if not (features.have_mit_kerberos and sys.platform.startswith('linux')):
+                # the ticket checksum check needs MIT's decode_krb5_enc_tkt_part
+                continue
+            assert self.regress_count(experts, 'Empty PAC in the ticket checksum') == 1
+            assert self.regress_count(experts, 'Verified Server checksum 16') == 1
+
+    def test_regress_key_of_a_later_frame(self, cmd_tshark, capture_file, features, test_env):
+        '''Frame 12 is a ticket under a key that frame 13 carries in the clear.
+        It is not decrypted in the first pass and not in the second one either,
+        and the missing key is shown as "no key".'''
+        if not features.have_kerberos:
+            pytest.skip('Requires kerberos.')
+        cap = capture_file(self.CAPTURE)
+        for passes in ((), ('-2',)):
+            experts = self.regress_experts(cmd_tshark, test_env, cap, 12, passes)
+            assert self.regress_count(experts, 'Decrypted') == 0, passes
+            assert self.regress_count(experts, 'Missing keytype 18 usage 2 ') >= 1, passes
+            assert self.regress_count(experts, '(no key)') == 1, passes
+            experts = self.regress_experts(cmd_tshark, test_env, cap, 13, passes)
+            assert self.regress_count(experts, 'Learnt encTicketPart_key') >= 1, passes
+
+
 class TestDissectKerberos4:
     @staticmethod
     def _fields(cmd_tshark, capture_file, test_env, *args):
@@ -95985,14 +96504,31 @@ class TestDissectManolito:
             assert self.frames(cmd_tshark, capture_file, test_env,
                                '_ws.malformed || _ws.expert', passes=passes) == []
 
+    def test_manolito_checksum(self, cmd_tshark, capture_file, test_env):
+        '''Every checksum verifies. Frame 6 carries Windows-1250 (Polish)
+        text and frame 15 Windows-1255 (Hebrew) text, so their checksums
+        only reproduce under those code pages.'''
+        assert self.frames(cmd_tshark, capture_file, test_env, 'manolito',
+                           'manolito.checksum.status') == \
+            [[str(n), '1'] for n in range(1, 17)]
+        assert self.frames(cmd_tshark, capture_file, test_env,
+                           'frame.number in {1, 6, 15}',
+                           'manolito.checksum.codepages') == [
+            ['1', 'Windows-1252/Windows-1254/Windows-1258'],
+            ['6', 'Windows-1250'],
+            ['15', 'Windows-1255'],
+        ]
+
     def test_manolito_header(self, cmd_tshark, capture_file, test_env):
-        '''Header fields of a ping with options, and the forwarded source address.'''
+        '''Header fields of a ping with options, and the forwarded source address.
+        The checksum is the 16-bit CRC in the first two bytes; the last two
+        bytes of the field are padding.'''
         assert self.frames(cmd_tshark, capture_file, test_env, 'frame.number in {1, 2, 3}',
-                           'manolito.checksum', 'manolito.seqno', 'manolito.src', 'manolito.dest',
-                           'manolito.options') == [
-            ['1', '0x12345678', '0x00000001', '0.0.0.0', '192.0.2.2', '0x00000000'],
-            ['2', '0x12345678', '0x00000002', '0.0.0.0', '192.0.2.2', '0x010203'],
-            ['3', '0x12345678', '0x00000003', '192.0.2.9', '192.0.2.2', '0x00000000'],
+                           'manolito.checksum', 'manolito.checksum.padding', 'manolito.seqno',
+                           'manolito.src', 'manolito.dest', 'manolito.options') == [
+            ['1', '0xf058', '0x0000', '0x00000001', '0.0.0.0', '192.0.2.2', '0x00000000'],
+            ['2', '0xbe70', '0x0000', '0x00000002', '0.0.0.0', '192.0.2.2', '0x010203'],
+            ['3', '0xe134', '0x0000', '0x00000003', '192.0.2.9', '192.0.2.2', '0x00000000'],
         ]
 
     def test_manolito_fields(self, cmd_tshark, capture_file, test_env):
@@ -111109,18 +111645,29 @@ class TestDissectNvmeMiMi:
 
     def test_nvme_mi_mi_protocols(self, cmd_tshark, capture_file, test_env):
         '''All 204 frames decode: 196 NVMe-MI messages, 6 over SMBus and two
-        Exported PDUs; there is no malformed packet and no warning or error
-        expert info in one and two passes (only notes).'''
+        Exported PDUs. 22 frames carry a warning or error expert info, in
+        one and two passes: the ones where the capture holds a message the
+        specification does not allow (a Successful Response without its
+        Response Data, a DLEN that the data does not match, a reserved
+        MAXRENT, a second MPR, ...). 17 of them are flagged malformed.'''
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Tfields', '-e_ws.col.protocol')
         assert len(lines) == 204
         assert lines.count('NVMe-MI') == 196
         assert lines.count('SMBus/I2C / NVMe-MI') == 6
         assert lines.count('') == 2
+        warned = ['59', '80', '82', '84', '86', '88', '90', '91', '92', '93', '94',
+                  '96', '98', '139', '140', '142', '143', '144', '153', '161',
+                  '186', '196']
+        malformed = ['84', '86', '88', '90', '91', '92', '93', '94', '96', '98',
+                     '139', '140', '142', '143', '144', '153', '186']
         for passes in ((), ('-2',)):
             lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
                     '-Y', self.BAD, '-Tfields', '-eframe.number')
-            assert lines == []
+            assert lines == warned
+            lines = self._tshark(cmd_tshark, capture_file, test_env, *passes,
+                    '-Y', '_ws.malformed', '-Tfields', '-eframe.number')
+            assert lines == malformed
 
     def test_nvme_mi_mi_data_structures(self, cmd_tshark, capture_file, test_env):
         '''Read NVMe-MI Data Structure: the DTYP selects the layout of the
@@ -111160,10 +111707,20 @@ class TestDissectNvmeMiMi:
                 '-Tfields', '-envme-mi.mi.nshds.ctemp')
         assert lines == ['48', '126', '0', '42', '127', '128', '129', '144', '195',
                          '196', '197', '224', '255']
+        # NVMe-MI 2.2, NVM Subsystem Health Status: 00h-7Eh is 0-126 C, 7Fh is
+        # 127 C or higher, 80h is older than 5 s, 81h a sensor failure, 82h-C3h
+        # reserved, C4h is -60 C or lower, C5h-FFh the two's complement.
         text = subprocess.check_output(
             (cmd_tshark, '-r', capture_file('nvme_mi_mi_coverage.pcapng.gz'), '-V',
-             '-Y', 'frame.number == 40'), encoding='utf-8', env=test_env)
-        assert 'Composite Temperature (CTEMP): 127 °C or higher' in text
+             '-Y', 'nvme-mi.mi.nshds.ctemp && frame.number >= 32 && frame.number <= 56'),
+            encoding='utf-8', env=test_env)
+        labels = [line.split('Composite Temperature (CTEMP): ')[1]
+                  for line in text.splitlines()
+                  if 'Composite Temperature (CTEMP): ' in line]
+        assert labels == ['48 °C', '126 °C', '0 °C', '42 °C', '127 °C or higher',
+                          'Temperature data is more than 5 s old',
+                          'Temperature sensor failure', 'Reserved (0x90)',
+                          'Reserved (0xc3)', '-60 °C or lower', '-59 °C', '-32 °C', '-1 °C']
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'nvme-mi.mi.chsp.rent', '-Tfields', '-eframe.number',
                 '-envme-mi.mi.chsp.rent', '-envme-mi.mi.chds.ctlid')
@@ -111188,7 +111745,7 @@ class TestDissectNvmeMiMi:
                 '-Y', 'nvme-mi.mi.reserved_configid || nvme-mi.mi.reserved_dtyp'
                       ' || nvme-mi.mi.reserved_value', '-Tfields', '-eframe.number')
         assert lines == ['27', '29', '101', '103', '105', '107', '109', '111', '113',
-                         '115', '129', '135']
+                         '115', '129', '135', '145']
         lines = self._tshark(cmd_tshark, capture_file, test_env,
                 '-Y', 'nvme-mi.mi.config.sfreq_cur || nvme-mi.mi.config.mtus_cur'
                       ' || nvme-mi.mi.config.aeelver',
@@ -111207,11 +111764,26 @@ class TestDissectNvmeMiMi:
                 '-Y', 'nvme-mi.mi.reset.rsttyp || nvme-mi.mi.shutdown.shdntyp',
                 '-Tfields', '-eframe.number', '-envme-mi.mi.reset.rsttyp',
                 '-envme-mi.mi.shutdown.shdntyp')
-        assert [l.split('\t')[0] for l in lines] == ['127', '129', '131', '133', '135']
+        assert lines == ['127\t0x00000000\t', '129\t0x00000001\t', '131\t\t0x00000000',
+                         '133\t\t0x00000001', '135\t\t0x00000002']
+        # NVMe-MI 2.2: RSTTYP 00h resets the subsystem, 01h-FFh are reserved;
+        # SHDNTYP 00h is normal, 01h abrupt, 02h-FFh reserved.
+        text = subprocess.check_output(
+            (cmd_tshark, '-r', capture_file('nvme_mi_mi_coverage.pcapng.gz'), '-V', '-Y',
+             'nvme-mi.mi.reset.rsttyp || nvme-mi.mi.shutdown.shdntyp'),
+            encoding='utf-8', env=test_env)
+        labels = [line.split(' = ')[1] for line in text.splitlines()
+                  if ' = Reset Type (RSTTYP): ' in line or ' = Shutdown Type (SHDNTYP): ' in line]
+        assert labels == ['Reset Type (RSTTYP): Reset NVM Subsystem (0x00)',
+                          'Reset Type (RSTTYP): Reserved (0x01)',
+                          'Shutdown Type (SHDNTYP): Normal NVM Subsystem Shutdown (0x00)',
+                          'Shutdown Type (SHDNTYP): Abrupt NVM Subsystem Shutdown (0x01)',
+                          'Shutdown Type (SHDNTYP): Reserved (0x02)']
 
     def test_nvme_mi_mi_responses(self, cmd_tshark, capture_file, test_env):
         '''More Processing Required (twice) before the final response,
-        Invalid Parameter locations, orphans and a superseded request.'''
+        Invalid Parameter locations, orphans and superseded requests: 190
+        replaces the unanswered Admin request 188 and 191 replaces 190.'''
         lines = self._tshark(cmd_tshark, capture_file, test_env, '-2',
                 '-Y', 'nvme-mi.response_is_mpr', '-Tfields', '-eframe.number',
                 '-envme-mi.mprt', '-envme-mi.response_to')
@@ -111223,7 +111795,7 @@ class TestDissectNvmeMiMi:
         lines = self._tshark(cmd_tshark, capture_file, test_env, '-2',
                 '-Y', 'nvme-mi.mi.orphan_response || nvme-mi.req_superseded',
                 '-Tfields', '-eframe.number')
-        assert lines == ['187', '189', '191']
+        assert lines == ['187', '189', '190', '191']
 
     def test_nvme_mi_mi_mic_and_smbus(self, cmd_tshark, capture_file, test_env):
         '''The MIC of the frames with the IC bit verifies; the SMBus frames
@@ -147150,9 +147722,24 @@ class TestDissectTcgStorage:
 
     def test_tcg_storage_clean(self, cmd_tshark, capture_file, test_env):
         '''All 118 frames are NVMe-MI, 58 of them carry TCG Storage; no
-        malformed frame. Frame 111 carries a warning, in one and two passes:
-        its TPER_RESET has a Transfer Length of 0, which shall be non-zero
-        (Opal SSC 2.30, 3.2.3 TPER_RESET command).'''
+        frame has an error expert info. 19 frames carry a warning, 18 of
+        them flagged malformed, in one and two passes: the ones where the
+        capture holds a structure the specifications do not allow (a
+        Geometry feature of 32 bytes where Opal says 28, a Pyrite SSC 2.00
+        feature of Length 12 where Pyrite SSC 2.01 says 0x10, a zero length
+        integer atom, a status list of fewer than three elements, a Credit
+        Control Subpacket that is not 4 bytes long, TPer Reset with a
+        zero Transfer Length, ...). The responses have no MIC, so every one
+        also has a note that the IC bit shall be set. Frame 4 also carries
+        an Additional DataStore Tables descriptor of Length 16 and Opalite
+        and Pyrite 1.0 descriptors of Length 12, where nvme-cli's
+        sedopal_spec.h lays them out as 12 and 16 bytes; those are not
+        warned, as their layouts were not checked against the TCG
+        specifications.'''
+        warned = ['2', '4', '6', '8', '12', '21', '60', '61', '64', '66', '68', '70',
+                  '72', '74', '76', '77', '87', '102', '111']
+        malformed = ['2', '4', '6', '8', '12', '21', '60', '61', '64', '66', '68',
+                     '70', '72', '74', '76', '77', '87', '102']
         for passes in ((), ('-2',)):
             cap = capture_file(self.CAP)
             assert len(self._fields(cmd_tshark, cap, test_env, 'nvme-mi',
@@ -147160,14 +147747,18 @@ class TestDissectTcgStorage:
             assert len(self._fields(cmd_tshark, cap, test_env, 'tcg-storage',
                     ['frame.number'], *passes)) == 58
             assert self._fields(cmd_tshark, cap, test_env,
-                    '_ws.malformed', ['frame.number'], *passes) == []
+                    '_ws.expert.severity >= 0x00800000', ['frame.number'], *passes) == []
             assert self._fields(cmd_tshark, cap, test_env,
-                    '_ws.expert', ['frame.number'], *passes) == ['111']
+                    '_ws.expert.severity >= 0x00600000', ['frame.number'], *passes) == warned
+            assert self._fields(cmd_tshark, cap, test_env,
+                    '_ws.malformed', ['frame.number'], *passes) == malformed
 
     def test_tcg_storage_level0(self, cmd_tshark, capture_file, test_env):
         '''Feature descriptors of every kind (including a vendor specific
         one and unknown codes), the geometry, Opal SSC 2.02 and data
-        removal values and the SSC names appended to the Info column.'''
+        removal values and the SSC names appended to the Info column.
+        The Geometry features of frames 2 and 8 are 32 bytes where Opal
+        SSC says 28, so their values are not decoded.'''
         rows = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number in {2, 4, 6}', ['frame.number', 'tcg-storage.l0.feat.code'])
         assert rows == [
@@ -147183,7 +147774,7 @@ class TestDissectTcgStorage:
                  'tcg-storage.l0.feat.opal2.num_users',
                  'tcg-storage.l0.feat.ssc_minor',
                  'tcg-storage.l0.feat.data_removal.mechanism'])
-        assert rows == ['2\t512\t8\t\t\t\t', '4\t\t\t4\t8\t0x02\t', '6\t\t\t4\t8\t\t0x27']
+        assert rows == ['2\t\t\t\t\t\t', '4\t\t\t4\t8\t0x02\t', '6\t\t\t4\t8\t\t0x27']
         info = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number in {2, 4, 6, 8}', ['_ws.col.info'])
         assert [i.split('(Level 0 Discovery): ', 1)[1] for i in info] == [
@@ -147192,8 +147783,9 @@ class TestDissectTcgStorage:
 
     def test_tcg_storage_methods(self, cmd_tshark, capture_file, test_env):
         '''Method calls name the invoking and method UIDs and the Method
-        Status; unknown UIDs are shown in hex; a status list that closes
-        without an integer shows no status.'''
+        Status, which a request shows as the expected one; unknown UIDs are
+        shown in hex; a status list of fewer than three integers (frame 64)
+        or one that closes without an integer shows no status.'''
         rows = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number in {24, 28, 30, 40, 43, 45, 57, 64, 68}', ['frame.number', '_ws.col.info'])
         tails = [r.split('ComID 0x1000, ', 1)[1] for r in rows]
@@ -147202,45 +147794,49 @@ class TestDissectTcgStorage:
             'Session Manager (SMUID).SyncSession(), Status: SUCCESS',
             'This SP.Get(), Status: NOT_AUTHORIZED',
             'This SP.Get(), Status: Unknown',
-            'Locking_Range1.Set(), Status: SUCCESS',
-            'C_PIN_MSID.Authenticate(), Status: SUCCESS',
-            '0x1234567890abcdef.0x0123456789abcdef(), Status: SUCCESS',
-            'This SP.Get(), Status: SP_DISABLED',
+            'Locking_Range1.Set(), Expected Status: SUCCESS',
+            'C_PIN_MSID.Authenticate(), Expected Status: SUCCESS',
+            '0x1234567890abcdef.0x0123456789abcdef(), Expected Status: SUCCESS',
+            'This SP.Get()',
             'This SP.Get()',
         ]
 
     def test_tcg_storage_atoms(self, cmd_tshark, capture_file, test_env):
         '''Frame 60 holds tiny, short, medium and long atoms: the signed
         and unsigned values are decoded (a 12 and a 16 octet integer and
-        the 9 and 15 octet ones are shown as bytes).'''
+        the 9 and 15 octet ones are shown as bytes). An integer atom of
+        zero length is flagged and has no value.'''
         rows = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number == 60', ['tcg-storage.tok.int', 'tcg-storage.tok.uint'])
         assert rows == ['-5,7,-2,-300,5,-1,-7,-129\t'
-                        '63,18446744073709551615,0,1234,73588229205,0,0']
+                        '63,18446744073709551615,1234,73588229205,0,0']
 
     def test_tcg_storage_packets(self, cmd_tshark, capture_file, test_env):
         '''Frame 87: a ComPacket with three Packets and Subpackets of the
         kinds Data, Credit Control and an unknown one; frame 90 is an empty
-        ComPacket.'''
+        ComPacket. Only the first of the two Credit Control Subpackets is 4
+        bytes long, so only its credit is decoded.'''
         rows = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number in {87, 90}',
                 ['frame.number', 'tcg-storage.packet.tsn', 'tcg-storage.subpacket.kind',
                  'tcg-storage.compacket.comid_ext', 'tcg-storage.subpacket.credit'])
         assert rows == [
             '87\t0x00001001,0x00001002,0x00000000\t0x0000,0x8001,0x8001,0x0005,0x0000,0x0000,0x0000'
-            '\t0x0003\t4660,4660',
+            '\t0x0003\t4660',
             '90\t\t\t0x0001\t',
         ]
 
     def test_tcg_storage_comid_management(self, cmd_tshark, capture_file, test_env):
-        '''ComID management requests and responses, TPer Reset and GET COMID.'''
+        '''ComID management requests and responses, TPer Reset and GET COMID.
+        The data of a Protocol Stack Reset response is its result, not raw
+        data.'''
         rows = self._fields(cmd_tshark, capture_file(self.CAP), test_env,
                 'frame.number in {104, 108, 114, 116}',
                 ['frame.number', 'tcg-storage.comid_mgmt.request_code',
                  'tcg-storage.comid_mgmt.available_data_length',
                  'tcg-storage.comid_mgmt.data', 'tcg-storage.get_comid.ext_comid'])
         assert rows == [
-            '104\t0x00000002\t4\t00000000\t',
+            '104\t0x00000002\t4\t\t',
             '108\t0x00000009\t8\taaaaaaaaaaaaaaaa\t',
             '114\t\t\t\t0x10000001',
             '116\t\t\t\t0x00000000',
@@ -175710,3 +176306,36 @@ class TestDissectUsbdump:
         assert proc.returncode != 0
         assert proc.stdout.splitlines() == ['1', '2', '3']
         assert 'cut short' in proc.stderr
+
+
+class TestDissectDhcpOpt140:
+    def test_mos_fqdn(self, cmd_tshark, capture_file, test_env):
+        '''DHCPv4 option 140 (IPv4 FQDN-MoS) sub-option codes and FQDNs are decoded correctly.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dhcpv4_opt140.pcap'),
+                '-Tfields',
+                '-e', 'dhcp.option.mos_fqdn.subopt_code',
+                '-e', 'dhcp.option.mos_fqdn',
+            ), encoding='utf-8', env=test_env)
+        assert '1' in stdout            # IS sub-option code
+        assert '3' in stdout            # ES sub-option code
+        assert 'is.example.com' in stdout
+        assert 'es.example.com' in stdout
+
+    def test_mos_fqdn_empty(self, cmd_tshark, capture_file, test_env):
+        '''DHCPv4 option 140 with zero-length data produces an expert item.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dhcpv4_opt140_empty.pcap'),
+                '-Tfields',
+                '-e', '_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert 'IPv4 FQDN-MoS: option is empty' in stdout
+
+    def test_mos_fqdn_subopt_overflow(self, cmd_tshark, capture_file, test_env):
+        '''DHCPv4 option 140 with a sub-option length that exceeds the option produces an expert item.'''
+        stdout = subprocess.check_output((cmd_tshark,
+                '-r', capture_file('dhcpv4_opt140_overflow.pcap'),
+                '-Tfields',
+                '-e', '_ws.expert.message',
+            ), encoding='utf-8', env=test_env)
+        assert 'IPv4 FQDN-MoS: sub-option length exceeds option' in stdout
