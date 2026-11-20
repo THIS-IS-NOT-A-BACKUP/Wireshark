@@ -38,6 +38,9 @@
 #ifndef LZ4F_BLOCK_HEADER_SIZE /* Added in LZ4_VERSION_NUMBER 10902 */
 #define LZ4F_BLOCK_HEADER_SIZE 4
 #endif /* LZ4F_BLOCK_HEADER_SIZE */
+#ifndef LZ4F_BLOCK_CHECKSUM_SIZE /* Added in LZ4_VERSION_NUMBER 10902 */
+#define LZ4F_BLOCK_CHECKSUM_SIZE 4
+#endif /* LZ4F_BLOCK_CHECKSUM_SIZE */
 #endif /* HAVE_LZ4FRAME_H */
 
 static ws_compression_type file_get_compression_type(FILE_T stream);
@@ -50,15 +53,19 @@ wtap_get_compression_type(wtap *wth)
 
 /*
  * The minimum size of the input buffer (the output buffer is twice as
- * big). Besides being the unit of I/O, this determines how far back
- * we're guaranteed to be able to seek on a pipe (or other stream we
- * can't seek on): the first GZBUFSIZE bytes of uncompressed data (or
- * of decompressed data, as the first decompression fills the output
- * buffer) stay in the buffer until something reads past them. The open
+ * big). The actual size, which file_bufsize() returns, can be larger,
+ * to suit the file system or, in builds with zstd or LZ4 support, the
+ * decompressors.
+ *
+ * Besides being the unit of I/O, the size determines how far back we're
+ * guaranteed to be able to seek on a pipe (or other stream we can't
+ * seek on): the first file_bufsize() bytes of uncompressed data, or of
+ * decompressed data (as the first decompression fills the output buffer,
+ * unless the compressed stream, e.g. a gzip member or zstd frame, ends
+ * first), stay in the buffer until something reads past them. The open
  * routines tried while determining a file's type each start by seeking
- * back to the beginning, and some (e.g., JSON) read a fair amount of
- * the file before deciding, so make it large enough for them; it's
- * larger anyway in builds with zstd or LZ4 support.
+ * back to the beginning, and some (e.g., JSON) read a fair amount of the
+ * file before deciding, so make the minimum large enough for them.
  */
 #define GZBUFSIZE 65536
 #define LZ4BUFSIZE 4194304 // 4MiB, maximum block size
@@ -904,29 +911,50 @@ zstd_fill_out_buffer(FILE_T state)
 {
     ws_assert(state->out.avail == 0);
 
-    if (state->in.avail == 0 && fill_in_buffer(state) == -1)
-        return false;
-
     ZSTD_outBuffer output = {state->out.buf, state->size << 1, 0};
-    ZSTD_inBuffer input = {state->in.next, state->in.avail, 0};
-    const size_t ret = ZSTD_decompressStream(state->zstd_dctx, &output, &input);
-    if (ZSTD_isError(ret)) {
-        state->err = WTAP_ERR_DECOMPRESS;
-        state->err_info = ZSTD_getErrorName(ret);
-        return false;
-    }
 
-    state->in.next = state->in.next + input.pos;
-    state->in.avail -= (unsigned)input.pos;
+    /*
+     * Fill the output buffer, as the other decompressors do, up to the
+     * end of the frame or an error, rather than stopping after one call,
+     * which produces only as much as one read's worth of input decodes
+     * to (typically about one block). Otherwise, on a pipe, we couldn't
+     * seek back as far as file_bufsize() says.
+     */
+    do {
+        if (state->in.avail == 0 && fill_in_buffer(state) == -1)
+            break;
+        if (state->in.avail == 0) {
+            /* EOF */
+            break;
+        }
 
-    state->out.next = output.dst;
+        ZSTD_inBuffer input = {state->in.next, state->in.avail, 0};
+        const size_t ret = ZSTD_decompressStream(state->zstd_dctx, &output, &input);
+        if (ZSTD_isError(ret)) {
+            state->err = WTAP_ERR_DECOMPRESS;
+            state->err_info = ZSTD_getErrorName(ret);
+            break;
+        }
+
+        state->in.next = state->in.next + input.pos;
+        state->in.avail -= (unsigned)input.pos;
+
+        if (ret == 0) {
+            /* End of the frame */
+            state->last_compression = state->compression;
+            state->compression = UNKNOWN;
+            break;
+        }
+    } while (output.pos < output.size);
+
+    /*
+     * Return what we decompressed, even if we then got an error; as
+     * with the other decompressors, file_read() returns the data before
+     * reporting the error.
+     */
+    state->out.next = state->out.buf;
     state->out.avail = (unsigned)output.pos;
-
-    if (ret == 0) {
-        state->last_compression = state->compression;
-        state->compression = UNKNOWN;
-    }
-    return true;
+    return state->err == 0 || output.pos != 0;
 }
 #endif /* HAVE_ZSTD */
 
@@ -1059,13 +1087,19 @@ lz4_fill_out_buffer(FILE_T state)
             break;
         }
 
-        if (compressedSize > state->size) {
+        if (compressedSize > LZ4BUFSIZE + LZ4F_BLOCK_CHECKSUM_SIZE + LZ4F_BLOCK_HEADER_SIZE) {
             /*
-             * What is this? Either bogus, or some new variant of LZ4 Frames with
-             * a larger block size we don't support. We could have a buffer
-             * overrun if we try to process it.
+             * The hint is the rest of the current block (including its
+             * checksum, if any), plus the next block's header. Anything
+             * larger is either bogus, or some new variant of LZ4 Frames
+             * with a larger block size we don't support.
              *
-             * TODO - We could realloc here.
+             * The block doesn't have to fit in our buffers: we pass no
+             * more input than we have, and LZ4F_decompress() buffers
+             * partial blocks, and output that doesn't fit, internally.
+             * (Requiring it to fit in the input buffer rejected a
+             * maximum-size block that's stored uncompressed, as its hint
+             * is a few bytes larger than the maximum block size.)
              */
             state->err = WTAP_ERR_DECOMPRESSION_NOT_SUPPORTED;
             state->err_info = "lz4 compressed block size too large";
@@ -1252,12 +1286,6 @@ check_for_lz4_compression(FILE_T state)
             return -1;
         }
 
-        /*
-         * XXX - We could check state->lz4_info.blockSizeID here, and
-         * only realloc the buffers to a larger value if the max
-         * block size is bigger than state->size. Also we could fail
-         * on unknown values?
-         */
         state->in.avail -= (unsigned)inBufSize;
         state->in.next += (unsigned)inBufSize;
 
@@ -1604,6 +1632,14 @@ file_fdopen(int fd)
     }
 #endif /* HAVE_ZSTD */
 #ifdef HAVE_LZ4FRAME_H
+    /*
+     * LZ4F_decompress() doesn't need our buffers to hold a whole block,
+     * but the larger buffers let us seek back farther on a pipe, which
+     * some heuristics that read a lot before deciding rely on.
+     *
+     * XXX - bound how much those heuristics read on a pipe, and then
+     * this could be dropped, saving memory for every file.
+     */
     if (LZ4BUFSIZE > want) {
         if (LZ4BUFSIZE <= MAX_READ_BUF_SIZE) {
             want = LZ4BUFSIZE;
@@ -2140,6 +2176,12 @@ file_fstat(FILE_T stream, ws_statb64 *statb, int *err)
         return -1;
     }
     return 0;
+}
+
+unsigned
+file_bufsize(FILE_T stream)
+{
+    return stream->size;
 }
 
 bool
