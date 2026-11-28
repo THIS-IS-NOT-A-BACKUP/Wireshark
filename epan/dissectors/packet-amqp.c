@@ -74,8 +74,15 @@ struct amqp_delivery {
     uint64_t delivery_tag;          /* message number or delivery tag */
     uint32_t msg_framenum;          /* basic.publish or basic.deliver frame */
     uint32_t ack_framenum;          /* basic.ack or basic.nack frame */
-    amqp_delivery *prev;
+    amqp_delivery *prev;            /* next older delivery (unacked or acked list) */
+    /* links used only while the delivery is in the unacked list */
+    amqp_delivery *newer;           /* next newer unacked delivery */
+    amqp_delivery *tag_older;       /* next older unacked delivery with the same tag */
+    amqp_delivery *tag_newer;       /* next newer unacked delivery with the same tag */
 };
+
+/* p_add_proto_data() key flag: content parameters of a content body frame */
+#define AMQP_CONTENT_PARAMS_KEY 0x80000000U
 
 typedef struct {
     char *type;        /* content type */
@@ -89,8 +96,19 @@ typedef struct _amqp_channel_t {
     uint64_t publish_count;               /* number of messages published so far */
     amqp_delivery *last_delivery1;       /* list of unacked messages on tcp flow1 */
     amqp_delivery *last_delivery2;       /* list of unacked messages on tcp flow2 */
+    wmem_map_t *tag_map1;                /* delivery tag -> newest unacked delivery, flow1 */
+    wmem_map_t *tag_map2;                /* delivery tag -> newest unacked delivery, flow2 */
     amqp_content_params *content_params; /* parameters of content */
 } amqp_channel_t;
+
+/* The "to" value of the AMQP 1.0 transfer frame being dissected, see
+ * find_data_dissector() */
+static struct {
+    bool         valid;
+    proto_tree  *item;
+    uint32_t     framenum;
+    const char  *to;       /* pinfo->pool scope */
+} amqp_1_0_to_cache;
 
 typedef struct _amqp_message_decode_t {
     uint32_t match_criteria;
@@ -1590,6 +1608,7 @@ static void *amqp_message_decode_copy_cb(void *dest, const void *orig, size_t le
 
     d->match_criteria = o->match_criteria;
     d->topic_pattern = g_strdup(o->topic_pattern);
+    d->topic_regex = o->topic_regex ? g_regex_ref(o->topic_regex) : NULL;
     d->payload_proto_name = g_strdup(o->payload_proto_name);
     d->payload_proto = o->payload_proto;
     d->topic_more_info = g_strdup(o->topic_more_info);
@@ -2275,7 +2294,7 @@ static const struct amqp_defined_types_t amqp_1_0_defined_types[] = {
 static void
 check_amqp_version(tvbuff_t *tvb, amqp_conv *conn)
 {
-    uint32_t f0_9_length;
+    uint64_t f0_9_length;
 
     /*
      * If we already know and the version and this isn't a protocol header,
@@ -2332,9 +2351,9 @@ check_amqp_version(tvbuff_t *tvb, amqp_conv *conn)
      * Else, higher version. 0-10 has 5th octet 0x00 while 1.0
      * has there at least 2 (DOFF) - use this fact to determine.
      */
-    f0_9_length = tvb_get_ntohl(tvb, 3) + 7 + 1; /* Add header and end */
+    f0_9_length = (uint64_t)tvb_get_ntohl(tvb, 3) + 7 + 1; /* Add header and end */
     if ((f0_9_length <= tvb_reported_length(tvb)) &&
-        (tvb_get_uint8(tvb, f0_9_length - 1) == 0xCE))
+        (tvb_get_uint8(tvb, (unsigned)(f0_9_length - 1)) == 0xCE))
         conn->version = AMQP_V0_9;
     else if (tvb_get_uint8(tvb, 4) == 0x00)
         conn->version = AMQP_V0_10;
@@ -2566,6 +2585,8 @@ dissect_amqp_0_9_field_value(tvbuff_t *tvb, packet_info *pinfo, unsigned offset,
     case 'S': /* long string, UTF-8 encoded */
         if (length < 4)
             return 0; /* too short */
+        if (tvb_get_ntohl(tvb, offset) > length - 4)
+            return 0; /* string longer than the table */
         ti = proto_tree_add_item_ret_length(field_tree, hf_amqp_field_string, tvb, offset, 4, ENC_BIG_ENDIAN|ENC_UTF_8, &vallen);
         offset += vallen;
         break;
@@ -2658,6 +2679,8 @@ dissect_amqp_0_9_field_value(tvbuff_t *tvb, packet_info *pinfo, unsigned offset,
     case 'x': /* byte array */
         if (length < 4)
             return 0; /* too short */
+        if (tvb_get_ntohl(tvb, offset) > length - 4)
+            return 0; /* array longer than the table */
         ti = proto_tree_add_item_ret_length(field_tree, hf_amqp_field_byte_array, tvb,
                                  offset, 4, ENC_NA, &vallen);
         offset += vallen;
@@ -3842,9 +3865,9 @@ dissect_amqp_0_10_message(tvbuff_t *tvb,
         if (flag1 & 0x01) {
             /*  transfers (session.commands [sequence-set])  */
             size = tvb_get_ntohs(tvb, offset);
-            proto_tree_add_item(args_tree,
-                                hf_amqp_0_10_method_message_accept_transfers,
-                                tvb, offset, size + 2, ENC_NA);
+            ti = proto_tree_add_item(args_tree,
+                                     hf_amqp_0_10_method_message_accept_transfers,
+                                     tvb, offset, size + 2, ENC_NA);
             offset += 2;
             format_amqp_0_10_sequence_set(tvb, offset, size, ti);
             /* offset += size; */
@@ -3863,9 +3886,9 @@ dissect_amqp_0_10_message(tvbuff_t *tvb,
         if (flag1 & 0x01) {
             /*  transfers (session.commands [sequence-set])  */
             size = tvb_get_ntohs(tvb, offset);
-            proto_tree_add_item(args_tree,
-                                hf_amqp_0_10_method_message_accept_transfers,
-                                tvb, offset, size + 2, ENC_NA);
+            ti = proto_tree_add_item(args_tree,
+                                     hf_amqp_0_10_method_message_accept_transfers,
+                                     tvb, offset, size + 2, ENC_NA);
             offset += 2;
             format_amqp_0_10_sequence_set(tvb, offset, size, ti);
             /* offset += size; */
@@ -4425,7 +4448,7 @@ dissect_amqp_0_10_exchange(tvbuff_t *tvb,
         if (flag1 & 0x04) {     /* binding-key (str8) */
             proto_tree_add_item(args_tree,
                                 hf_amqp_0_10_method_exchange_binding_key,
-                                tvb, offset, 1, ENC_ASCII);
+                                tvb, offset, 1, ENC_ASCII|ENC_BIG_ENDIAN);
             offset += (1 + tvb_get_uint8(tvb, offset));
         }
         if (flag1 & 0x08) {     /* arguments (map) */
@@ -4467,7 +4490,7 @@ dissect_amqp_0_10_exchange(tvbuff_t *tvb,
         if (flag1 & 0x04) {     /* binding-key (str8) */
             proto_tree_add_item(args_tree,
                                 hf_amqp_0_10_method_exchange_binding_key,
-                                tvb, offset, 1, ENC_ASCII);
+                                tvb, offset, 1, ENC_ASCII|ENC_BIG_ENDIAN);
             /* offset += (1 + tvb_get_uint8(tvb, offset)); */
         }
         break;
@@ -4490,7 +4513,7 @@ dissect_amqp_0_10_exchange(tvbuff_t *tvb,
         if (flag1 & 0x04) {     /* binding-key (str8) */
             proto_tree_add_item(args_tree,
                                 hf_amqp_0_10_method_exchange_binding_key,
-                                tvb, offset, 1, ENC_ASCII);
+                                tvb, offset, 1, ENC_ASCII|ENC_BIG_ENDIAN);
             offset += (1 + tvb_get_uint8(tvb, offset));
         }
         if (flag1 & 0x08) {     /* arguments (map) */
@@ -6410,6 +6433,7 @@ dissect_amqp_1_0_AMQP_frame(tvbuff_t *tvb,
                                     11, amqp_1_0_amqp_flow_items, NULL);
             break;
         case AMQP_1_0_AMQP_TRANSFER:
+            amqp_1_0_to_cache.valid = false;
             arg_length = dissect_amqp_1_0_list(tvb,
                                                pinfo,
                                                offset,
@@ -8798,7 +8822,8 @@ dissect_amqp_0_9_method_confirm_select_ok(uint16_t channel_num,
 
 static int
 dissect_amqp_0_9_content_header_basic(tvbuff_t *tvb, packet_info *pinfo,
-    int offset, proto_tree *prop_tree, amqp_content_params *eh_ptr)
+    int offset, proto_tree *prop_tree, amqp_content_params *eh_ptr,
+    wmem_allocator_t *scope)
 {
     proto_item   *ti;
     uint32_t      prop_flags;
@@ -8814,7 +8839,7 @@ dissect_amqp_0_9_content_header_basic(tvbuff_t *tvb, packet_info *pinfo,
         col_append_fstr(pinfo->cinfo, COL_INFO, "type=%s ", content);
 
         eh_ptr->type = ascii_strdown_inplace(
-            (char*)tvb_get_string_enc(wmem_file_scope(), tvb, offset + 1, tvb_get_uint8(tvb, offset), ENC_ASCII));
+            (char*)tvb_get_string_enc(scope, tvb, offset + 1, tvb_get_uint8(tvb, offset), ENC_ASCII));
 
         offset += 1 + tvb_get_uint8(tvb, offset);
     }
@@ -8826,7 +8851,7 @@ dissect_amqp_0_9_content_header_basic(tvbuff_t *tvb, packet_info *pinfo,
             tvb, offset + 1, tvb_get_uint8(tvb, offset), ENC_ASCII);
 
         eh_ptr->encoding = ascii_strdown_inplace(
-            (char*)tvb_get_string_enc(wmem_file_scope(), tvb, offset + 1, tvb_get_uint8(tvb, offset), ENC_ASCII));
+            (char*)tvb_get_string_enc(scope, tvb, offset + 1, tvb_get_uint8(tvb, offset), ENC_ASCII));
 
         offset += 1 + tvb_get_uint8(tvb, offset);
     }
@@ -9799,10 +9824,21 @@ dissect_amqp_0_9_frame(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void
         case AMQP_0_9_CLASS_BASIC: {
                 amqp_channel_t *channel;
                 channel = get_conversation_channel(find_or_create_conversation(pinfo), channel_num);
-                channel->content_params = wmem_new0(wmem_file_scope(), amqp_content_params);
+                if (!PINFO_FD_VISITED(pinfo)) {
+                    amqp_content_params *params = wmem_new0(wmem_file_scope(), amqp_content_params);
 
-                dissect_amqp_0_9_content_header_basic(tvb,
-                                                      pinfo, 21, prop_tree, channel->content_params);
+                    /* the body frames that follow use these parameters */
+                    if (channel)
+                        channel->content_params = params;
+                    dissect_amqp_0_9_content_header_basic(tvb, pinfo, 21, prop_tree,
+                                                          params, wmem_file_scope());
+                } else {
+                    /* the parameters were recorded on the first pass */
+                    amqp_content_params params = { NULL, NULL };
+
+                    dissect_amqp_0_9_content_header_basic(tvb, pinfo, 21, prop_tree,
+                                                          &params, pinfo->pool);
+                }
             }
             break;
         case AMQP_0_9_CLASS_FILE:
@@ -9831,8 +9867,17 @@ dissect_amqp_0_9_frame(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void
         tvbuff_t       *body_tvb;
         amqp_content_params  *content_params;
 
-		channel = get_conversation_channel(find_or_create_conversation(pinfo), channel_num);
-		content_params = channel->content_params;
+        if (!PINFO_FD_VISITED(pinfo)) {
+            /* Remember the parameters in effect for this body, later passes
+             * can come in any order. */
+            channel = get_conversation_channel(find_or_create_conversation(pinfo), channel_num);
+            content_params = channel ? channel->content_params : NULL;
+            p_add_proto_data(wmem_file_scope(), pinfo, proto_amqp,
+                             (uint32_t)tvb_raw_offset(tvb) | AMQP_CONTENT_PARAMS_KEY, content_params);
+        } else {
+            content_params = (amqp_content_params *)p_get_proto_data(wmem_file_scope(), pinfo, proto_amqp,
+                             (uint32_t)tvb_raw_offset(tvb) | AMQP_CONTENT_PARAMS_KEY);
+        }
 
         if (content_params != NULL && content_params->type != NULL) {
             body_tvb = tvb_new_subset_length(tvb, 7, length);
@@ -9892,18 +9937,39 @@ record_msg_delivery_c(conversation_t *conv, amqp_channel_t *channel,
 {
     struct tcp_analysis *tcpd;
     amqp_delivery **dptr;
+    wmem_map_t **mptr;
     amqp_delivery *delivery;
+    amqp_delivery *same_tag;
 
     tcpd = get_tcp_conversation_data(conv, pinfo);
     /* separate messages sent in each direction */
-    dptr = tcpd->fwd == &(tcpd->flow1) ? &channel->last_delivery1 : &channel->last_delivery2;
+    if (tcpd->fwd == &(tcpd->flow1)) {
+        dptr = &channel->last_delivery1;
+        mptr = &channel->tag_map1;
+    } else {
+        dptr = &channel->last_delivery2;
+        mptr = &channel->tag_map2;
+    }
+    if (*mptr == NULL)
+        *mptr = wmem_map_new(wmem_file_scope(), g_int64_hash, g_int64_equal);
 
     delivery = wmem_new0(wmem_file_scope(), amqp_delivery);
     delivery->delivery_tag = delivery_tag;
     delivery->msg_framenum = pinfo->num;
     /* append to the list of unacked deliveries */
     delivery->prev = (*dptr);
+    if (*dptr)
+        (*dptr)->newer = delivery;
     (*dptr) = delivery;
+
+    /* index it by delivery tag, chaining deliveries with the same tag */
+    same_tag = (amqp_delivery *)wmem_map_lookup(*mptr, &delivery_tag);
+    if (same_tag) {
+        delivery->tag_older = same_tag;
+        same_tag->tag_newer = delivery;
+        wmem_map_remove(*mptr, &delivery_tag);
+    }
+    wmem_map_insert(*mptr, &delivery->delivery_tag, delivery);
 
     p_add_proto_data(wmem_file_scope(), pinfo, proto_amqp, (uint32_t)tvb_raw_offset(tvb), delivery);
 }
@@ -9920,37 +9986,72 @@ record_delivery_ack(tvbuff_t *tvb, packet_info *pinfo, uint16_t channel_num,
     record_delivery_ack_c(conv, channel, tvb, pinfo, delivery_tag, multiple);
 }
 
+/* Remove a delivery from the list of unacked deliveries in O(1). */
+static void
+unlink_unacked_delivery(amqp_delivery **dptr, wmem_map_t *tag_map, amqp_delivery *delivery)
+{
+    if (delivery->newer)
+        delivery->newer->prev = delivery->prev;
+    else
+        *dptr = delivery->prev;
+    if (delivery->prev)
+        delivery->prev->newer = delivery->newer;
+
+    if (delivery->tag_newer) {
+        delivery->tag_newer->tag_older = delivery->tag_older;
+    } else {
+        /* the newest delivery with this tag is the one the map points to */
+        wmem_map_remove(tag_map, &delivery->delivery_tag);
+        if (delivery->tag_older)
+            wmem_map_insert(tag_map, &delivery->tag_older->delivery_tag, delivery->tag_older);
+    }
+    if (delivery->tag_older)
+        delivery->tag_older->tag_newer = delivery->tag_newer;
+
+    delivery->newer = delivery->tag_older = delivery->tag_newer = NULL;
+}
+
 static void
 record_delivery_ack_c(conversation_t *conv, amqp_channel_t *channel,
     tvbuff_t *tvb, packet_info *pinfo, uint64_t delivery_tag, bool multiple)
 {
     struct tcp_analysis *tcpd;
     amqp_delivery **dptr;
+    wmem_map_t *tag_map;
     amqp_delivery *last_acked = NULL;
+    amqp_delivery *delivery;
 
     tcpd = get_tcp_conversation_data(conv, pinfo);
     /* the basic.ack may be sent in both directions, but always opposite
      * to the basic.publish or basic.deliver */
-    dptr = tcpd->rev == &(tcpd->flow1) ? &channel->last_delivery1 : &channel->last_delivery2;
-    while(*dptr)
-    {
-        /* a multiple ack of tag 0 acknowledges every outstanding message */
-        if((*dptr)->delivery_tag == delivery_tag || (multiple && delivery_tag == 0))
-        {
-            do
-            {
-                amqp_delivery *delivery = (*dptr);
-                *dptr = delivery->prev; /* remove from the list of unacked */
+    if (tcpd->rev == &(tcpd->flow1)) {
+        dptr = &channel->last_delivery1;
+        tag_map = channel->tag_map1;
+    } else {
+        dptr = &channel->last_delivery2;
+        tag_map = channel->tag_map2;
+    }
 
-                delivery->ack_framenum = pinfo->num;
-                /* append to the list of acked deliveries */
-                delivery->prev = last_acked;
-                last_acked = delivery;
-            }
-            while(multiple && *dptr);
-        }
-        else
-            dptr = &(*dptr)->prev; /* goto next */
+    if (multiple && delivery_tag == 0) {
+        /* a multiple ack of tag 0 acknowledges every outstanding message */
+        delivery = *dptr;
+    } else {
+        /* the newest outstanding delivery with this tag */
+        delivery = tag_map ? (amqp_delivery *)wmem_map_lookup(tag_map, &delivery_tag) : NULL;
+    }
+
+    while (delivery) {
+        /* a multiple ack takes this delivery and all older ones, a single
+         * ack every outstanding delivery with this tag */
+        amqp_delivery *next = multiple ? delivery->prev : delivery->tag_older;
+
+        unlink_unacked_delivery(dptr, tag_map, delivery);
+
+        delivery->ack_framenum = pinfo->num;
+        /* append to the list of acked deliveries */
+        delivery->prev = last_acked;
+        last_acked = delivery;
+        delivery = next;
     }
 
     p_add_proto_data(wmem_file_scope(), pinfo, proto_amqp,
@@ -10315,21 +10416,33 @@ static bool find_data_dissector(tvbuff_t *msg_tvb, packet_info *pinfo, proto_tre
     //get amqp to string field
     if (item == NULL) return false;
 
-    GPtrArray *array = proto_find_finfo(item, hf_amqp_1_0_to_str);
+    /* Nothing to compare the "to" value with, so do not search the tree
+     * for it (a transfer can hold any number of data sections). */
+    if (num_amqp_message_decodes == 0) return false;
 
-    if (array == NULL) return false;
-    if (array->len == 0) {
-        g_ptr_array_free(array, true);
-        return false;
+    /* Look the "to" value up once per transfer frame, not once per data
+     * section: the search walks the whole tree built so far. The
+     * properties section comes before the data sections. */
+    if (!amqp_1_0_to_cache.valid || amqp_1_0_to_cache.item != item ||
+        amqp_1_0_to_cache.framenum != pinfo->num) {
+        amqp_1_0_to_cache.valid = true;
+        amqp_1_0_to_cache.item = item;
+        amqp_1_0_to_cache.framenum = pinfo->num;
+        amqp_1_0_to_cache.to = NULL;
+
+        GPtrArray *array = proto_find_finfo(item, hf_amqp_1_0_to_str);
+        if (array != NULL) {
+            if (array->len > 0) {
+                field_info *fi = (field_info*)array->pdata[0];
+                if (fi != NULL && FT_IS_STRING(fvalue_type_ftenum(fi->value)))
+                    amqp_1_0_to_cache.to = wmem_strdup(pinfo->pool, fvalue_get_string(fi->value));
+            }
+            g_ptr_array_free(array, true);
+        }
     }
 
-    field_info *fi = (field_info*)array->pdata[0];
-    if (fi == NULL || !FT_IS_STRING(fvalue_type_ftenum(fi->value))) {
-        g_ptr_array_free(array, true);
-        return false;
-    }
-
-    const char* msg_to = fvalue_get_string(fi->value);
+    const char* msg_to = amqp_1_0_to_cache.to;
+    if (msg_to == NULL) return false;
 
     amqp_message_decode_t *message_decode_entry = NULL;
     size_t topic_str_len;
@@ -10389,9 +10502,6 @@ static bool find_data_dissector(tvbuff_t *msg_tvb, packet_info *pinfo, proto_tre
         }
     }
 
-
-    g_ptr_array_free(array, true);
-
     return match_found;
 }
 
@@ -10412,6 +10522,14 @@ dissect_amqp_1_0_variable(tvbuff_t *tvb, packet_info *pinfo,
         return length;
     }
     offset += length;
+
+    if (bin_length > tvb_reported_length_remaining(tvb, offset)) {
+        /* 0xffffffff would also be taken as "to the end" and the returned
+         * size would wrap */
+        expert_add_info_format(pinfo, item, &ei_amqp_unknown_amqp_type,
+                               "Length %u exceeds the remaining data", bin_length);
+        return length + tvb_reported_length_remaining(tvb, offset);
+    }
 
     bool is_dissected = false;
     if (hf_amqp_type == hf_amqp_1_0_data) {
@@ -10903,11 +11021,11 @@ format_amqp_0_10_sequence_set(tvbuff_t *tvb, unsigned offset, unsigned length,
                                values);
     }
     proto_item_append_text(item, " [");
-    for (i = 0; i < values; i += 2) {
+    for (i = 0; i + 1 < values; i += 2) {
         proto_item_append_text(item, "(%u, %u)%s",
                                tvb_get_ntohl(tvb, offset),
                                tvb_get_ntohl(tvb, offset + 4),
-                               (i < (values - 2)) ? ", " : "");
+                               (i + 3 < values) ? ", " : "");
         offset += 8;
     }
     proto_item_append_text(item, "]");
@@ -12115,7 +12233,7 @@ proto_register_amqp(void)
             "Queue to bind to", HFILL}},
         {&hf_amqp_0_10_method_exchange_binding_key, {
             "Binding-key", "amqp.exchange.bind.binding-key",
-            FT_STRING, BASE_NONE, NULL, 0,
+            FT_UINT_STRING, BASE_NONE, NULL, 0,
             "Binding between exchange and queue", HFILL}},
         {&hf_amqp_0_10_method_queue_name, {
             "Queue", "amqp.queue.declare.queue",
